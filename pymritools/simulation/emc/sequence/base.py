@@ -9,14 +9,19 @@ log_module = logging.getLogger(__name__)
 
 
 class SimulationData:
+    """
+    Setup and allocate tensors to carry data through the simulation and set up the device (i.e. GPU acceleration)
+    """
     def __init__(self, params: EmcParameters, settings: EmcSettings, device: torch.device = torch.device("cpu")):
         log_module.debug("\t\tSetup Simulation Data")
+        # setup axes in [m] positions along z axes
         self.sample_axis: torch.Tensor = torch.linspace(
             -params.length_z, params.length_z, settings.sample_number
         ).to(device)
         sample = torch.from_numpy(
             stats.gennorm(24).pdf(self.sample_axis / params.length_z * 1.1) + 1e-6
         )
+        # build bulk magnetization along axes positions
         self.sample: torch.Tensor = torch.divide(sample, torch.max(sample))
 
         # set values with some error catches
@@ -28,11 +33,11 @@ class SimulationData:
         self.t1_vals: torch.Tensor = t1_vals
         self.num_t1s: int = self.t1_vals.shape[0]
         # b1
-        self.b1_vals: torch.Tensor = self._build_array_from_list_of_lists_args(settings.b1_list).to(
+        self.b1_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b1_list).to(
             device)
         self.num_b1s: int = self.b1_vals.shape[0]
         # t2
-        array_t2 = self._build_array_from_list_of_lists_args(settings.t2_list)
+        array_t2 = self._build_tensors_from_list_of_lists_args(settings.t2_list)
         array_t2 /= 1000.0  # cast to s
         self.t2_vals: torch.Tensor = array_t2.to(device)
         self.num_t2s: int = self.t2_vals.shape[0]
@@ -42,11 +47,14 @@ class SimulationData:
         log_module.info(f"\t\t- total number of entries to simulate: {num_curves}")
         self.total_num_sim: int = num_curves
 
-        # set magnetization vector and initialize magentization, insert axes for [t1, t2, b1] number of simulations
+        # set magnetization vector and initialize magnetization, insert axes for [t1, t2, b1] number of simulations
         m_init = torch.zeros((settings.sample_number, 4))
         m_init[:, 2] = self.sample
         m_init[:, 3] = self.sample
+        # save initial state
         self.m_init: torch.Tensor = m_init[None, None, None].to(device)
+        # set initial state as magnetization propagation tensor, this one is used
+        # to iteratively calculate the magnetization sate along the axis
         self.magnetization_propagation: torch.tensor = m_init.clone()
 
         self.gamma = torch.tensor(params.gamma_hz, device=device)
@@ -57,7 +65,7 @@ class SimulationData:
             dtype=torch.complex128, device=device
         )
 
-        # allocate
+        # allocate magnitude and phase results
         # set emc data tensor -> dims: [t1s, t2s, b1s, ETL]
         self.signal_mag: torch.Tensor = torch.zeros(
             (self.num_t1s, self.num_t2s, self.num_b1s, params.etl),
@@ -69,7 +77,13 @@ class SimulationData:
         )
 
     @staticmethod
-    def _build_array_from_list_of_lists_args(val_list) -> torch.tensor:
+    def _build_tensors_from_list_of_lists_args(val_list) -> torch.tensor:
+        """
+        We use a list of values or value ranges in the configuration (CLI or config file) and
+        want to translate this to a tensor of all values
+        :param val_list: list of values or list of tuples / lists of value ranges
+        :return: tensor of all values to simulate
+        """
         array = []
         if isinstance(val_list, list):
             for item in val_list:
@@ -97,12 +111,22 @@ class SimulationData:
             raise AttributeError(err)
 
     def set_device(self, device: torch.device):
+        """
+        push all tensors to given torch device
+        :param device: torch device (cpu or gpu)
+        :return: nothing
+        """
         for _, value in vars(self).items():
             if torch.is_tensor(value):
                 value.to(device)
 
 
 class Simulation(abc.ABC):
+    """
+    Base simulation class, we want to set all parameters as variables, set up the simulation data object,
+    that carries through the data iteratively, set up plotting and
+    define some common functions to use for all sequence simulations.
+    """
     def __init__(self, params: EmcParameters, settings: EmcSettings):
         log_module.info("__ Set-up Simulation __ ")
         # setup device

@@ -16,6 +16,9 @@ log_module = logging.getLogger(__name__)
 # all timings and shapes would be defined
 
 class GradPulse:
+    """
+    Data object to set up RF Pulse (xy axes) and Gradients (along slice dim) and save sampling steps.
+    """
     def __init__(self,
                  pulse_type: str = 'Excitation',
                  pulse_number: int = 0,
@@ -35,6 +38,11 @@ class GradPulse:
         self._set_exci_flag()
 
     def set_device(self, device: torch.device):
+        """
+        Push data to torch device that needs to live on there
+        :param device: torch device (GPU or CPU)
+        :return: None
+        """
         self.data_pulse_x = self.data_pulse_x.to(device)
         self.data_pulse_y = self.data_pulse_y.to(device)
         self.data_grad = self.data_grad.to(device)
@@ -46,12 +54,22 @@ class GradPulse:
             self.excitation_flag = False
 
     def _set_float32(self):
+        """
+        Ensure dtype compatibility, also decreased memory usage, might cause precision loss.
+        :return: None
+        """
         self.data_grad = self.data_grad.to(dtype=torch.float32)
         self.data_pulse_x = self.data_pulse_x.to(dtype=torch.float32)
         self.data_pulse_y = self.data_pulse_y.to(dtype=torch.float32)
 
     @classmethod
     def prep_grad_pulse_excitation(cls, params: EmcParameters, settings: EmcSettings):
+        """
+        Prepare a slice selective Excitation Gradient Pulse
+        :param params: emc parameters configuration object
+        :param settings: emc settings configuration object
+        :return: GradientPulse object
+        """
         log_module.debug(f"prep excitation pulse")
 
         params = cls._set_pulse(params=params, duration_us=params.duration_excitation, excitation=True)
@@ -98,6 +116,14 @@ class GradPulse:
     @classmethod
     def prep_grad_pulse_refocus(cls, params: EmcParameters, settings: EmcSettings, refocus_pulse_number: int,
                                 force_sym_spoil: bool = False):
+        """
+        Prepare a slice selective Refocusing Gradient Pulse
+        :param params: emc parameters configuration object
+        :param settings: emc settings configuration object
+        :param force_sym_spoil: Set symmetric spoiling around the RF
+        :param refocus_pulse_number:
+        :return: GradientPulse object
+        """
         log_module.debug(f"prep refocusing pulse: {refocus_pulse_number + 1}")
         # -- prep pulse
         params = cls._set_pulse(params=params, duration_us=params.duration_refocus, excitation=False)
@@ -173,7 +199,21 @@ class GradPulse:
             grad_amp_post: float, duration_post_us: float,
             duration_pre_us: float = 0.0, grad_amp_pre: float = 0.0,
             duration_verse_lobe_us: float = 0.0, grad_amp_verse_lobe: float = 0.0):
-        """ want to build the shapes given slice gradient pre, spoil and slice select and align it to the given pulse"""
+        """
+        This function builds the rf and grad shapes given slice gradient pre, spoil and slice select and
+        aligns it to the given pulse
+
+        :param pulse:
+        :param grad_amp_slice_select:
+        :param duration_pulse_slice_select_us:
+        :param grad_amp_post:
+        :param duration_post_us:
+        :param duration_pre_us:
+        :param grad_amp_pre:
+        :param duration_verse_lobe_us:
+        :param grad_amp_verse_lobe:
+        :return:
+        """
         # grad amplitudes are values, pulse is a shape already with complex numbers and
         # distributed across different b1 values -> pulse dim [# b1, # pulse sampling steps]
 
