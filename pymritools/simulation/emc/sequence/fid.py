@@ -1,6 +1,5 @@
 from .base import Simulation, SimulationData
-from .. import functions
-from ..blocks import GradPulse
+from ..core import functions, GradPulse
 from pymritools.config.emc import EmcSettings, EmcParameters
 import torch
 import logging

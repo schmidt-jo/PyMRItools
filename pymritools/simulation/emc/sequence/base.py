@@ -3,7 +3,7 @@ import torch
 import abc
 from scipy import stats
 from pymritools.config.emc import EmcParameters, EmcSettings
-from .. import blocks
+from ..core import GradPulse, SequenceTimings
 import pathlib as plib
 log_module = logging.getLogger(__name__)
 
@@ -147,9 +147,9 @@ class Simulation(abc.ABC):
             self.set_magnetization_profile_snap(snap_name="initial")
 
         # setup acquisition
-        self.gp_acquisition = blocks.GradPulse.prep_acquisition(params=self.params)
+        self.gp_acquisition = GradPulse.prep_acquisition(params=self.params)
         # give instance of sequence timings
-        self.sequence_timings: blocks.SequenceTimings = blocks.SequenceTimings()
+        self.sequence_timings: SequenceTimings = SequenceTimings()
         # call specific prep
         self._prep()
         # call timing build

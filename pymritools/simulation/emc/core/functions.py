@@ -1,7 +1,8 @@
 import torch
 from scipy import stats
 import numpy as np
-from pymritools.config.emc import EmcParameters
+from pymritools.config.emc import EmcParameters, EmcSettings
+from ..sequence.base import SimulationData
 
 
 def pulse_calibration_integral(params: EmcParameters,
@@ -11,7 +12,7 @@ def pulse_calibration_integral(params: EmcParameters,
     Calibrates pulse waveform for given flip angle, adds phase if given
     """
     # get b1 values - error catch again if single value is given
-    b1_vals = options.SimulationData.build_array_from_list_of_lists_args(params.settings.b1_list)
+    b1_vals = SimulationData.build_array_from_list_of_lists_args(params.settings.b1_list)
     # if not isinstance(b1_vals, list):
     #     b1_vals = [b1_vals]
     # b1_vals = torch.tensor(b1_vals)
@@ -31,7 +32,7 @@ def pulse_calibration_integral(params: EmcParameters,
     return b1_pulse_calibrated
 
 
-def propagate_matrix_mag_vector(propagation_matrix: torch.tensor, sim_data: options.SimulationData):
+def propagate_matrix_mag_vector(propagation_matrix: torch.tensor, sim_data: SimulationData):
     """
     we setup the simulation around propagation matrices with dimensions:
         [t1s: i, t2s: j, b1s: k, samples: l, 4: m, 4: n]
@@ -49,7 +50,7 @@ def propagate_gradient_pulse_relax(
         pulse_x: torch.tensor,
         pulse_y: torch.tensor,
         grad: torch.tensor,
-        sim_data: options.SimulationData,
+        sim_data: SimulationData,
         dt_s: torch.tensor) -> torch.tensor:
     """
     Calculating the effect of grad pulse data on magnetization propagation through iterative matrix multiplication
@@ -139,7 +140,7 @@ def rotation_matrix_z(angle: torch.tensor):
 
 
 def matrix_propagation_grad_pulse_multidim(
-        sim_data: options.SimulationData,
+        sim_data: SimulationData,
         pulse_x: torch.tensor, pulse_y: torch.tensor, grad: torch.tensor, dt_s: torch.tensor) -> torch.tensor:
     """ Calculate the propagation matrix per time step dt, with one amplitude value (complex) for the pulse
     (hard pulse approximation) and an amplitude value for the gradient"""
@@ -162,7 +163,7 @@ def matrix_propagation_grad_pulse_multidim(
     return torch.matmul(propagation_matrix[None, None, :], relaxation_matrix)
 
 
-def matrix_propagation_relaxation_multidim(dt_s: torch.tensor, sim_data: options.SimulationData) -> torch.tensor:
+def matrix_propagation_relaxation_multidim(dt_s: torch.tensor, sim_data: SimulationData) -> torch.tensor:
     e1 = torch.exp(-dt_s / sim_data.t1_vals)[:, None].repeat(1, sim_data.t2_vals.shape[0])
     e2 = torch.exp(-dt_s / sim_data.t2_vals)[None, :].repeat(sim_data.t1_vals.shape[0], 1)
     t_0 = torch.zeros(e1.shape, device=sim_data.device)
@@ -179,7 +180,7 @@ def matrix_propagation_relaxation_multidim(dt_s: torch.tensor, sim_data: options
     return relax_matrix[:, :, None, None]
 
 
-def sample_acquisition(etl_idx: int, sim_params: options.SimulationParameters, sim_data: options.SimulationData,
+def sample_acquisition(etl_idx: int, sim_params: SimulationParameters, sim_data: SimulationData,
                        acquisition_grad: torch.tensor, dt_s: torch.tensor):
     # acquisition
     for acq_idx in range(sim_params.settings.acquisition_number):
@@ -197,7 +198,7 @@ def sample_acquisition(etl_idx: int, sim_params: options.SimulationParameters, s
     return sim_data
 
 
-def sum_sample_acquisition(etl_idx: int, sim_params: options.SimulationParameters, sim_data: options.SimulationData,
+def sum_sample_acquisition(etl_idx: int, sim_params: options.SimulationParameters, sim_data: SimulationData,
                            acquisition_duration_s: torch.tensor, partial_fourier: float = 1.0):
     # timing - partial fourier assumed to be taken at beginning of echo
     dt_aq_pre = acquisition_duration_s * (partial_fourier - 1 / 2)  # cast to s

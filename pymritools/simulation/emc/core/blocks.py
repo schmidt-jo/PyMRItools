@@ -4,7 +4,7 @@ _____
 Jochen Schmidt, 26.09.2024
 """
 from pymritools.config.emc import EmcSettings, EmcParameters
-from ..emc import functions
+from pymritools.simulation.emc.core import functions
 import logging
 import torch
 import numpy as np
