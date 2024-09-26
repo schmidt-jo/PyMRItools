@@ -1,6 +1,6 @@
-from ..core import functions, GradPulse
-from .base import Simulation, SimulationData
-from pymritools.config.emc import EmcParameters, EmcSettings
+from pymritools.simulation.emc.core import functions, GradPulse
+from .base import Simulation
+from pymritools.config.emc import EmcParameters, EmcSettings, SimulationData
 import torch
 import tqdm
 import logging
@@ -128,7 +128,7 @@ class MEGESSE(Simulation):
         # acquisition
         # take the sum of the contributions of the individual spins at pf readout echo time
         self.data = functions.sum_sample_acquisition(
-            etl_idx=0, sim_params=self.params, sim_data=self.data,
+            etl_idx=0, params=self.params, sim_data=self.data,
             acquisition_duration_s=self.params.duration_acquisition * 1e-6,
             partial_fourier=self.partial_fourier_gre1
         )
@@ -167,7 +167,7 @@ class MEGESSE(Simulation):
             # acquisition gre
             # take the sum of the contributions of the individual spins at central readout echo time
             self.data = functions.sum_sample_acquisition(
-                etl_idx=1 + rf_idx * 3, sim_params=self.params, sim_data=self.data,
+                etl_idx=1 + rf_idx * 3, params=self.params, sim_data=self.data,
                 acquisition_duration_s=self.params.duration_acquisition * 1e-6
             )
             # delay between readouts
@@ -175,7 +175,7 @@ class MEGESSE(Simulation):
             # acquisition se
             # take the sum of the contributions of the individual spins at central readout echo time
             self.data = functions.sum_sample_acquisition(
-                etl_idx=2 + rf_idx * 3, sim_params=self.params, sim_data=self.data,
+                etl_idx=2 + rf_idx * 3, params=self.params, sim_data=self.data,
                 acquisition_duration_s=self.params.duration_acquisition * 1e-6
             )
             # delay between readouts
@@ -183,7 +183,7 @@ class MEGESSE(Simulation):
             # acquisition gre
             # take the sum of the contributions of the individual spins at central readout echo time
             self.data = functions.sum_sample_acquisition(
-                etl_idx=3 + rf_idx * 3, sim_params=self.params, sim_data=self.data,
+                etl_idx=3 + rf_idx * 3, params=self.params, sim_data=self.data,
                 acquisition_duration_s=self.params.duration_acquisition * 1e-6
             )
             # delay to pulse

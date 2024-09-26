@@ -45,9 +45,8 @@ dependencies = [
 repository = "https://github.com/schmidt-jo/PyMRItools"
 #changelog = "https://github.com/me/spam/blob/master/CHANGELOG.md"
 
-#[project.scripts]
-#spam-cli = "pymritools:main_cli"
-#
-#
+[project.scripts]
+emc_simulation = "pymritools.simulation.emc.simulate:main"
+
 #[project.entry-points."pymritools.magical"]
 #tomatoes = "pymritools:main_fancypantsy"

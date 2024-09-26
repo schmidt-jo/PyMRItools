@@ -1,4 +1,4 @@
-from ..core import plotting, functions, GradPulse
+from pymritools.simulation.emc.core import functions, GradPulse
 from pymritools.config.emc import EmcSettings, EmcParameters
 from .base import Simulation
 import torch
@@ -130,7 +130,7 @@ class MESE(Simulation):
                 if self.settings.signal_fourier_sampling:
                     # sample the acquisition with the readout gradient moved to into the slice direction
                     self.data = functions.sample_acquisition(
-                        etl_idx=loop_idx, sim_params=self.params, sim_data=self.data,
+                        etl_idx=loop_idx, params=self.params, sim_data=self.data,
                         acquisition_grad=self.gp_acquisition.data_grad,
                         dt_s=self.gp_acquisition.dt_sampling_steps_us * 1e-6
                     )
@@ -138,7 +138,7 @@ class MESE(Simulation):
                 else:
                     # take the sum of the contributions of the individual spins at central readout echo time
                     self.data = functions.sum_sample_acquisition(
-                        etl_idx=loop_idx, sim_params=self.params, sim_data=self.data,
+                        etl_idx=loop_idx, params=self.params, sim_data=self.data,
                         acquisition_duration_s=self.params.duration_acquisition * 1e-6
                     )
 
@@ -155,10 +155,10 @@ class MESE(Simulation):
                 ),
                 dim=-1
             )
-            if self.settings.visualize:
-                # plot slice sampling image tensor (binned slice profile)
-                plotting.plot_slice_img_tensor(slice_image_tensor=image_tensor, sim_data=self.data,
-                                               out_path=self.fig_path)
+            # if self.settings.visualize:
+            #     # plot slice sampling image tensor (binned slice profile)
+            #     plotting.plot_slice_img_tensor(slice_image_tensor=image_tensor, sim_data=self.data,
+            #                                    out_path=self.fig_path)
 
             self.data.emc_signal_mag = 2 * torch.abs(torch.sum(image_tensor, dim=-1)) / self.params.acq_number
             self.data.emc_signal_phase = torch.angle(torch.sum(image_tensor, dim=-1))

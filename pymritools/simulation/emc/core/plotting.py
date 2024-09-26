@@ -2,10 +2,11 @@ import numpy as np
 import polars as pl
 import plotly.graph_objects as go
 import plotly.subplots as psub
-import plotly.express as px
+# import plotly.express as px
 import torch
 import logging
 import pathlib as plib
+from pymritools.config.emc.params import SimulationData
 
 log_module = logging.getLogger(__name__)
 
@@ -47,13 +48,13 @@ def plot_grad_pulse(px: torch.tensor, py: torch.tensor, g: torch.tensor, b1_vals
     fig.write_html(fig_file.as_posix())
 
 
-def plot_signal_traces(sim_data: options.SimulationData, out_path: plib.Path | str, name: str = ""):
+def plot_signal_traces(sim_data: SimulationData, out_path: plib.Path | str, name: str = ""):
     if name:
         name = f"_{name}"
     # plot at most 5 values
     num_t2s = min(sim_data.t2_vals.shape[0], 5)
     num_b1s = min(sim_data.b1_vals.shape[0], 5)
-    num_echoes = sim_data.emc_signal_mag.shape[-1]
+    num_echoes = sim_data.signal_mag.shape[-1]
     t2_vals = sim_data.t2_vals[:num_t2s].numpy()
     b1_vals = sim_data.b1_vals[:num_b1s].numpy()
     # dims signal tensor [t1s, t2s, b1s, echoes, sim sampling pts]
@@ -90,18 +91,18 @@ def plot_signal_traces(sim_data: options.SimulationData, out_path: plib.Path | s
     # fig.update_yaxes(title_text="magnitude [normalized a.u.]", secondary_y=False)
     # fig.update_yaxes(title_text="phase [$pi]", secondary_y=True)
 
-    df = pd.DataFrame({
+    df = pl.DataFrame({
         "data": data, "t2": t2, "b1": b1, "labels": label, "echos": echos, "ax": ax,
     })
-    fig = px.line(df, x="ax", y="data", color="labels", facet_row="t2", facet_col="b1", animation_frame="echos",
-                  labels=dict(x="sampling point", y="signal [a.u.]"))
-    out_path = plib.Path(out_path).absolute()
-    fig_file = out_path.joinpath(f"plot_signal_traces{name}").with_suffix(".html")
-    log_module.info(f"writing file: {fig_file.as_posix()}")
-    fig.write_html(fig_file.as_posix())
+    # fig = px.line(df, x="ax", y="data", color="labels", facet_row="t2", facet_col="b1", animation_frame="echos",
+    #               labels=dict(x="sampling point", y="signal [a.u.]"))
+    # out_path = plib.Path(out_path).absolute()
+    # fig_file = out_path.joinpath(f"plot_signal_traces{name}").with_suffix(".html")
+    # log_module.info(f"writing file: {fig_file.as_posix()}")
+    # fig.write_html(fig_file.as_posix())
 
 
-def plot_emc_sim_data(sim_data: options.SimulationData, out_path: plib.Path | str, name: str = ""):
+def plot_emc_sim_data(sim_data: SimulationData, out_path: plib.Path | str, name: str = ""):
     if name:
         name = f"_{name}"
     # plot at most 5 values
@@ -110,15 +111,15 @@ def plot_emc_sim_data(sim_data: options.SimulationData, out_path: plib.Path | st
     t2_vals = sim_data.t2_vals[:num_t2s]
     b1_vals = sim_data.b1_vals[:num_b1s]
     # dims signal tensor [t1s, t2s, b1s, echoes, sim sampling pts]
-    emc_mag = sim_data.emc_signal_mag[0].clone().detach().cpu()
-    emc_phase = sim_data.emc_signal_phase[0].clone().detach().cpu()
+    emc_mag = sim_data.signal_mag[0].clone().detach().cpu()
+    emc_phase = sim_data.signal_phase[0].clone().detach().cpu()
     # setup figure
     fig = psub.make_subplots(
         rows=num_t2s, cols=num_b1s,
         subplot_titles=[f"T2: {t2_ * 1e3:.1f} ms, B1: {b1_:.1f}" for t2_ in t2_vals for b1_ in b1_vals],
         specs=[[{"secondary_y": True} for _ in b1_vals] for _ in t2_vals]
     )
-    x_ax = torch.arange(1, 1 + sim_data.emc_signal_mag.shape[-1])
+    x_ax = torch.arange(1, 1 + sim_data.signal_mag.shape[-1])
     for idx_t2 in range(num_t2s):
         for idx_b1 in range(num_b1s):
             fig.add_trace(
@@ -144,33 +145,33 @@ def plot_emc_sim_data(sim_data: options.SimulationData, out_path: plib.Path | st
     fig.write_html(fig_file.as_posix())
 
 
-def plot_magnetization(mag_profile_df: pl.DataFrame, out_path: plib.Path | str,
-                       animate: bool = False, slice_thickness_mm: float = 0.0, name: str = ""):
-    if name:
-        name = f"_{name}"
-    if animate:
-        fig = px.line(
-            data_frame=mag_profile_df, x="axis", y="profile", color="dim",
-            animation_frame="name", labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
-        )
+# def plot_magnetization(mag_profile_df: pl.DataFrame, out_path: plib.Path | str,
+#                        animate: bool = False, slice_thickness_mm: float = 0.0, name: str = ""):
+#     if name:
+#         name = f"_{name}"
+#     if animate:
+#         fig = px.line(
+#             data_frame=mag_profile_df, x="axis", y="profile", color="dim",
+#             animation_frame="name", labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
+#         )
+#
+#     else:
+#         fig = px.line(
+#             data_frame=mag_profile_df, x="axis", y="profile", color="dim",
+#             facet_col="name", facet_col_wrap=2, labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
+#         )
+#         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+#         if slice_thickness_mm > 1e-3:
+#             fig.add_vrect(x0=-slice_thickness_mm / 2, x1=slice_thickness_mm / 2,
+#                           annotation_text="desired slice", annotation_position="bottom right",
+#                           fillcolor="purple", opacity=0.25, line_width=0)
+#     out_path = plib.Path(out_path).absolute()
+#     fig_file = out_path.joinpath(f"plot_magnetization_propagation{name}").with_suffix(".html")
+#     log_module.info(f"writing file: {fig_file.as_posix()}")
+#     fig.write_html(fig_file.as_posix())
 
-    else:
-        fig = px.line(
-            data_frame=mag_profile_df, x="axis", y="profile", color="dim",
-            facet_col="name", facet_col_wrap=2, labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
-        )
-        fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-        if slice_thickness_mm > 1e-3:
-            fig.add_vrect(x0=-slice_thickness_mm / 2, x1=slice_thickness_mm / 2,
-                          annotation_text="desired slice", annotation_position="bottom right",
-                          fillcolor="purple", opacity=0.25, line_width=0)
-    out_path = plib.Path(out_path).absolute()
-    fig_file = out_path.joinpath(f"plot_magnetization_propagation{name}").with_suffix(".html")
-    log_module.info(f"writing file: {fig_file.as_posix()}")
-    fig.write_html(fig_file.as_posix())
 
-
-def plot_slice_img_tensor(slice_image_tensor: torch.tensor, sim_data: options.SimulationData,
+def plot_slice_img_tensor(slice_image_tensor: torch.tensor, sim_data: SimulationData,
                           out_path: plib.Path | str, name: str = ""):
     if name:
         name = f"_{name}"
@@ -203,7 +204,7 @@ def plot_slice_img_tensor(slice_image_tensor: torch.tensor, sim_data: options.Si
     axis = np.tile(axis, 2)
     labels = ["mag"] * np.prod(slice_profile_sampling.shape) + ["phase"] * np.prod(slice_profile_sampling.shape)
     # build df
-    df = pd.DataFrame({
+    df = pl.DataFrame({
         "data": data,
         "echo_num": echo_num,
         "axis": axis,
@@ -211,12 +212,12 @@ def plot_slice_img_tensor(slice_image_tensor: torch.tensor, sim_data: options.Si
     })
 
     # plot
-    fig = px.line(data_frame=df, x="axis", y="data", color="echo_num",
-                  facet_row="label",
-                  labels={"x": "slice axis [mm]", "y": "profile [a.u.]", "color": "echo number"}
-                  )
+    # fig = px.line(data_frame=df, x="axis", y="data", color="echo_num",
+    #               facet_row="label",
+    #               labels={"x": "slice axis [mm]", "y": "profile [a.u.]", "color": "echo number"}
+    #               )
 
-    out_path = plib.Path(out_path).absolute()
-    fig_file = out_path.joinpath(f"plot_slice_sampling_img_tensor{name}{name_extend}").with_suffix(".html")
-    log_module.info(f"writing file: {fig_file.as_posix()}")
-    fig.write_html(fig_file.as_posix())
+    # out_path = plib.Path(out_path).absolute()
+    # fig_file = out_path.joinpath(f"plot_slice_sampling_img_tensor{name}{name_extend}").with_suffix(".html")
+    # log_module.info(f"writing file: {fig_file.as_posix()}")
+    # fig.write_html(fig_file.as_posix())

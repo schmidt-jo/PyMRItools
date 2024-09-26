@@ -14,19 +14,19 @@ class Settings(Serializable):
     """
     # files and config
     config_file: str = field(
-        alias="-c", default="../example/simulate/emc_config.json",
+        alias="-c", default="../example/simulation/emc_settings.json",
         help=" provide Configuration file (.json)"
     )
     emc_params_file: str = field(
-        alias="-emc", default="",
+        alias="-emc", default="../example/simulation/emc_params.json",
         help="provide sequence event parameters"
     )
     pulse_file: str = field(
-        alias="-opul", default="",
+        alias="-opul", default="/example/simulation/pulse_pypulseq_default_gauss.pkl",
         help="separate pulse file to pulse class object"
     )
     save_path: str = field(
-        alias="-s", default="",
+        alias="-s", default="../example/simulation/results",
         help="set path to save database and used config"
     )
     database_name: str = field(
@@ -38,21 +38,6 @@ class Settings(Serializable):
         default="mese_balanced_read",
         choices=["mese_siemens", "mese_balanced_read", "megesse", "fid", "single"],
         help= "set simulation type"
-    )
-
-    # variables
-    sample_number: int = field(
-        alias="var_sn", default=1000,
-        help="no of sampling points along slice profile"
-    )
-    length_z: float = field(
-        alias="var_lz", default=0.005,
-        help="[m] length extension of z-axis spanned by sample -> total length 2*lengthZ (-:+)"
-    )
-    acquisition_number: int = field(
-        alias="var_an", default=50,
-        help="number of bins across slice sample -> effectively sets spatial resolution; "
-             "resolution = 2 * lengthZ / acquisitionNumber"
     )
 
     t1_list: list = field(
@@ -110,8 +95,7 @@ class Settings(Serializable):
 
     def display(self):
         # display via logging
-        df = pl.Series(self.to_dict())
-        # concat empty entry to start of series for nicer visualization
-        df = pl.concat([pl.Series([""], index=["___ Config ___"]), df])
-        # display
-        log_module.info(df)
+        s = "___ Config ___\n"
+        for k, v in self.to_dict().items():
+            s += f"\t\t\t{k}: {v}\n"
+        log_module.info(s)

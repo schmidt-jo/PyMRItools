@@ -72,7 +72,7 @@ class GradPulse:
         """
         log_module.debug(f"prep excitation pulse")
 
-        params = cls._set_pulse(params=params, duration_us=params.duration_excitation, excitation=True)
+        params = cls._set_pulse(params=params, settings=settings, duration_us=params.duration_excitation, excitation=True)
 
         # calculate and normalize - pulse dims [b1, t]
         pulse_from_pypsi = functions.pulse_calibration_integral(
@@ -269,7 +269,7 @@ class GradPulse:
     @classmethod
     def prep_acquisition(cls, params: EmcParameters):
         log_module.debug("prep acquisition")
-        dt_sampling_steps = params.duration_acquisition / params.acq_number
+        dt_sampling_steps = params.duration_acquisition / params.acquisition_number
 
         grad_pulse = cls(pulse_type='Acquisition', pulse_number=0, num_sampling_points=1,
                          dt_sampling_steps_us=dt_sampling_steps)

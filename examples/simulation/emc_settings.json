@@ -1,0 +1,33 @@
+{
+  "config_file": "../example/simulation/emc_settings.json",
+  "emc_params_file": "../example/simulation/emc_params.json",
+  "pulse_file": "../example/simulation/pulse_pypulseq_default_gauss.pkl",
+  "save_path": "../example/simulation/results",
+  "database_name": "database_test.pkl",
+  "sim_type": "mese_balanced_read",
+  "t1_list": [
+    1.5
+  ],
+  "t2_list": [
+    [
+      25,
+      30,
+      0.5
+    ],
+    [
+      30,
+      35,
+      1
+    ]
+  ],
+  "b1_list": [
+    0.6,
+    1.0
+  ],
+  "signal_fourier_sampling": false,
+  "resample_pulse_to_dt_us": 5.0,
+  "visualize": true,
+  "debug": false,
+  "use_gpu": false,
+  "gpu_device": 0
+}

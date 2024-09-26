@@ -1,32 +1,38 @@
 import torch
 from scipy import stats
 import numpy as np
-from pymritools.config.emc import EmcParameters, EmcSettings
-from ..sequence.base import SimulationData
+from pymritools.config.emc import EmcParameters, SimulationData
+from pymritools.config.rf import RFPulse
+import typing
+import logging
 
+log_module = logging.getLogger(__name__)
 
-def pulse_calibration_integral(params: EmcParameters,
-                               excitation: bool,
-                               refocusing_pulse_number: int = 0) -> torch.tensor:
+def pulse_calibration_integral(
+        rf_pulse: RFPulse,
+        flip_angle_deg: float,
+        phase: float,
+        b1_vals: typing.Union[torch.tensor, np.ndarray, float] = 1.0) -> torch.tensor:
     """
-    Calibrates pulse waveform for given flip angle, adds phase if given
+    Calibration of a given pulse object, i.e. pulse shape for a given flip angle and phase.
+    Optionally a set of B1 transmit values can be given.
+    The function outputs the pulse waveform as complex tensor and inserts the dimensions of the given b1 values.
+
+    :param rf_pulse: pulse shape object
+    :param b1_vals: tensor / array / value of b1 transmit efficiencies to calibrate for
+    :param flip_angle_deg: set flip angle in degrees
+    :param phase: set phase in degrees
+    :return: tensor of complex rf shape, dims [b1, num_samples]
     """
-    # get b1 values - error catch again if single value is given
-    b1_vals = SimulationData.build_array_from_list_of_lists_args(params.settings.b1_list)
-    # if not isinstance(b1_vals, list):
-    #     b1_vals = [b1_vals]
-    # b1_vals = torch.tensor(b1_vals)
-    if excitation:
-        angle_flip = params.sequence.excitation_angle
-        phase = params.sequence.excitation_phase / 180.0 * torch.pi
-    else:
-        # excitation pulse always 0th pulse
-        angle_flip = params.sequence.refocus_angle[refocusing_pulse_number - 1]
-        phase = params.sequence.refocus_phase[refocusing_pulse_number - 1] / 180.0 * torch.pi
-    # calculate with applied actual flip angle offset
-    params.pulse.set_flip_angle(flip_angle_rad=angle_flip / 180 * torch.pi, excitation=excitation)
-    b1_pulse = torch.from_numpy(params.pulse.get_pulse(excitation=excitation).amplitude) * torch.exp(
-        1j * (torch.from_numpy(params.pulse.get_pulse(excitation=excitation).phase) + phase)
+    if isinstance(b1_vals, float | int):
+        b1_vals = torch.tensor([b1_vals])
+    if not torch.is_tensor(b1_vals):
+        b1_vals = torch.from_numpy(b1_vals)
+    # calculate with applied actual flip angle
+    rf_pulse.set_flip_angle(flip_angle_rad=flip_angle_deg / 180 * torch.pi)
+
+    b1_pulse = torch.from_numpy(rf_pulse.amplitude) * torch.exp(
+        1j * (torch.from_numpy(rf_pulse.phase) + phase)
     )
     b1_pulse_calibrated = b1_pulse[None, :] * b1_vals[:, None]
     return b1_pulse_calibrated
@@ -180,10 +186,10 @@ def matrix_propagation_relaxation_multidim(dt_s: torch.tensor, sim_data: Simulat
     return relax_matrix[:, :, None, None]
 
 
-def sample_acquisition(etl_idx: int, sim_params: SimulationParameters, sim_data: SimulationData,
+def sample_acquisition(etl_idx: int, params: EmcParameters, sim_data: SimulationData,
                        acquisition_grad: torch.tensor, dt_s: torch.tensor):
     # acquisition
-    for acq_idx in range(sim_params.settings.acquisition_number):
+    for acq_idx in range(params.acq_number):
         sim_data = propagate_gradient_pulse_relax(
             pulse_x=torch.zeros(acquisition_grad.shape[0], device=sim_data.device),
             pulse_y=torch.zeros(acquisition_grad.shape[0], device=sim_data.device),
@@ -193,12 +199,12 @@ def sample_acquisition(etl_idx: int, sim_params: SimulationParameters, sim_data:
             sim_data.magnetization_propagation[:, :, :, :, 0], dim=-1) + 1j * torch.sum(
             sim_data.magnetization_propagation[:, :, :, :, 1], dim=-1)
         # signal tensor [t1s, t2s, b1s, etl, acq_num]
-        sim_data.signal_tensor[:, :, :, etl_idx, acq_idx] = 1e3 * mag_data_cmplx * sim_params.settings.length_z / \
-                                                            sim_params.settings.sample_number
+        sim_data.signal_tensor[:, :, :, etl_idx, acq_idx] = 1e3 * mag_data_cmplx * params.length_z / \
+                                                            sim_data.sample.shape[0]
     return sim_data
 
 
-def sum_sample_acquisition(etl_idx: int, sim_params: options.SimulationParameters, sim_data: SimulationData,
+def sum_sample_acquisition(etl_idx: int, params: EmcParameters, sim_data: SimulationData,
                            acquisition_duration_s: torch.tensor, partial_fourier: float = 1.0):
     # timing - partial fourier assumed to be taken at beginning of echo
     dt_aq_pre = acquisition_duration_s * (partial_fourier - 1 / 2)  # cast to s
@@ -210,9 +216,9 @@ def sum_sample_acquisition(etl_idx: int, sim_params: options.SimulationParameter
         sim_data.magnetization_propagation[:, :, :, :, 0], dim=-1) + 1j * torch.sum(
         sim_data.magnetization_propagation[:, :, :, :, 1], dim=-1)
     # emc tensor [t1s, t2s, b1s, etl]
-    sim_data.emc_signal_mag[:, :, :, etl_idx] = 1e3 * torch.abs(mag_data_cmplx) * sim_params.settings.length_z / \
-                                                sim_params.settings.sample_number
-    sim_data.emc_signal_phase[:, :, :, etl_idx] = torch.angle(mag_data_cmplx)
+    sim_data.signal_mag[:, :, :, etl_idx] = 1e3 * torch.abs(mag_data_cmplx) * params.length_z / \
+                                                sim_data.sample.shape[0]
+    sim_data.signal_phase[:, :, :, etl_idx] = torch.angle(mag_data_cmplx)
 
     # relaxation rest of acquisition time, from mid echo til end
     dt_aq_post = acquisition_duration_s / 2

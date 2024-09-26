@@ -1,35 +1,34 @@
 import logging
 import pickle
 import typing
-from pypulseq_interface.pypsi.parameters import EmcParameters
-from emc_torch import options
+from ..emc import EmcParameters, SimulationData
 import numpy as np
-import pandas as pd
+import polars as pl
 import pathlib as plib
-from plotly.express.colors import sample_colorscale
+from plotly.colors import sample_colorscale
 import plotly.subplots as psub
 import plotly.graph_objects as go
 log_module = logging.getLogger(__name__)
 
 
 class DB:
-    def __init__(self, pd_dataframe: pd.DataFrame = pd.DataFrame(),
+    def __init__(self, pl_dataframe: pl.DataFrame = pl.DataFrame(),
                  sequence_config: EmcParameters = EmcParameters(), name: str = "db_"):
         # define structure of pandas df
         self.indices: list = ["emc_mag", "emc_phase", "t2", "t1", "b1"]
         # check indices
         for ind in self.indices:
-            if not ind in pd_dataframe.columns:
+            if not ind in pl_dataframe.columns:
                 err = f"db structure not given. Index {ind} not found. " \
                       f"Make sure these indices are columns in the dataframe: {self.get_indexes()};" \
-                      f"\nIndices found in db: {pd_dataframe.columns}"
+                      f"\nIndices found in db: {pl_dataframe.columns}"
                 log_module.error(err)
                 raise ValueError(err)
-        self.pd_dataframe: pd.DataFrame = pd_dataframe
+        self.pl_dataframe: pl.DataFrame = pl_dataframe
         self.seq_params: EmcParameters = sequence_config
-        self.np_mag_array: np.ndarray = np.array([*pd_dataframe.emc_mag.to_numpy()])
-        self.np_phase_array: np.ndarray = np.array([*pd_dataframe.emc_phase.to_numpy()])
-        self.etl: int = len(self.pd_dataframe["echo"].unique())
+        self.np_mag_array: np.ndarray = np.array([*pl_dataframe["emc_mag"].to_numpy()])
+        self.np_phase_array: np.ndarray = np.array([*pl_dataframe["emc_phase"].to_numpy()])
+        self.etl: int = len(self.pl_dataframe["echo"].unique())
         # extract only name in case filename given
         name = plib.Path(name).absolute()
         name = name.stem
@@ -42,7 +41,7 @@ class DB:
         return self.indices
 
     def get_t2_b1_values(self) -> (np.ndarray, np.ndarray):
-        return np.unique(self.pd_dataframe.t2), np.unique(self.pd_dataframe.b1)
+        return np.unique(self.pl_dataframe["t2"]), np.unique(self.pl_dataframe["b1"])
 
     def plot(self,
              out_path: plib.Path | str, name: str = "",
@@ -51,7 +50,7 @@ class DB:
         if name:
             name = f"_{name}"
         # select range
-        df = self.pd_dataframe.copy()
+        df = self.pl_dataframe.clone()
         df["t2"] = 1e3 * df["t2"]
         df["t2"] = df["t2"].round(2)
         df["b1"] = df["b1"].round(2)
@@ -239,33 +238,33 @@ class DB:
         pass
 
     @classmethod
-    def build_from_sim_data(cls, sim_params: EmcParameters, sim_data: options.SimulationData):
+    def build_from_sim_data(cls, sim_params: EmcParameters, sim_data: SimulationData):
         d = {}
         index = 0
         for idx_t1 in range(sim_data.t1_vals.shape[0]):
             for idx_t2 in range(sim_data.t2_vals.shape[0]):
                 for idx_b1 in range(sim_data.b1_vals.shape[0]):
-                    for idx_echo in range(sim_data.emc_signal_mag.shape[-1]):
+                    for idx_echo in range(sim_data.signal_mag.shape[-1]):
                         td = {
                             "index": index,
                             "t1": sim_data.t1_vals[idx_t1].clone().detach().cpu().item(),
                             "t2": sim_data.t2_vals[idx_t2].clone().detach().cpu().item(),
                             "b1": sim_data.b1_vals[idx_b1].clone().detach().cpu().item(),
                             "echo": idx_echo,
-                            "emc_mag": sim_data.emc_signal_mag[
+                            "emc_mag": sim_data.signal_mag[
                                 idx_t1, idx_t2, idx_b1, idx_echo].clone().detach().cpu().item(),
-                            "emc_phase": sim_data.emc_signal_phase[
+                            "emc_phase": sim_data.signal_phase[
                                 idx_t1, idx_t2, idx_b1, idx_echo].clone().detach().cpu().item()
                         }
                         d.__setitem__(index, td)
                         index += 1
-        db_pd = pd.DataFrame(d).T
-        return cls(pd_dataframe=db_pd, sequence_config=sim_params)
+        db_pd = pl.DataFrame(d).T
+        return cls(pl_dataframe=db_pd, sequence_config=sim_params)
 
     def get_total_num_curves(self) -> int:
-        num_b1s = len(self.pd_dataframe["b1"].unique())
-        num_t1s = len(self.pd_dataframe["t1"].unique())
-        num_t2s = len(self.pd_dataframe["t2"].unique())
+        num_b1s = len(self.pl_dataframe["b1"].unique())
+        num_t1s = len(self.pl_dataframe["t1"].unique())
+        num_t2s = len(self.pl_dataframe["t2"].unique())
         return num_b1s * num_t2s * num_t1s
 
 
