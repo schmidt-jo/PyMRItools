@@ -11,7 +11,8 @@ authors = [
   {name = "Jochen Schmidt"}
 ]
 maintainers = [
-  {name = "Jochen Schmidt", email = "jochen.schmidt@tuta.io"}
+  {name = "Jochen Schmidt", email = "jochen.schmidt@tuta.io", "jschmidt@cbs.mpg.de"}
+  {name = "Patrick Scheibe", email = "pscheibe@cbs.mpg.de"}
 ]
 #classifiers = [
 #  "Development Status :: 4 - Beta",
