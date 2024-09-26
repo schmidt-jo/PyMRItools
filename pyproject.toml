@@ -29,7 +29,8 @@ dependencies = [
   "torchaudio",
   "pytorch-cuda >= 12.4",
   "simple-parsing",
-  "polars"
+  "polars",
+  "niabbel"
 ]
 
 #[project.optional-dependencies]
