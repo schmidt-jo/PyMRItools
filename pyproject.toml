@@ -1,0 +1,45 @@
+[project]
+name = "PyMRItools"
+version = "2024.0.0"
+description = "Toolbox for all things MRI with python. Sequence Programming, Reconstruction, Simulation, Analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+#keywords = []
+authors = [
+  {email = "jochen.schmidt@tuta.io"},
+  {name = "Jochen Schmidt"}
+]
+maintainers = [
+  {name = "Jochen Schmidt", email = "jochen.schmidt@tuta.io"}
+]
+#classifiers = [
+#  "Development Status :: 4 - Beta",
+#  "Programming Language :: Python"
+#]
+
+dependencies = [
+  "plotly",
+  "numpy",
+  "scipy",
+  "tqdm"
+]
+
+#[project.optional-dependencies]
+#test = [
+#  "pytest < 5.0.0",
+#  "pytest-cov[all]"
+#]
+
+[project.urls]
+#homepage = "https://example.com"
+#documentation = "https://readthedocs.org"
+repository = "https://github.com/schmidt-jo/PyMRItools"
+#changelog = "https://github.com/me/spam/blob/master/CHANGELOG.md"
+
+#[project.scripts]
+#spam-cli = "pymritools:main_cli"
+#
+#
+#[project.entry-points."pymritools.magical"]
+#tomatoes = "pymritools:main_fancypantsy"
