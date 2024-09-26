@@ -8,6 +8,100 @@ import pathlib as plib
 log_module = logging.getLogger(__name__)
 
 
+class SimulationData:
+    def __init__(self, params: EmcParameters, settings: EmcSettings, device: torch.device = torch.device("cpu")):
+        log_module.debug("\t\tSetup Simulation Data")
+        self.sample_axis: torch.Tensor = torch.linspace(
+            -params.length_z, params.length_z, settings.sample_number
+        ).to(device)
+        sample = torch.from_numpy(
+            stats.gennorm(24).pdf(self.sample_axis / params.length_z * 1.1) + 1e-6
+        )
+        self.sample: torch.Tensor = torch.divide(sample, torch.max(sample))
+
+        # set values with some error catches
+        # t1
+        if isinstance(settings.t1_list, list):
+            t1_vals = torch.tensor(settings.t1_list, device=device)
+        else:
+            t1_vals = torch.tensor([settings.t1_list], dtype=torch.float32, device=device)
+        self.t1_vals: torch.Tensor = t1_vals
+        self.num_t1s: int = self.t1_vals.shape[0]
+        # b1
+        self.b1_vals: torch.Tensor = self._build_array_from_list_of_lists_args(settings.b1_list).to(
+            device)
+        self.num_b1s: int = self.b1_vals.shape[0]
+        # t2
+        array_t2 = self._build_array_from_list_of_lists_args(settings.t2_list)
+        array_t2 /= 1000.0  # cast to s
+        self.t2_vals: torch.Tensor = array_t2.to(device)
+        self.num_t2s: int = self.t2_vals.shape[0]
+        # sim info
+        # set total number of simulated curves
+        num_curves = self.num_t1s * self.num_t2s * self.num_b1s
+        log_module.info(f"\t\t- total number of entries to simulate: {num_curves}")
+        self.total_num_sim: int = num_curves
+
+        # set magnetization vector and initialize magentization, insert axes for [t1, t2, b1] number of simulations
+        m_init = torch.zeros((settings.sample_number, 4))
+        m_init[:, 2] = self.sample
+        m_init[:, 3] = self.sample
+        self.m_init: torch.Tensor = m_init[None, None, None].to(device)
+        self.magnetization_propagation: torch.tensor = m_init.clone()
+
+        self.gamma = torch.tensor(params.gamma_hz, device=device)
+
+        # signal tensor is supposed to hold all acquisition points for all reads
+        self.signal_tensor: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, params.etl, params.acq_number),
+            dtype=torch.complex128, device=device
+        )
+
+        # allocate
+        # set emc data tensor -> dims: [t1s, t2s, b1s, ETL]
+        self.signal_mag: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, params.etl),
+            device=device
+        )
+        self.signal_phase: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, params.etl),
+            device=device
+        )
+
+    @staticmethod
+    def _build_array_from_list_of_lists_args(val_list) -> torch.tensor:
+        array = []
+        if isinstance(val_list, list):
+            for item in val_list:
+                if isinstance(item, str):
+                    item = [float(i) for i in item[1:-1].split(',')]
+                if isinstance(item, int):
+                    item = float(item)
+                if isinstance(item, float):
+                    array.append(item)
+                else:
+                    array.extend(torch.arange(*item).tolist())
+        else:
+            array = [val_list]
+        return torch.tensor(array, dtype=torch.float32)
+
+    def _check_args(self):
+        # sanity checks
+        if torch.max(self.t2_vals) > torch.min(self.t1_vals):
+            err = 'T1 T2 mismatch (T2 > T1)'
+            log_module.error(err)
+            raise AttributeError(err)
+        if torch.max(self.t2_vals) < 1e-4:
+            err = 'T2 value range exceeded, make sure to post T2 in ms'
+            log_module.error(err)
+            raise AttributeError(err)
+
+    def set_device(self, device: torch.device):
+        for _, value in vars(self).items():
+            if torch.is_tensor(value):
+                value.to(device)
+
+
 class Simulation(abc.ABC):
     def __init__(self, params: EmcParameters, settings: EmcSettings):
         log_module.info("__ Set-up Simulation __ ")
@@ -26,46 +120,16 @@ class Simulation(abc.ABC):
             sample_length_z=self.settings.length_z, sample_number_of_acq_bins=self.settings.acquisition_number
         )
 
-        log_module.debug("\t\tSetup Simulation Data")
         # set up data, carrying through simulation
-        self.sample_axis: torch.Tensor = torch.linspace(
-            -self.params.length_z, self.params.length_z, self.settings.sample_number
-        ).to(self.device)
-        sample = torch.from_numpy(
-                stats.gennorm(24).pdf(self.sample_axis / self.params.length_z * 1.1) + 1e-6
-            )
-        self.sample: torch.Tensor = torch.divide(sample, torch.max(sample))
-        # First just define values, we set them up in the below method to be able to reuse the method
-        # for different sim settings
-        # t1
-        self.t1_vals: torch.Tensor = NotImplemented
-        self.num_t1s: int = NotImplemented
-        # b1
-        self.b1_vals: torch.Tensor = NotImplemented
-        self.num_b1s: int = NotImplemented
-        # t2
-        self.t2_vals: torch.Tensor = NotImplemented
-        self.num_t2s: int = NotImplemented
-
-        self.m_init: torch.Tensor = NotImplemented
-
-        # signal tensor is supposed to hold all acquisition points for all reads
-        self.signal_tensor: torch.Tensor = NotImplemented
-        # allocate
-        # set emc data tensor -> dims: [t1s, t2s, b1s, ETL]
-        self.signal_mag: torch.Tensor  = NotImplemented
-        self.signal_phase: torch.Tensor = NotImplemented
-
-        # set all those data up
-        self.setup_simulation_data()
+        self.data: SimulationData = SimulationData(params=self.params, settings=self.settings, device=self.device)
 
         log_module.debug(f"\t\tSetup Plotting and Paths")
         self.fig_path: plib.Path = NotImplemented
         self._fig_magnetization_profile_snaps: list = []
         # pick middle sim range values for magnetization profile snaps
-        self._fig_t1_idx: int = int(self.num_t1s / 2)  # t1
-        self._fig_t2_idx: int = int(self.num_t2s / 2)  # t2
-        self._fig_b1_idx: int = int(self.num_b1s / 2)  # b1
+        self._fig_t1_idx: int = int(self.data.num_t1s / 2)  # t1
+        self._fig_t2_idx: int = int(self.data.num_t2s / 2)  # t2
+        self._fig_b1_idx: int = int(self.data.num_b1s / 2)  # b1
 
         # setup plotting
         if self.settings.visualize:
@@ -86,74 +150,10 @@ class Simulation(abc.ABC):
         self.gp_acquisition = blocks.GradPulse.prep_acquisition(params=self.params)
         # give instance of sequence timings
         self.sequence_timings: blocks.SequenceTimings = blocks.SequenceTimings()
-        # sim info
-        # set total number of simulated curves
-        num_curves = self.data.t2_vals.shape[0] * self.data.b1_vals.shape[0] * self.data.t1_vals.shape[0]
-        log_module.info(f"\t\t- total number of entries to simulate: {num_curves}")
-        params.settings.total_num_sim = num_curves
         # call specific prep
         self._prep()
         # call timing build
         self._register_sequence_timings()
-
-    def setup_simulation_data(self):
-        # set values with some error catches
-        # t1
-        if isinstance(self.settings.t1_list, list):
-            t1_vals = torch.tensor(self.settings.t1_list, device=self.device)
-        else:
-            t1_vals = torch.tensor([self.settings.t1_list], dtype=torch.float32, device=self.device)
-        self.t1_vals: torch.Tensor = t1_vals
-        self.num_t1s: int = self.t1_vals.shape[0]
-        # b1
-        self.b1_vals: torch.Tensor = self._build_array_from_list_of_lists_args(self.settings.b1_list).to(self.device)
-        self.num_b1s: int = self.b1_vals.shape[0]
-        # t2
-        array_t2 = self._build_array_from_list_of_lists_args(self.settings.t2_list)
-        array_t2 /= 1000.0  # cast to s
-        self.t2_vals: torch.Tensor = array_t2.to(self.device)
-        self.num_t2s: int = self.t2_vals.shape[0]
-
-        # set magnetization vector and initialize magentization, insert axes for [t1, t2, b1] number of simulations
-        m_init = torch.zeros((self.settings.sample_number, 4))
-        m_init[:, 2] = self.sample
-        m_init[:, 3] = self.sample
-        self.m_init: torch.Tensor = m_init[None, None, None].to(self.device)
-
-        # signal tensor is supposed to hold all acquisition points for all reads
-        self.signal_tensor: torch.Tensor = torch.zeros(
-            (self.num_t1s, self.num_t2s, self.num_b1s, self.params.etl, self.params.acq_number),
-            dtype=torch.complex128, device=self.device
-        )
-
-        # allocate
-        # set emc data tensor -> dims: [t1s, t2s, b1s, ETL]
-        self.signal_mag: torch.Tensor = torch.zeros(
-            (self.num_t1s, self.num_t2s, self.num_b1s, self.params.etl),
-            device=self.device
-        )
-        self.signal_phase: torch.Tensor = torch.zeros(
-            (self.num_t1s, self.num_t2s, self.num_b1s, self.params.etl),
-            device=self.device
-        )
-
-    @staticmethod
-    def _build_array_from_list_of_lists_args(val_list) -> torch.tensor:
-        array = []
-        if isinstance(val_list, list):
-            for item in val_list:
-                if isinstance(item, str):
-                    item = [float(i) for i in item[1:-1].split(',')]
-                if isinstance(item, int):
-                    item = float(item)
-                if isinstance(item, float):
-                    array.append(item)
-                else:
-                    array.extend(torch.arange(*item).tolist())
-        else:
-            array = [val_list]
-        return torch.tensor(array, dtype=torch.float32)
-
 
     @abc.abstractmethod
     def _prep(self):

@@ -1,31 +1,31 @@
 import torch
 from scipy import stats
 import numpy as np
-from emc_torch import options
+from pymritools.config.emc import EmcParameters
 
 
-def pulse_calibration_integral(sim_params: options.SimulationParameters,
+def pulse_calibration_integral(params: EmcParameters,
                                excitation: bool,
                                refocusing_pulse_number: int = 0) -> torch.tensor:
     """
     Calibrates pulse waveform for given flip angle, adds phase if given
     """
     # get b1 values - error catch again if single value is given
-    b1_vals = options.SimulationData.build_array_from_list_of_lists_args(sim_params.settings.b1_list)
+    b1_vals = options.SimulationData.build_array_from_list_of_lists_args(params.settings.b1_list)
     # if not isinstance(b1_vals, list):
     #     b1_vals = [b1_vals]
     # b1_vals = torch.tensor(b1_vals)
     if excitation:
-        angle_flip = sim_params.sequence.excitation_angle
-        phase = sim_params.sequence.excitation_phase / 180.0 * torch.pi
+        angle_flip = params.sequence.excitation_angle
+        phase = params.sequence.excitation_phase / 180.0 * torch.pi
     else:
         # excitation pulse always 0th pulse
-        angle_flip = sim_params.sequence.refocus_angle[refocusing_pulse_number - 1]
-        phase = sim_params.sequence.refocus_phase[refocusing_pulse_number - 1] / 180.0 * torch.pi
+        angle_flip = params.sequence.refocus_angle[refocusing_pulse_number - 1]
+        phase = params.sequence.refocus_phase[refocusing_pulse_number - 1] / 180.0 * torch.pi
     # calculate with applied actual flip angle offset
-    sim_params.pulse.set_flip_angle(flip_angle_rad=angle_flip / 180 * torch.pi, excitation=excitation)
-    b1_pulse = torch.from_numpy(sim_params.pulse.get_pulse(excitation=excitation).amplitude) * torch.exp(
-        1j * (torch.from_numpy(sim_params.pulse.get_pulse(excitation=excitation).phase) + phase)
+    params.pulse.set_flip_angle(flip_angle_rad=angle_flip / 180 * torch.pi, excitation=excitation)
+    b1_pulse = torch.from_numpy(params.pulse.get_pulse(excitation=excitation).amplitude) * torch.exp(
+        1j * (torch.from_numpy(params.pulse.get_pulse(excitation=excitation).phase) + phase)
     )
     b1_pulse_calibrated = b1_pulse[None, :] * b1_vals[:, None]
     return b1_pulse_calibrated

@@ -58,7 +58,7 @@ class GradPulse:
 
         # calculate and normalize - pulse dims [b1, t]
         pulse_from_pypsi = functions.pulse_calibration_integral(
-            sim_params=params,
+            params=params,
             excitation=True
         )
 
@@ -103,7 +103,7 @@ class GradPulse:
         params = cls._set_pulse(params=params, duration_us=params.duration_refocus, excitation=False)
         # calculate and normalize
         pulse_from_pypsi = functions.pulse_calibration_integral(
-            sim_params=params,
+            params=params,
             excitation=False,
             refocusing_pulse_number=refocus_pulse_number
         )

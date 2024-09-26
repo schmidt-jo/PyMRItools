@@ -1,4 +1,5 @@
-from .. import blocks, functions, plotting
+from .. import functions, plotting
+from ..blocks import GradPulse
 from pymritools.config.emc import EmcSettings, EmcParameters
 from .base import Simulation
 import torch
@@ -17,16 +18,16 @@ class MESE(Simulation):
         log_module.info("\t - MESE sequence")
         # prep pulse grad data - this holds the pulse data and timings
         log_module.info('\t - pulse gradient preparation')
-        self.gp_excitation = blocks.GradPulse.prep_grad_pulse_excitation(params=self.params, settings=self.settings)
+        self.gp_excitation = GradPulse.prep_grad_pulse_excitation(params=self.params, settings=self.settings)
 
-        gp_refocus_1 = blocks.GradPulse.prep_grad_pulse_refocus(
+        gp_refocus_1 = GradPulse.prep_grad_pulse_refocus(
             params=self.params, settings=self.settings, refocus_pulse_number=0
         )
 
         # built list of grad_pulse events, acquisition and timing
         self.gps_refocus = [gp_refocus_1]
         for r_idx in torch.arange(1, self.params.etl):
-            gp_refocus = blocks.GradPulse.prep_grad_pulse_refocus(
+            gp_refocus = GradPulse.prep_grad_pulse_refocus(
                 params=self.params, settings=self.settings, refocus_pulse_number=r_idx
             )
             self.gps_refocus.append(gp_refocus)

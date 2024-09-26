@@ -1,5 +1,6 @@
-from .base import Simulation
-from .. import blocks, functions
+from .base import Simulation, SimulationData
+from .. import functions
+from ..blocks import GradPulse
 from pymritools.config.emc import EmcSettings, EmcParameters
 import torch
 import logging
@@ -23,18 +24,20 @@ class FID(Simulation):
         area_rephase = - 0.5 * area_slice_select
         self.params.gradient_excitation_rephase = (area_rephase / self.params.duration_excitation_rephase)
 
-        self.setup_simulation_data()
+        # changes to params, reset simulation data
+        self.data = SimulationData(params=self.params, settings=self.settings, device=self.device)
 
     def simulate(self):
         log_module.info("Simulating FID sequence")
         # get pulse
-        gp_excitation = blocks.GradPulse.prep_single_grad_pulse(
-            params=self.params, excitation_flag=True, grad_rephase_factor=1.05
+        gp_excitation = GradPulse.prep_grad_pulse_excitation(
+            params=self.params, settings=self.settings,
+            # excitation_flag=True, grad_rephase_factor=1.05
         )
         gp_excitation.plot(sim_data=self.data)
 
         # get acquisition
-        acquisition = blocks.GradPulse.prep_acquisition(params=self.params)
+        acquisition = GradPulse.prep_acquisition(params=self.params)
         # propagate pulse
         # pulse
         self.data = functions.propagate_gradient_pulse_relax(

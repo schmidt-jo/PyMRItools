@@ -1,5 +1,6 @@
-from .. import blocks, functions
-from .base import Simulation
+from .. import functions
+from ..blocks import GradPulse
+from .base import Simulation, SimulationData
 from pymritools.config.emc import EmcParameters, EmcSettings
 import torch
 import tqdm
@@ -19,7 +20,7 @@ class MEGESSE(Simulation):
         log_module.info("\t - MEGESSE sequence")
         log_module.info('\t - pulse gradient preparation')
         # excitation pulse
-        self.gp_excitation = blocks.GradPulse.prep_grad_pulse_excitation(params=self.params)
+        self.gp_excitation = GradPulse.prep_grad_pulse_excitation(params=self.params, settings=self.settings)
         # its followed by the partial fourier readout GRE, if we dont sample the read and just use summing
         # we can assume the partial fourier is dealt with upon reconstruction.
         # hence we use just the acquisition with appropriate timing, and ignore read directions for now
@@ -27,12 +28,12 @@ class MEGESSE(Simulation):
         # built list of grad_pulse events, acquisition and timing
         self.gps_refocus = []
         for r_idx in torch.arange(self.params.etl):
-            gp_refocus = blocks.GradPulse.prep_grad_pulse_refocus(
+            gp_refocus = GradPulse.prep_grad_pulse_refocus(
                 params=self.params, refocus_pulse_number=r_idx, force_sym_spoil=True
             )
             self.gps_refocus.append(gp_refocus)
 
-        if self.params.config.visualize:
+        if self.settings.visualize:
             self.gp_excitation.plot(self.data, fig_path=self.fig_path)
             self.gps_refocus[0].plot(self.data, fig_path=self.fig_path)
             self.gps_refocus[1].plot(self.data, fig_path=self.fig_path)
@@ -46,7 +47,7 @@ class MEGESSE(Simulation):
         self.partial_fourier_gre1: float = 3 / 4
 
         # prep sim data due to etl change
-        self.setup_simulation_data()
+        self.data = SimulationData(params=self.params, settings=self.settings, device=self.device)
 
     def _set_device(self):
         # set devices
