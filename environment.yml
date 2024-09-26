@@ -1,0 +1,16 @@
+name: mri_tools_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - polars
+  - pytorch-gpu
+  - cudnn=8.8.0
+  - kaleido-core=0.2.1
+  - scipy
+  - numpy=1.24.2
+  - plotly=5.16.1
+  - simple-parsing
+  - tqdm
+  - nibabel
+  - wandb
