@@ -46,7 +46,7 @@ repository = "https://github.com/schmidt-jo/PyMRItools"
 #changelog = "https://github.com/me/spam/blob/master/CHANGELOG.md"
 
 [project.scripts]
-emc_simulation = "pymritools.simulation.emc.simulate:main"
+emc_simulation = "pymritools.simulation.emc.core.simulate:main"
 
 #[project.entry-points."pymritools.magical"]
 #tomatoes = "pymritools:main_fancypantsy"

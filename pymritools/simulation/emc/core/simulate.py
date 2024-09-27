@@ -1,4 +1,4 @@
-import sequence
+from pymritools.simulation.emc import sequence
 from pymritools.config.emc import EmcParameters, EmcSettings
 from pymritools.config.database import DB
 import logging
