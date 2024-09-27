@@ -35,14 +35,14 @@ def main():
     input_data, input_img = nifti_load(settings.input_path)
 
 
-    phantom_unring = gibbs_unring_nd(
+    data_unring = gibbs_unring_nd(
         image_data_nd=torch.from_numpy(input_data), visualize=False, gpu=True,
         m=settings.num_shifts_per_voxel, k=settings.voxel_neighborhood_size
     )
 
     # save data
     nifti_save(
-        data=phantom_unring, img_aff=input_img,
+        data=data_unring, img_aff=input_img,
         path_to_dir=settings.output_path, file_name=f"ur_{path_in.stem}"
     )
 
