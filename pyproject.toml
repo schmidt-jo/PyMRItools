@@ -46,7 +46,11 @@ repository = "https://github.com/schmidt-jo/PyMRItools"
 #changelog = "https://github.com/me/spam/blob/master/CHANGELOG.md"
 
 [project.scripts]
+
 emc_simulation = "pymritools.simulation.emc.core.simulate:main"
+
+processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
+processing_denoise_mppca = "pymritools.processing.denoising.mppca.denoise:main"
 
 #[project.entry-points."pymritools.magical"]
 #tomatoes = "pymritools:main_fancypantsy"
