@@ -9,16 +9,12 @@ log_module = logging.getLogger(__name__)
 
 @dataclass
 class Settings(BaseClass):
-    config_file: str = field(
-        alias="-c", default="",
-        help="Input configuration file (.json) covering entries to this Settings object."
-    )
     input_nifti_file: str = field(
-        alias="-i",
+        alias="-i", default="",
         help="Input Nifti file of data to unring."
     )
     output_path: str = field(
-        alias="-o",
+        alias="-o", default="",
         help="Output path for processed data."
     )
     # vars

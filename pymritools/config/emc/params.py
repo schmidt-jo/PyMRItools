@@ -199,6 +199,12 @@ class SimulationData:
             device=self.device
         )
 
+    @property
+    def complete_param_list(self) -> list:
+        return [(t1, t2, b1) for t1 in self.t1_vals
+                for t2 in self.t2_vals for b1 in self.b1_vals]
+
+
     @staticmethod
     def _build_tensors_from_list_of_lists_args(val_list) -> torch.tensor:
         """

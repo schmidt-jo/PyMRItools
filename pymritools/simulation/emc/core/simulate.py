@@ -72,13 +72,14 @@ def main():
     parser.add_arguments(EmcSettings, dest="settings")
     prog_args = parser.parse_args()
 
-    # opts = options.SimulationParameters.from_cli(prog_args)
-    # set logging level after possible config file read
+    settings = EmcSettings.from_cli(prog_args.settings)
+    params = prog_args.params
+
     if prog_args.settings.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
     try:
-        cli_sim(settings=prog_args.settings, params=prog_args.params)
+        cli_sim(settings=settings, params=params)
 
     except Exception as e:
         logging.exception(e)

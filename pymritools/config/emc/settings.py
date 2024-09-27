@@ -11,10 +11,6 @@ class Settings(BaseClass):
     EMC - Bloch equation simulation settings
     """
     # files and config
-    config_file: str = field(
-        alias="-c", default="./examples/simulation/emc_settings.json",
-        help=" provide Configuration file (.json)"
-    )
     emc_params_file: str = field(
         alias="-emc", default="./examples/simulation/emc_params.json",
         help="provide sequence event parameters"
@@ -81,13 +77,3 @@ class Settings(BaseClass):
         alias="-gpud", default=0,
         help="(optional) set gpu device if multiple are available"
     )
-
-    @property
-    def complete_param_list(self) -> list:
-        return [(t1, t2, b1) for t1 in self.t1_list
-                for t2 in self.t2_list for b1 in self.b1_list]
-
-    @property
-    def  total_num_sim(self) -> int:
-        return len(self.complete_param_list)
-
