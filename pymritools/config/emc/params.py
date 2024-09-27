@@ -6,7 +6,7 @@ Jochen Schmidt, 26.09.2024
 from dataclasses import dataclass
 from simple_parsing.helpers import Serializable
 from simple_parsing import field
-from .settings import Settings
+from .settings import SimulationSettings
 import numpy as np
 import torch
 import logging
@@ -134,7 +134,7 @@ class SimulationData:
     """
     Setup and allocate tensors to carry data through the simulation and set up the device (i.e. GPU acceleration)
     """
-    def __init__(self, params: Parameters, settings: Settings, device: torch.device = torch.device("cpu")):
+    def __init__(self, params: Parameters, settings: SimulationSettings, device: torch.device = torch.device("cpu")):
         log_module.debug("\t\tSetup Simulation Data")
         self.device: torch.device = device
         # setup axes in [m] positions along z axes

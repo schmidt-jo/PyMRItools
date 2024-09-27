@@ -1,7 +1,7 @@
 import logging
 import torch
 import abc
-from pymritools.config.emc import EmcParameters, EmcSettings, SimulationData
+from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
 from pymritools.simulation.emc.core import GradPulse, SequenceTimings
 from pymritools.config.rf import RFPulse
 import pathlib as plib
@@ -14,7 +14,7 @@ class Simulation(abc.ABC):
     that carries through the data iteratively, set up plotting and
     define some common functions to use for all sequence simulations.
     """
-    def __init__(self, params: EmcParameters, settings: EmcSettings):
+    def __init__(self, params: EmcParameters, settings: EmcSimSettings):
         log_module.info("__ Set-up Simulation __ ")
         # setup device
         if settings.use_gpu and torch.cuda.is_available():
@@ -25,7 +25,7 @@ class Simulation(abc.ABC):
         log_module.info(f"\t\t- torch device: {device}")
         # simulation variables
         self.params: EmcParameters = params
-        self.settings: EmcSettings = settings
+        self.settings: EmcSimSettings = settings
 
         # set up data, carrying through simulation
         self.data: SimulationData = SimulationData(params=self.params, settings=self.settings, device=self.device)

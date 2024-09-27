@@ -1,6 +1,6 @@
 from .base import Simulation, SimulationData
 from ..core import functions, GradPulse
-from pymritools.config.emc import EmcSettings, EmcParameters
+from pymritools.config.emc import EmcSimSettings, EmcParameters
 import torch
 import logging
 
@@ -8,7 +8,7 @@ log_module = logging.getLogger(__name__)
 
 
 class FID(Simulation):
-    def __init__(self, params: EmcParameters, settings: EmcSettings,
+    def __init__(self, params: EmcParameters, settings: EmcSimSettings,
                  device: torch.device = torch.device("cpu"), num_mag_evol_plot: int = 3):
         super().__init__(params=params, settings=settings)
 

@@ -3,7 +3,7 @@ Module to Build Pulse-Gradient Blocks, to get and cast data needed for simulatio
 _____
 Jochen Schmidt, 26.09.2024
 """
-from pymritools.config.emc import EmcSettings, EmcParameters
+from pymritools.config.emc import EmcSimSettings, EmcParameters
 from pymritools.config.rf import RFPulse
 from pymritools.simulation.emc.core import functions
 from pymritools.utils import plot_gradient_pulse
@@ -66,7 +66,7 @@ class GradPulse:
         self.data_pulse_y = self.data_pulse_y.to(dtype=torch.float32)
 
     @classmethod
-    def prep_grad_pulse_excitation(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSettings):
+    def prep_grad_pulse_excitation(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings):
         """
         Prepare a slice selective Excitation Gradient Pulse
         :params pulse: RFPulse object / shape to set in the GradPulse object
@@ -119,7 +119,7 @@ class GradPulse:
         return grad_pulse
 
     @classmethod
-    def prep_grad_pulse_refocus(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSettings,
+    def prep_grad_pulse_refocus(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings,
                                 refocus_pulse_number: int, force_sym_spoil: bool = False):
         """
         Prepare a slice selective Refocusing Gradient Pulse
@@ -185,7 +185,7 @@ class GradPulse:
         return grad_pulse
 
     @staticmethod
-    def _set_pulse(pulse: RFPulse, settings: EmcSettings, duration_us: float):
+    def _set_pulse(pulse: RFPulse, settings: EmcSimSettings, duration_us: float):
         log_module.debug(f"\t RF")
         # check rf and given sim details
         if np.abs(pulse.duration_in_us - duration_us) > 1e-5:

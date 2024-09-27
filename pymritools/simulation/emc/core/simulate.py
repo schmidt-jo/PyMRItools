@@ -1,5 +1,5 @@
 from pymritools.simulation.emc import sequence
-from pymritools.config.emc import EmcParameters, EmcSettings
+from pymritools.config.emc import EmcParameters, EmcSimSettings
 from pymritools.config.database import DB
 from pymritools.utils import setup_program_logging
 import logging
@@ -9,7 +9,7 @@ log_module = logging.getLogger(__name__)
 logging.getLogger('simple_parsing').setLevel(logging.WARNING)
 
 
-def core_sim(params: EmcParameters, settings: EmcSettings) -> DB:
+def core_sim(params: EmcParameters, settings: EmcSimSettings) -> DB:
     """
     core simulation and plotting
     """
@@ -43,7 +43,7 @@ def core_sim(params: EmcParameters, settings: EmcSettings) -> DB:
     return db
 
 
-def cli_sim(params: EmcParameters, settings: EmcSettings):
+def cli_sim(params: EmcParameters, settings: EmcSimSettings):
     """
     Function to be called when using tool as cmd line interface, passing the cli created options.
     Just doing the core sim and saving the data
@@ -69,10 +69,10 @@ def main():
 
     parser = simple_parsing.ArgumentParser(prog='emc_sim')
     parser.add_arguments(EmcParameters, dest="params")
-    parser.add_arguments(EmcSettings, dest="settings")
+    parser.add_arguments(EmcSimSettings, dest="settings")
     prog_args = parser.parse_args()
 
-    settings = EmcSettings.from_cli(prog_args.settings)
+    settings = EmcSimSettings.from_cli(prog_args.settings)
     params = prog_args.params
 
     if prog_args.settings.debug:

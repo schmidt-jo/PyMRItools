@@ -1,5 +1,5 @@
 from pymritools.simulation.emc.core import functions, GradPulse
-from pymritools.config.emc import EmcSettings, EmcParameters
+from pymritools.config.emc import EmcSimSettings, EmcParameters
 from .base import Simulation
 import torch
 import logging
@@ -10,7 +10,7 @@ log_module = logging.getLogger(__name__)
 
 
 class MESE(Simulation):
-    def __init__(self, params: EmcParameters, settings: EmcSettings):
+    def __init__(self, params: EmcParameters, settings: EmcSimSettings):
         super().__init__(params=params, settings=settings)
 
     def _prep(self):
