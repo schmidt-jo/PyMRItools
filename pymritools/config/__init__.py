@@ -1,3 +1,3 @@
-from . import emc, rf, database
+from . import emc, rf, database, processing
 
-__all__ = ["emc", "rf", "database"]
+__all__ = ["emc", "rf", "database", "processing"]

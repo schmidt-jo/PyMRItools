@@ -1,13 +1,12 @@
 import logging
 from dataclasses import dataclass
 from simple_parsing import field
-from simple_parsing.helpers import Serializable
-
+from pymritools.config.base import BaseClass
 log_module = logging.getLogger(__name__)
 
 
 @dataclass
-class Settings(Serializable):
+class Settings(BaseClass):
     """
     EMC - Bloch equation simulation settings
     """
@@ -92,9 +91,3 @@ class Settings(Serializable):
     def  total_num_sim(self) -> int:
         return len(self.complete_param_list)
 
-    def display(self):
-        # display via logging
-        s = "___ Config ___\n"
-        for k, v in self.to_dict().items():
-            s += f"\t\t\t{k}: {v}\n"
-        log_module.info(s)

@@ -1,6 +1,7 @@
 from pymritools.simulation.emc import sequence
 from pymritools.config.emc import EmcParameters, EmcSettings
 from pymritools.config.database import DB
+from pymritools.utils import setup_program_logging
 import logging
 import pathlib as plib
 import simple_parsing
@@ -64,11 +65,7 @@ def cli_sim(params: EmcParameters, settings: EmcSettings):
 
 
 def main():
-    logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
-                        datefmt='%I:%M:%S', level=logging.INFO)
-    logging.info("__________________________________________________________")
-    logging.info("__________________ EMC torch simulation __________________")
-    logging.info("__________________________________________________________")
+    setup_program_logging(name="EMC Simulation", level=logging.INFO)
 
     parser = simple_parsing.ArgumentParser(prog='emc_sim')
     parser.add_arguments(EmcParameters, dest="params")
