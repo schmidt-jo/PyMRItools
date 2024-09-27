@@ -6,33 +6,45 @@ Implementation, Jochen Schmidt, 26.09.2024
 
 """
 import pathlib as plib
-import nibabel as nib
+
+import torch
+
 from .functions import gibbs_unring_nd
+from pymritools.config.processing.unringing import Settings
+from pymritools.utils import nifti_load, nifti_save, setup_program_logging
+from simple_parsing import ArgumentParser
 import logging
 log_module = logging.getLogger(__name__)
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
-    # prepare working path
-    path = plib.Path("/data/pt_np-jschmidt/code/gibun/dev")
-    path.mkdir(exist_ok=True, parents=True)
+    setup_program_logging(name="Gibbs Unringing", level=logging.INFO)
+
+    # setup argument parser
+    parser = ArgumentParser(Settings, dest="settings")
+    prog_args = parser.parse_args()
+    settings = Settings.from_cli(prog_args)
+    settings.display()
+
+    # prepare output path
+    path_out = plib.Path(settings.output_path).absolute()
+    path_out.mkdir(exist_ok=True, parents=True)
 
     # load in data
-    path_to_phantom_data = plib.Path(
-        "/data/pt_np-jschmidt/data/00_phantom_scan_data/semc_2024-04-19/processed/semc/semc_r0p7_echo_mag.nii.gz"
-    )
-    log_module.info(f"load file: {path_to_phantom_data}")
-    phantom_img = nib.load(path_to_phantom_data)
-    phantom_data = phantom_img.get_fdata()
+    path_in = plib.Path(settings.input_path).absolute()
+    input_data, input_img = nifti_load(settings.input_path)
 
-    phantom_unring = gibbs_unring_nd(image_data_nd=phantom_data, visualize=False, gpu=True)
+
+    phantom_unring = gibbs_unring_nd(
+        image_data_nd=torch.from_numpy(input_data), visualize=False, gpu=True,
+        m=settings.num_shifts_per_voxel, k=settings.voxel_neighborhood_size
+    )
 
     # save data
-    path_to_save = path_to_phantom_data.with_stem(f"ur_{path_to_phantom_data.stem}").with_suffix(".nii")
-    log_module.info(f"save file: {path_to_save}")
-    img = nib.Nifti1Image(phantom_unring, phantom_img.affine)
-    nib.save(img, path_to_save.as_posix())
+    nifti_save(
+        data=phantom_unring, img_aff=input_img,
+        path_to_dir=settings.output_path, file_name=f"ur_{path_in.stem}"
+    )
 
 
 if __name__ == '__main__':

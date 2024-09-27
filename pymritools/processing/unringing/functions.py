@@ -13,8 +13,8 @@ log_module = logging.getLogger(__name__)
 
 
 def batch_process_torch(
-        data_batch: torch.tensor, k_ind: torch.tensor,
-        x: torch.tensor, s: torch.tensor, m: int, nb_pts: torch.tensor):
+        data_batch: torch.Tensor, k_ind: torch.Tensor,
+        x: torch.Tensor, s: torch.Tensor, m: int, nb_pts: torch.Tensor):
     # get size of batch dimension
     n_dim_batch = data_batch.shape[0]
     n_c_k = data_batch.shape[-1]
@@ -88,10 +88,10 @@ def batch_process_torch(
 
 
 def gibbs_unring_1d(
-        image_data_1d: torch.tensor,
+        image_data_1d: torch.Tensor,
         m: int = 100, k: int = 3,
         visualize: bool = True,
-        gpu: bool = False, gpu_device: int = 0) -> torch.tensor:
+        gpu: bool = False, gpu_device: int = 0) -> torch.Tensor:
     log_module.info("Gibbs un-ring 1D")
 
     if gpu and torch.cuda.is_available():
@@ -156,11 +156,35 @@ def gibbs_unring_1d(
     image_data_1d = np.reshape(ur_data, shape)
     return image_data_1d
 
+
 def gibbs_unring_nd(
-        image_data_nd: np.ndarray,
+        image_data_nd: torch.Tensor,
         m: int = 100, k: int = 3,
         visualize: bool = True,
-        gpu: bool = False, gpu_device: int = 0) -> np.ndarray:
+        gpu: bool = False, gpu_device: int = 0) -> torch.Tensor:
+    """
+    Multidimensional Gibbs unringing function.
+
+    This function applies the Gibbs unringing algorithm to multidimensional image data to reduce ringing artifacts.
+    The algorithm is based on the paper by Kellner et al. (2015).
+
+    Parameters:
+        image_data_nd (torch.Tensor):
+            The input image data. Expected dimensions are 2 to 4 (xy (z) (t)).
+        m (int, optional): 
+            The number of shifts per voxel. Default is 100.
+        k (int, optional): 
+            The size of the neighborhood around each voxel for which to find the optimal image. Default is 3.
+        visualize (bool, optional): 
+            Whether to visualize intermediate results or not. Default is True.
+        gpu (bool, optional): 
+            Whether to use GPU acceleration if available. Default is False.
+        gpu_device (int, optional): 
+            The GPU device index to use if GPU acceleration is enabled. Default is 0.
+
+    Returns:
+        torch.Tensor: The unringed image data with the same shape as the input.
+    """
     log_module.info(f"Gibbs un-ring multidim")
     # check data shape
     if not 2 <= image_data_nd.shape.__len__() <= 4:
@@ -169,25 +193,33 @@ def gibbs_unring_nd(
         raise AttributeError(err)
     while image_data_nd.shape.__len__() < 4:
         image_data_nd = np.expand_dims(image_data_nd, -1)
+
+    # ensure tensor
+    if not torch.is_tensor(image_data_nd):
+        image_data_nd = torch.from_numpy(image_data_nd)
     # save dims
     nx, ny, nz, nt = image_data_nd.shape
 
     # introduce weighting filter
-    k_x = np.linspace(-np.pi, np.pi, nx)
-    k_y = np.linspace(-np.pi, np.pi, ny)
+    k_x = torch.linspace(-np.pi, np.pi, nx)
+    k_y = torch.linspace(-np.pi, np.pi, ny)
 
     log_module.info(f"\t\t - calc weighting filters")
 
-    denom = 2 + np.cos(k_y[None, :]) + np.cos(k_x[:, None])
-    g_x = np.divide(
-        1 + np.cos(k_y[None, :]),
-        denom,
-        where=denom > 1e-9, out=np.zeros_like(denom)
+    denom = 2 + torch.cos(k_y[None, :]) + torch.cos(k_x[:, None])
+    g_x = torch.nan_to_num(
+        torch.divide(
+            1 + torch.cos(k_y[None, :]),
+            denom,
+        ),
+        nan=0.0, posinf=0.0, neginf=0.0
     )
-    g_y = np.divide(
-        1 + np.cos(k_x[:, None]),
-        denom,
-        where=denom > 1e-9, out=np.zeros_like(denom)
+    g_y = torch.nan_to_num(
+        torch.divide(
+            1 + np.cos(k_x[:, None]),
+            denom,
+        ),
+        nan=0.0, posinf=0.0, neginf=0.0
     )
     # if visualize:
     #     # plot
@@ -209,9 +241,9 @@ def gibbs_unring_nd(
     #     fig.write_html(file_name.as_posix())
 
     # move nd dims to front
-    nd_data = np.moveaxis(image_data_nd, (2, 3), (0, 1))
+    nd_data = torch.movedim(image_data_nd, (2, 3), (0, 1))
     # combine batches
-    nd_data = np.reshape(nd_data, (-1, nx, ny))
+    nd_data = torch.reshape(nd_data, (-1, nx, ny))
     nd_dim = nd_data.shape[0]
 
     log_module.info(f"\t\t - filter image")
@@ -222,10 +254,10 @@ def gibbs_unring_nd(
     log_module.info(f"\t\t --> process ix ____")
     # process x dim of ix
     ur_ix = gibbs_unring_1d(
-        image_data_1d=np.moveaxis(i_x, 1, -1), m=m, k=k, visualize=visualize,
+        image_data_1d=torch.movedim(i_x, 1, -1), m=m, k=k, visualize=visualize,
         gpu=gpu, gpu_device=gpu_device
     )
-    ur_ix = np.moveaxis(ur_ix, -1, 1)
+    ur_ix = torch.movedim(ur_ix, -1, 1)
 
     log_module.info(f"\t\t --> process iy ____")
     # process y dim of iy
@@ -237,8 +269,8 @@ def gibbs_unring_nd(
     # average
     ur_i = (ur_ix + ur_iy)
     # reshape
-    ur_i = np.reshape(ur_i, (nz, nt, nx, ny))
+    ur_i = torch.reshape(ur_i, (nz, nt, nx, ny))
     # move batch dims back
-    ur_i = np.moveaxis(ur_i, (0, 1), (2, 3))
+    ur_i = torch.movedim(ur_i, (0, 1), (2, 3))
     log_module.info(f"\t\t - done!")
     return ur_i
