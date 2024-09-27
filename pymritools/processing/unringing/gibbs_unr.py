@@ -23,28 +23,32 @@ def main():
     # setup argument parser
     parser = ArgumentParser(Settings, dest="settings")
     prog_args = parser.parse_args()
-    settings = Settings.from_cli(prog_args)
+    settings = Settings.from_cli(prog_args.settings)
     settings.display()
 
-    # prepare output path
-    path_out = plib.Path(settings.output_path).absolute()
-    path_out.mkdir(exist_ok=True, parents=True)
+    try:
+        # prepare output path
+        path_out = plib.Path(settings.output_path).absolute()
+        path_out.mkdir(exist_ok=True, parents=True)
 
-    # load in data
-    path_in = plib.Path(settings.input_path).absolute()
-    input_data, input_img = nifti_load(settings.input_path)
+        # load in data
+        path_in = plib.Path(settings.input_path).absolute()
+        input_data, input_img = nifti_load(settings.input_path)
 
 
-    data_unring = gibbs_unring_nd(
-        image_data_nd=torch.from_numpy(input_data), visualize=False, gpu=True,
-        m=settings.num_shifts_per_voxel, k=settings.voxel_neighborhood_size
-    )
+        data_unring = gibbs_unring_nd(
+            image_data_nd=torch.from_numpy(input_data), visualize=False, gpu=True,
+            m=settings.num_shifts_per_voxel, k=settings.voxel_neighborhood_size
+        )
 
-    # save data
-    nifti_save(
-        data=data_unring, img_aff=input_img,
-        path_to_dir=settings.output_path, file_name=f"ur_{path_in.stem}"
-    )
+        # save data
+        nifti_save(
+            data=data_unring, img_aff=input_img,
+            path_to_dir=settings.output_path, file_name=f"ur_{path_in.stem}"
+        )
+    except Exception as e:
+        logging.exception(e)
+        parser.print_help()
 
 
 if __name__ == '__main__':
