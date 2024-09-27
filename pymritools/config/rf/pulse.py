@@ -7,18 +7,10 @@ import typing
 import polars as pl
 import plotly.graph_objects as go
 from simple_parsing.helpers import Serializable
+from scipy.constants import physical_constants
+from simple_parsing.helpers.serialization import encode, register_decoding_fn
 
 log_module = logging.getLogger(__name__)
-
-
-@dc.dataclass
-class GlobalSystem:
-    gamma_Hz = 42577478.518  # Hz/T
-    max_grad_mT = 80.0  # mT/m
-
-    def check_bandwidth_for_slice(self, slice_thickness_in_mm):
-        max_bandwidth = self.gamma_Hz * self.max_grad_mT * 1e-3 * slice_thickness_in_mm * 1e-3
-        return max_bandwidth
 
 
 @dc.dataclass
@@ -51,7 +43,7 @@ class RFPulse(Serializable):
 
     def set_shape_on_raster(self, raster_time_s):
         # interpolate shape to duration raster
-        N = int(self.duration_in_us * 1e-6 / raster_time_s)
+        N = int(self.duration_in_s / raster_time_s)
         self.amplitude = np.interp(
             np.linspace(0, self.amplitude.shape[0], N),
             np.arange(self.amplitude.shape[0]),
@@ -65,7 +57,7 @@ class RFPulse(Serializable):
         self.num_samples = N
 
     def set_flip_angle(self, flip_angle_rad: float):
-        gamma_pi = GlobalSystem().gamma_Hz * 2 * np.pi
+        gamma_pi = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6 * 2 * np.pi
         delta_t_us = self.duration_in_us / self.num_samples
         # normalize shape
         normalized_shape = self.amplitude / np.linalg.norm(self.amplitude)
@@ -85,7 +77,7 @@ class RFPulse(Serializable):
         :param f_name: file name
         :param bandwidth_in_Hz: Bandwidth in Hertz (optional if duration and tbw provided)
         :param duration_in_us:  Duration in microseconds (optional if bandwidth and tbw provided)
-        :param time_bandwidth: Time Bandwidth product unitless (optional if bandwidth and duration provided)
+        :param time_bandwidth: Time Bandwidth product (optional if bandwidth and duration provided)
         :param num_samples: number of samples of pulse optional, if None pulse sampled per microsecond
         :return:
         """
@@ -154,11 +146,11 @@ class RFPulse(Serializable):
 
     def resample_to_duration(self, duration_in_us: int):
         # want to use pulse with different duration,
-        # ! in general time bandwidth properties do not have to go linearly with duration
+        # in general time bandwidth properties do not have to go linearly with duration
         # we have a pulse with given tb prod at given duration,
         # if we change the duration the bandwidth is expected to change accordingly
-        self.bandwidth_Hz = self.time_bandwidth / duration_in_us * 1e6
-        self.duration_us = duration_in_us
+        self.bandwidth_in_Hz = self.time_bandwidth / duration_in_us * 1e6
+        self.duration_in_us = duration_in_us
 
     # def set_bandwidth_Hz(self, bw: float):
     #     self.bandwidth_in_Hz = bw
@@ -172,6 +164,10 @@ class RFPulse(Serializable):
     @property
     def dt_sampling_in_s(self) -> float:
         return 1e-6 * self.dt_sampling_in_us
+
+    @property
+    def duration_in_s(self) -> float:
+        return 1e-6 * self.duration_in_us
 
     @property
     def dt_sampling_in_us(self) -> float:
@@ -211,3 +207,11 @@ class RFPulse(Serializable):
         log_module.info(f"writing plot file: {f_name.as_posix()}")
         fig.write_html(f_name.as_posix())
 
+
+@encode.register
+def encode_tensor(obj: np.ndarray) -> list:
+    """ We choose to encode a tensor as a list, for instance """
+    return obj.tolist()
+
+# We will use `np.array` as our decoding function
+register_decoding_fn(np.ndarray, np.array)

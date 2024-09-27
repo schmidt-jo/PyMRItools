@@ -2,7 +2,6 @@ import numpy as np
 import polars as pl
 import plotly.graph_objects as go
 import plotly.subplots as psub
-# import plotly.express as px
 import torch
 import logging
 import pathlib as plib
@@ -11,17 +10,23 @@ from pymritools.config.emc.params import SimulationData
 log_module = logging.getLogger(__name__)
 
 
-def plot_grad_pulse(px: torch.tensor, py: torch.tensor, g: torch.tensor, b1_vals: torch.tensor,
-                    out_path: plib.Path | str, name: str):
-    x_ax = torch.arange(px.shape[1])
-    p_cplx = px + 1j * py
+def plot_gradient_pulse(
+        pulse_x: torch.tensor, pulse_y: torch.tensor, grad_z: torch.tensor,
+        b1_vals: torch.tensor, out_path: plib.Path | str, name: str):
+    x_ax = torch.arange(pulse_x.shape[1])
+    # calculate complex pulse shape
+    p_cplx = pulse_x + 1j * pulse_y
+
+    # get magnitude and phase
     p_abs = torch.abs(p_cplx)
     p_phase = torch.angle(p_cplx) / torch.pi
+
+    # set up figure
     fig = psub.make_subplots(
         rows=2, cols=1,
         specs=[[{"secondary_y": True}], [{}]]
     )
-    for k in range(px.shape[0]):
+    for k in range(pulse_x.shape[0]):
         fig.add_trace(
             go.Scatter(x=x_ax, y=p_abs[k], name=f"p magnitude, b1: {b1_vals[k]:.2f}"),
             row=1, col=1,
@@ -33,7 +38,7 @@ def plot_grad_pulse(px: torch.tensor, py: torch.tensor, g: torch.tensor, b1_vals
             secondary_y=True
         )
     fig.add_trace(
-        go.Scatter(x=x_ax, y=g, name="slice grad", fill="tozeroy"),
+        go.Scatter(x=x_ax, y=grad_z, name="slice grad", fill="tozeroy"),
         row=2, col=1
     )
     fig['layout']['title']['text'] = "Pulse - Gradient"

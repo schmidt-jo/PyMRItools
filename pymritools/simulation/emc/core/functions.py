@@ -26,6 +26,8 @@ def pulse_calibration_integral(
     """
     if isinstance(b1_vals, float | int):
         b1_vals = torch.tensor([b1_vals])
+    if isinstance(b1_vals, list):
+        b1_vals = torch.tensor(b1_vals)
     if not torch.is_tensor(b1_vals):
         b1_vals = torch.from_numpy(b1_vals)
     # calculate with applied actual flip angle
@@ -189,7 +191,7 @@ def matrix_propagation_relaxation_multidim(dt_s: torch.tensor, sim_data: Simulat
 def sample_acquisition(etl_idx: int, params: EmcParameters, sim_data: SimulationData,
                        acquisition_grad: torch.tensor, dt_s: torch.tensor):
     # acquisition
-    for acq_idx in range(params.acq_number):
+    for acq_idx in range(params.acquisition_number):
         sim_data = propagate_gradient_pulse_relax(
             pulse_x=torch.zeros(acquisition_grad.shape[0], device=sim_data.device),
             pulse_y=torch.zeros(acquisition_grad.shape[0], device=sim_data.device),

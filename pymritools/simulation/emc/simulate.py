@@ -8,34 +8,6 @@ log_module = logging.getLogger(__name__)
 logging.getLogger('simple_parsing').setLevel(logging.WARNING)
 
 
-# def sim(
-#         emc_seq_file: str = "", pypsi_path: str = "", pulse_file: str = "",
-#         sim_type: str = "megesse",
-#         resample_pulse_to_dt_us: float = 5.0,
-#         use_gpu: bool = False, gpu_device: int = 0,
-#         visualize: bool = False, debug: bool = False,
-#         sample_number: int = 1000, length_z: float = 0.005,
-#         t2_list: list = None, b1_list: list = None) -> db.DB:
-#     """
-#     Function to be called when using simulation aspect of package from another python application.
-#     I.E. optimization or ai model training.
-#     basically just create the parameter options from kwargs and passing it onto core
-#     """
-#     config = EmcSettings(
-#         emc_params_file=emc_seq_file, pulse_file=pulse_file,
-#         save_path="", database_name="_", sim_type=sim_type, signal_fourier_sampling=False,
-#         visualize=visualize, debug=debug, resample_pulse_to_dt_us=resample_pulse_to_dt_us,
-#         use_gpu=use_gpu, gpu_device=gpu_device
-#     )
-#     settings = SimulationData(
-#         sample_number=sample_number, length_z=length_z,
-#         t1_list=[1.5], t2_list=t2_list, b1_list=b1_list
-#     )
-#     sim_params = options.SimulationParameters(config=config, settings=settings)
-#     db = core_sim(sim_params=sim_params)
-#     return db
-
-
 def core_sim(params: EmcParameters, settings: EmcSettings) -> DB:
     """
     core simulation and plotting
@@ -57,14 +29,14 @@ def core_sim(params: EmcParameters, settings: EmcSettings) -> DB:
     # simulate sequence
     sim_obj.simulate()
     # create database
-    db = DB.build_from_sim_data(sim_params=params, sim_data=sim_obj.data)
+    db = DB.from_simulation_data(params=params, sim_data=sim_obj.data)
     # plot stuff
     if settings.visualize:
         # plot magnetization profile snapshots
-        sim_obj.plot_magnetization_profiles(animate=False)
-        sim_obj.plot_emc_signal()
-        if settings.signal_fourier_sampling:
-            sim_obj.plot_signal_traces()
+        # sim_obj.plot_magnetization_profiles(animate=False)
+        # sim_obj.plot_emc_signal()
+        # if settings.signal_fourier_sampling:
+        #     sim_obj.plot_signal_traces()
         # plot database
         db.plot(sim_obj.fig_path)
     return db

@@ -3,6 +3,7 @@ import torch
 import abc
 from pymritools.config.emc import EmcParameters, EmcSettings, SimulationData
 from pymritools.simulation.emc.core import GradPulse, SequenceTimings
+from pymritools.config.rf import RFPulse
 import pathlib as plib
 log_module = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ class Simulation(abc.ABC):
 
         # set up data, carrying through simulation
         self.data: SimulationData = SimulationData(params=self.params, settings=self.settings, device=self.device)
+
+        # load up pulse file
+        self.pulse: RFPulse = self.set_pulse()
 
         log_module.debug(f"\t\tSetup Plotting and Paths")
         self.fig_path: plib.Path = NotImplemented
@@ -76,6 +80,23 @@ class Simulation(abc.ABC):
     @abc.abstractmethod
     def _register_sequence_timings(self):
         """ sequence specific timing objects """
+
+    def set_pulse(self):
+        if not self.settings.pulse_file:
+            err = f"provide pulse file or set shape using the RFPulse object in 'pymritools.config.rf'"
+            log_module.error(err)
+            raise ValueError(err)
+        path = plib.Path(self.settings.pulse_file).absolute()
+        if not path.is_file():
+            msg = f"could not find file {path}. Trying to insert wd"
+            log_module.warning(msg)
+            path = plib.Path.cwd().absolute().joinpath(self.settings.pulse_file)
+            if not path.is_file():
+                err = f"Could not find file {path}."
+                log_module.error(err)
+                raise FileNotFoundError(err)
+        log_module.info(f"\t\t- loading pulse file: {path}")
+        return RFPulse.load(path)
 
     def set_magnetization_profile_snap(self, snap_name: str):
         """ add magnetization profile snapshot to list for plotting """

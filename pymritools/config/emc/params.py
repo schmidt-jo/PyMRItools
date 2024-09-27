@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import logging
 from scipy import stats
+from scipy.constants import physical_constants
 log_module = logging.getLogger(__name__)
 
 
@@ -19,9 +20,6 @@ class Parameters(Serializable):
     """
     EMC - Bloch equation simulation parameters.
     """
-    # global parameter gamma [Hz/t]
-    gamma_hz: float = 42577478.518
-
     # echo train length
     etl: int = 16
     # echo spacing [ms]
@@ -80,6 +78,11 @@ class Parameters(Serializable):
         help="number of bins across slice sample -> effectively sets spatial resolution; "
              "resolution = 2 * lengthZ / acquisitionNumber"
     )
+
+    @property
+    def gamma_hz(self) -> float:
+        return physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6
+
     @property
     def gamma_pi(self) -> float:
         return self.gamma_hz * 2 * np.pi

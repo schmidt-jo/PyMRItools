@@ -4,7 +4,10 @@ _____
 Jochen Schmidt, 26.09.2024
 """
 from pymritools.config.emc import EmcSettings, EmcParameters
+from pymritools.config.rf import RFPulse
 from pymritools.simulation.emc.core import functions
+from pymritools.utils import plot_gradient_pulse
+import pathlib as plib
 import logging
 import torch
 import numpy as np
@@ -63,25 +66,27 @@ class GradPulse:
         self.data_pulse_y = self.data_pulse_y.to(dtype=torch.float32)
 
     @classmethod
-    def prep_grad_pulse_excitation(cls, params: EmcParameters, settings: EmcSettings):
+    def prep_grad_pulse_excitation(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSettings):
         """
         Prepare a slice selective Excitation Gradient Pulse
+        :params pulse: RFPulse object / shape to set in the GradPulse object
         :param params: emc parameters configuration object
         :param settings: emc settings configuration object
         :return: GradientPulse object
         """
         log_module.debug(f"prep excitation pulse")
 
-        params = cls._set_pulse(params=params, settings=settings, duration_us=params.duration_excitation, excitation=True)
-
-        # calculate and normalize - pulse dims [b1, t]
-        pulse_from_pypsi = functions.pulse_calibration_integral(
-            params=params,
-            excitation=True
+        # calculate and normalize pulse object
+        pulse = cls._set_pulse(pulse, settings=settings, duration_us=params.duration_excitation)
+        # For now we use the same pulse shape for excitation and refocusing
+        # pulse dims [b1, t]
+        rf_pulse = functions.pulse_calibration_integral(
+            rf_pulse=pulse,
+            flip_angle_deg=params.excitation_angle, phase=params.excitation_phase,
+            b1_vals=settings.b1_list,
         )
 
         log_module.debug(f"\t PULSE + GRAD")
-
         gradient_read_pre_phase = 0.0
         if settings.signal_fourier_sampling:
             # we want to sample the signal via a readout gradient (artificially moved into 1D slice),
@@ -95,7 +100,7 @@ class GradPulse:
                 # the refocusing will then move to the opposite side of k-space
 
         grad, pulse, duration, area_grad = cls.build_pulse_grad_shapes(
-            pulse=pulse_from_pypsi, grad_amp_slice_select=params.gradient_excitation,
+            pulse=rf_pulse, grad_amp_slice_select=params.gradient_excitation,
             duration_pulse_slice_select_us=params.duration_excitation,
             grad_amp_post=params.gradient_excitation_rephase + gradient_read_pre_phase,
             duration_post_us=params.duration_excitation_rephase,
@@ -106,18 +111,19 @@ class GradPulse:
         # assign vars
         grad_pulse = cls(
             pulse_number=0, pulse_type="Excitation",
-            num_sampling_points=pulse_from_pypsi.shape[-1],
-            dt_sampling_steps_us=params.duration_excitation / pulse_from_pypsi.shape[-1],
+            num_sampling_points=rf_pulse.shape[-1],
+            dt_sampling_steps_us=params.duration_excitation / rf_pulse.shape[-1],
             duration_us=params.duration_excitation
         )
         grad_pulse.assign_data(grad=grad, pulse_cplx=pulse)
         return grad_pulse
 
     @classmethod
-    def prep_grad_pulse_refocus(cls, params: EmcParameters, settings: EmcSettings, refocus_pulse_number: int,
-                                force_sym_spoil: bool = False):
+    def prep_grad_pulse_refocus(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSettings,
+                                refocus_pulse_number: int, force_sym_spoil: bool = False):
         """
         Prepare a slice selective Refocusing Gradient Pulse
+        :params pulse: RFPulse object / shape to set in the GradPulse object
         :param params: emc parameters configuration object
         :param settings: emc settings configuration object
         :param force_sym_spoil: Set symmetric spoiling around the RF
@@ -126,12 +132,12 @@ class GradPulse:
         """
         log_module.debug(f"prep refocusing pulse: {refocus_pulse_number + 1}")
         # -- prep pulse
-        params = cls._set_pulse(params=params, duration_us=params.duration_refocus, excitation=False)
         # calculate and normalize
-        pulse_from_pypsi = functions.pulse_calibration_integral(
-            params=params,
-            excitation=False,
-            refocusing_pulse_number=refocus_pulse_number
+        pulse = cls._set_pulse(pulse,settings=settings, duration_us=params.duration_refocus)
+        rf_pulse = functions.pulse_calibration_integral(
+            rf_pulse=pulse,
+            flip_angle_deg=params.refocus_angle[refocus_pulse_number], phase=params.refocus_phase[refocus_pulse_number],
+            b1_vals=settings.b1_list,
         )
 
         log_module.debug(f"\t PULSE + GRAD")
@@ -159,7 +165,7 @@ class GradPulse:
 
         # build
         grad, pulse, duration, area_grad = cls.build_pulse_grad_shapes(
-            pulse=pulse_from_pypsi, grad_amp_slice_select=params.gradient_refocus,
+            pulse=rf_pulse, grad_amp_slice_select=params.gradient_refocus,
             duration_pulse_slice_select_us=params.duration_refocus,
             grad_amp_post=params.gradient_crush + gradient_read_pre_phase,
             duration_post_us=params.duration_crush,
@@ -171,27 +177,23 @@ class GradPulse:
         # assign vars
         grad_pulse = cls(
             pulse_type="Refocus", pulse_number=refocus_pulse_number,
-            num_sampling_points=pulse_from_pypsi.shape[-1],
-            dt_sampling_steps_us=params.duration_refocus / pulse_from_pypsi.shape[-1],
+            num_sampling_points=rf_pulse.shape[-1],
+            dt_sampling_steps_us=params.duration_refocus / rf_pulse.shape[-1],
             duration_us=params.duration_refocus
         )
         grad_pulse.assign_data(grad=grad, pulse_cplx=pulse)
         return grad_pulse
 
     @staticmethod
-    def _set_pulse(params: EmcParameters, settings: EmcSettings, duration_us: float, excitation: bool):
+    def _set_pulse(pulse: RFPulse, settings: EmcSettings, duration_us: float):
         log_module.debug(f"\t RF")
         # check rf and given sim details
-        if np.abs(params.pulse.get_duration_us(excitation=excitation) - duration_us) > 1e-5:
-            params.pulse.resample_to_duration(duration_in_us=int(duration_us),
-                                              excitation=excitation)
+        if np.abs(pulse.duration_in_us - duration_us) > 1e-5:
+            pulse.resample_to_duration(duration_in_us=int(duration_us))
         # resample pulse to given dt in us for more efficient computation
-        if np.abs(
-                params.pulse.get_dt_sampling_in_us(excitation=excitation) - settings.resample_pulse_to_dt_us
-        ) > 1.0:
-            params.pulse.set_shape_on_raster(raster_time_s=settings.resample_pulse_to_dt_us * 1e-6,
-                                             excitation=excitation)
-        return params
+        if np.abs(pulse.dt_sampling_in_us - settings.resample_pulse_to_dt_us) > 1.0:
+            pulse.set_shape_on_raster(raster_time_s=settings.resample_pulse_to_dt_us * 1e-6)
+        return pulse
 
     @staticmethod
     def build_pulse_grad_shapes(
@@ -268,19 +270,26 @@ class GradPulse:
 
     @classmethod
     def prep_acquisition(cls, params: EmcParameters):
+        """
+        Function to prepare a GradPulse object representing an acquisition sampling step
+        :param params: EMC Parameter configuration object
+        :return: GradPulse
+        """
         log_module.debug("prep acquisition")
+        # we calculate the steps between the samplings given the duration and number of temporal bins we want to achieve
         dt_sampling_steps = params.duration_acquisition / params.acquisition_number
 
+        # instantiate the object
         grad_pulse = cls(pulse_type='Acquisition', pulse_number=0, num_sampling_points=1,
                          dt_sampling_steps_us=dt_sampling_steps)
-        # assign data
+        # assign data, we only have one step with a defined gradient size
         grad_pulse.data_grad = torch.linspace(
             params.gradient_acquisition,
             params.gradient_acquisition,
             1)
-        # need to cast to pulse data dim [b1s, num_steps]
-        grad_pulse.data_pulse_x = torch.linspace(0, 0, 1)[None, :]
-        grad_pulse.data_pulse_y = torch.linspace(0, 0, 1)[None, :]
+        # need to cast to pulse data dim [b1s, num_steps], no rf played while readout
+        grad_pulse.data_pulse_x = torch.zeros(1)[None, :]
+        grad_pulse.data_pulse_y = torch.zeros(1)[None, :]
         grad_pulse.duration = params.duration_acquisition
         grad_pulse._set_float32()
         return grad_pulse
@@ -292,13 +301,13 @@ class GradPulse:
 
         self._set_float32()
 
-    # def plot(self, b1_vals, fig_path: str | plib.Path):
-    #     plotting.plot_grad_pulse(
-    #         px=self.data_pulse_x, py=self.data_pulse_y,
-    #         g=self.data_grad, b1_vals=b1_vals,
-    #         out_path=fig_path,
-    #         name=f"{self.pulse_type}-{self.pulse_number}"
-    #     )
+    def plot(self, b1_vals, fig_path: str | plib.Path):
+        plot_gradient_pulse(
+            pulse_x=self.data_pulse_x, pulse_y=self.data_pulse_y,
+            grad_z=self.data_grad, b1_vals=b1_vals,
+            out_path=fig_path,
+            name=f"{self.pulse_type}-{self.pulse_number}"
+        )
 
 
 class Timing:

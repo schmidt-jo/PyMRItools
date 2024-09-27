@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-import polars as pl
 from simple_parsing import field
 from simple_parsing.helpers import Serializable
 
@@ -14,19 +13,19 @@ class Settings(Serializable):
     """
     # files and config
     config_file: str = field(
-        alias="-c", default="../example/simulation/emc_settings.json",
+        alias="-c", default="./examples/simulation/emc_settings.json",
         help=" provide Configuration file (.json)"
     )
     emc_params_file: str = field(
-        alias="-emc", default="../example/simulation/emc_params.json",
+        alias="-emc", default="./examples/simulation/emc_params.json",
         help="provide sequence event parameters"
     )
     pulse_file: str = field(
-        alias="-opul", default="/example/simulation/pulse_pypulseq_default_gauss.pkl",
+        alias="-pul", default="./examples/simulation/pulse_pypulseq_default_gauss.pkl",
         help="separate pulse file to pulse class object"
     )
     save_path: str = field(
-        alias="-s", default="../example/simulation/results",
+        alias="-s", default="./examples/simulation/results",
         help="set path to save database and used config"
     )
     database_name: str = field(

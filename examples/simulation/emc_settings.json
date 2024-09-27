@@ -1,8 +1,8 @@
 {
-  "config_file": "../example/simulation/emc_settings.json",
-  "emc_params_file": "../example/simulation/emc_params.json",
-  "pulse_file": "../example/simulation/pulse_pypulseq_default_gauss.pkl",
-  "save_path": "../example/simulation/results",
+  "config_file": "./examples/simulation/emc_settings.json",
+  "emc_params_file": "./examples/simulation/emc_params.json",
+  "pulse_file": "./examples/simulation/pulse_pypulseq_default_gauss.pkl",
+  "save_path": "./examples/simulation/results",
   "database_name": "database_test.pkl",
   "sim_type": "mese_balanced_read",
   "t1_list": [

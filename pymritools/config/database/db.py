@@ -1,7 +1,10 @@
 import logging
 import pickle
 import typing
-from ..emc import EmcParameters, SimulationData
+
+import torch
+
+from pymritools.config.emc import EmcParameters, SimulationData
 import numpy as np
 import polars as pl
 import pathlib as plib
@@ -12,36 +15,122 @@ log_module = logging.getLogger(__name__)
 
 
 class DB:
-    def __init__(self, pl_dataframe: pl.DataFrame = pl.DataFrame(),
-                 sequence_config: EmcParameters = EmcParameters(), name: str = "db_"):
-        # define structure of pandas df
-        self.indices: list = ["emc_mag", "emc_phase", "t2", "t1", "b1"]
-        # check indices
-        for ind in self.indices:
-            if not ind in pl_dataframe.columns:
-                err = f"db structure not given. Index {ind} not found. " \
-                      f"Make sure these indices are columns in the dataframe: {self.get_indexes()};" \
-                      f"\nIndices found in db: {pl_dataframe.columns}"
-                log_module.error(err)
-                raise ValueError(err)
-        self.pl_dataframe: pl.DataFrame = pl_dataframe
-        self.seq_params: EmcParameters = sequence_config
-        self.np_mag_array: np.ndarray = np.array([*pl_dataframe["emc_mag"].to_numpy()])
-        self.np_phase_array: np.ndarray = np.array([*pl_dataframe["emc_phase"].to_numpy()])
-        self.etl: int = len(self.pl_dataframe["echo"].unique())
-        # extract only name in case filename given
-        name = plib.Path(name).absolute()
-        name = name.stem
-        self.name: str = name.__str__()
+    """
+    Database definition. We want this basically to be a polars DataFrame,
+    to capture all signal magnitude and phase data and the respective simulation parameters, as well as echo number.
+    For easier usage we want to define methods to easily extract appropriately sized
+     numpy arrays and torch tensor for fitting and manipulation.
+     We also attach the parameters used for creation to the object.
+    """
+    def __init__(self, data: pl.DataFrame = pl.DataFrame(), params: EmcParameters = EmcParameters()):
+        self.indices: list = ["magnitude", "phase", "t2", "t1", "b1", "echo_num"]
+        self.data: pl.DataFrame = data
+        self.params: EmcParameters = params
+        self._num_t1s: int = -1
+        self._num_t2s: int = -1
+        self._num_b1s: int = -1
+        self._num_echoes: int = -1
 
-        # normalize
-        # self.normalize()
+    @classmethod
+    def from_simulation_data(cls, params: EmcParameters, sim_data: SimulationData):
+        """
+        Takes simulation parameters and simulation data and builds database.
+        :param params: EMC simulation parameters
+        :param sim_data: simulated data object
+        :return: DB
+        """
+        # we want to attach the respective values to the simulated data, dims: [t1s, t2s, b1s, etl]
+        t2s = torch.tile(
+            sim_data.t2_vals[None, :, None, None], (sim_data.num_t1s, 1, sim_data.num_b1s, params.etl)
+        )
+        t1s = torch.tile(
+            sim_data.t1_vals[:, None, None, None], (1, sim_data.num_t2s, sim_data.num_b1s, params.etl)
+        )
+        b1s = torch.tile(
+            sim_data.b1_vals[None, None, :, None], (sim_data.num_t1s, sim_data.num_t2s, 1, params.etl)
+        )
+        echo_num = torch.tile(
+            torch.arange(1, params.etl +1)[None, None, None],
+            (sim_data.num_t1s, sim_data.num_t2s, sim_data.num_b1s, 1)
+        )
+        df = pl.DataFrame({
+            "index": torch.arange(sim_data.num_t1s * sim_data.num_t2s * sim_data.num_b1s * params.etl).tolist(),
+            "t1": t1s.flatten().tolist(),
+            "t2": t2s.flatten().tolist(),
+            "b1": b1s.flatten().tolist(),
+            "echo_num": echo_num.flatten().tolist(),
+            "magnitude": sim_data.signal_mag.flatten().tolist(),
+            "phase": sim_data.signal_phase.flatten().tolist()
+        })
+        instance = cls(data=df, params=params)
+        instance._num_echoes = params.etl
+        instance._num_t1s = sim_data.num_t1s
+        instance._num_t2s = sim_data.num_t2s
+        instance._num_b1s = sim_data.num_b1s
+        return instance
+
+    def save(self, path: plib.Path | str):
+        path = plib.Path(path).absolute()
+        if not path.parent.is_dir():
+            log_module.info(f"create path: {path.parent.as_posix()}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+        if not ".pkl" in path.suffixes:
+            log_module.info("filename not .pkl, try adopting suffix.")
+            path = path.with_suffix('.pkl')
+        log_module.info(f"writing file {path}")
+        with open(path, "wb") as p_file:
+            pickle.dump(self, p_file)
+
+    @classmethod
+    def load(cls, path: plib.Path | str):
+        path = plib.Path(path).absolute()
+        if not path.is_file():
+            err = f"file {path.as_posix()} not found."
+            log_module.error(err)
+            raise FileNotFoundError(err)
+        log_module.info(f"loading file {path}")
+        with open(path, "rb") as p_file:
+            instance = pickle.load(p_file)
+        if not isinstance(instance, cls):
+            err = f"decoded file not a class instance of {cls.__name__}"
+            log_module.error(err)
+            raise TypeError(err)
+        return instance
 
     def get_indexes(self):
         return self.indices
 
-    def get_t2_b1_values(self) -> (np.ndarray, np.ndarray):
-        return np.unique(self.pl_dataframe["t2"]), np.unique(self.pl_dataframe["b1"])
+    def get_t1_t2_b1_values(self, numpy: bool = False) -> (torch.tensor, torch.tensor, torch.tensor):
+        """
+        Returns torch tensors of used t1, t2 and b1 values of the simulation.
+        :param numpy: toggle numpy output
+        :return: (tensor t1, tensor t2, tensor b1)
+        """
+        t1 = self.data["t1"].unique().to_numpy()
+        t2 = self.data["t2"].unique().to_numpy()
+        b1 = self.data["b1"].unique().to_numpy()
+        if numpy:
+            return t1, t2, b1
+        return torch.from_numpy(t1), torch.from_numpy(t2), torch.from_numpy(b1)
+
+    def get_numpy_arrays_t1t2b1e(self):
+        """
+        Returns numpy arrays of magnitude and phase with dimensions [t1, t2, b1, echoes]
+        :return: mag, phase
+        """
+        mag = self.data["magnitude"].to_numpy()
+        mag = np.reshape(mag, (self._num_t1s, self._num_t2s, self._num_b1s, self._num_echoes))
+        phase = self.data["magnitude"].to_numpy()
+        phase = np.reshape(phase, (self._num_t1s, self._num_t2s, self._num_b1s, self._num_echoes))
+        return mag, phase
+
+    def get_torch_tensors_t1t2b1e(self):
+        """
+        Returns torch tensors of magnitude and phase with dimensions [t1, t2, b1, echoes]
+        :return: mag, phase
+        """
+        mag, phase = self.get_numpy_arrays_t1t2b1e()
+        return torch.from_numpy(mag), torch.from_numpy(phase)
 
     def plot(self,
              out_path: plib.Path | str, name: str = "",
@@ -50,39 +139,44 @@ class DB:
         if name:
             name = f"_{name}"
         # select range
-        df = self.pl_dataframe.clone()
-        df["t2"] = 1e3 * df["t2"]
-        df["t2"] = df["t2"].round(2)
-        df["b1"] = df["b1"].round(2)
-        df["echo"] = df["echo"] + 1
-        if t2_range_ms is not None:
-            df = df[(df["t2"] >= t2_range_ms[0]) & (df["t2"] < t2_range_ms[1])]
-        if t1_range_s is not None:
-            df = df[(df["t1"] >= t1_range_s[0]) & (df["t1"] < t1_range_s[1])]
-        if b1_range is not None:
-            df = df[(df["b1"] >= b1_range[0]) & (df["b1"] < b1_range[1])]
-        # for now we only take one t1 value
-        df = df[df["t1"] == df["t1"].unique()[0]].drop(columns=["t1"]).drop(columns="index").reset_index(drop=True)
+        if t1_range_s is None:
+            t1_range_s = (self.data["t1"].min() - 0.1, self.data["t1"].max() + 0.1)
+        if t2_range_ms is None:
+            t2_range_ms = (self.data["t2"].min() - 0.1, self.data["t2"].max() + 0.1)
+        if b1_range is None:
+            b1_range = (self.data["b1"].min() - 0.1, self.data["b1"].max() + 0.1)
+        # scale t2 to ms
+        df = self.data.with_columns(pl.col("t2") * 1000)
+        df = df.filter(
+            (pl.col("t2").is_between(t2_range_ms[0], t2_range_ms[1])) &
+            (pl.col("b1").is_between(b1_range[0], b1_range[1])) &
+            (pl.col("t1").is_between(t1_range_s[0], t1_range_s[1]))
+        )
+
         # setup colorscales to use
         c_scales = ["Purples", "Oranges", "Greens", "Blues"]
-        echo_ax = df["echo"].to_numpy()
-        # setup subplots
+        echo_ax = df["echo_num"].to_numpy()
+
+        # filter some data
         while len(df["b1"].unique()) > len(c_scales):
             # drop randomly chosen b1 value
-            b1_vals = df["b1"].unique().tolist()
-            drop_idx = np.random.randint(len(b1_vals))
-            b1_vals.pop(drop_idx)
-            df = df[df["b1"].isin(b1_vals)]
+            b1_vals = df["b1"].unique()
+            b1_vals = b1_vals.sample(n=len(c_scales), with_replacement=False)
+            df = df.filter(pl.col("b1").is_in(b1_vals.to_list()))
         # setup subplots
         while len(df["t2"].unique()) > 12:
             # drop every second t2 value
-            t2_vals = df["t2"].unique().tolist()[::2]
-            df = df[df["t2"].isin(t2_vals)]
+            t2_vals = df["t2"].unique().to_list()[::2]
+            df = df.filter(pl.col("t2").is_in(t2_vals))
+
         num_plot_b1s = len(df["b1"].unique())
+
+        # setup figure
         titles = ["Magnitude", "Phase"]
         fig = psub.make_subplots(
             2, 1, shared_xaxes=True, subplot_titles=titles
         )
+
         x = np.linspace(0.2, 1, len(df["t2"].unique()))
         # edit axis labels
         fig['layout']['xaxis2']['title'] = 'Echo Number'
@@ -90,14 +184,15 @@ class DB:
         fig['layout']['yaxis2']['title'] = 'Phase [rad]'
 
         for b1_idx in range(num_plot_b1s):
+            # set colorscale
             c_tmp = sample_colorscale(c_scales[b1_idx], list(x))
-            temp_df = df[df["b1"] == df["b1"].unique()[b1_idx]].reset_index(drop=True)
-            for t2_idx in range(len(temp_df["t2"].unique())):
-                t2 = temp_df["t2"].unique()[t2_idx]
+            # take subset of data
+            temp_df = df.filter(pl.col("b1") == df["b1"].unique()[b1_idx])
+            for t2_idx, t2 in enumerate(temp_df["t2"].unique().to_list()):
                 c = c_tmp[t2_idx]
 
-                mag = temp_df[temp_df["t2"] == t2]["emc_mag"].to_numpy()
-                mag /= np.abs(np.max(mag))
+                mag = temp_df.filter(pl.col("t2") == t2)["magnitude"].to_numpy()
+                mag = mag / np.abs(np.max(mag))
                 fig.add_trace(
                     go.Scattergl(
                         x=echo_ax, y=mag, marker_color=c, showlegend=False
@@ -105,7 +200,7 @@ class DB:
                     1, 1
                 )
 
-                phase = temp_df[temp_df["t2"] == t2]["emc_phase"].to_numpy()
+                phase = temp_df.filter(pl.col("t2") == t2)["phase"].to_numpy()
                 fig.add_trace(
                     go.Scattergl(
                         x=echo_ax, y=phase, marker_color=c, showlegend=False
@@ -124,7 +219,7 @@ class DB:
                     colorscale=c_scales[b1_idx], showscale=True,
                     cmin=t2_range_ms[0], cmax=t2_range_ms[1],
                     colorbar=dict(
-                        title=f"{df['b1'].unique()[b1_idx]}",
+                        title=f"{df['b1'].unique()[b1_idx]:.2f}",
                         x=1.02 + 0.05 * b1_idx,
                         showticklabels=showticks
                     ),
@@ -156,118 +251,10 @@ class DB:
             log_module.error(err)
             raise AttributeError(err)
 
-    def save(self, path: typing.Union[str, plib.Path]):
-        path = plib.Path(path).absolute()
-        if not path.suffixes:
-            # given a path not a file
-            path = path.joinpath(f"{self.name}_database_file.pkl")
-        if ".pkl" not in path.suffixes:
-            # given wrong filending
-            log_module.info("filename saved as .pkl, adopting suffix.")
-            path = path.with_suffix('.pkl')
-        # mkdir ifn existent
-        path.parent.mkdir(exist_ok=True, parents=True)
-
-        log_module.info(f"writing file {path}")
-
-        with open(path, "wb") as p_file:
-            pickle.dump(self, p_file)
-
-    @classmethod
-    def load(cls, path: typing.Union[str, plib.Path]):
-        path = plib.Path(path).absolute()
-        if ".pkl" not in path.suffixes:
-            # given wrong filending
-            log_module.info("filename not .pkl, try adopting suffix.")
-            path = path.with_suffix('.pkl')
-        if not path.is_file():
-            # given a path not a file
-            err = f"{path.__str__()} not a file"
-            log_module.error(err)
-            raise ValueError(err)
-        with open(path, "rb") as p_file:
-            db = pickle.load(p_file)
-        return db
-
-    # def normalize(self):
-    #     arr = self.np_mag_array
-    #     norm = np.linalg.norm(arr, axis=-1, keepdims=True)
-    #     self.np_mag_array = np.divide(arr, norm, where=norm > 1e-12, out=np.zeros_like(arr))
-    #
-    #     for k in tqdm.trange(len(self.pd_dataframe), desc="normalizing db entries"):
-    #         self.pd_dataframe.at[k, "emc_mag"] = self.np_mag_array[k]
-
-    def get_numpy_array(self) -> (np.ndarray, np.ndarray):
-        # self.normalize()
-        return self.np_mag_array, self.np_phase_array
-
-    def get_numpy_array_ids_t(self):
-        np_mag, np_phase = self.get_numpy_array()
-        np_mag = np.reshape(np_mag, (-1, self.etl))
-        mag_norm = np.linalg.norm(np_mag, axis=-1, keepdims=True)
-        np_mag = np.divide(np_mag, mag_norm, where=np_mag > 1e-12, out=np.zeros_like(np_mag))
-        np_phase = np.reshape(np_phase, (-1, self.etl))
-        return np_mag, np_phase, np.squeeze(mag_norm)
-
-    def append_zeros(self):
-        # want 0 lines for fitting noise
-        # b1s = self.pd_dataframe.b1.unique().astype(float)
-        # t1s = self.pd_dataframe.t1.unique().astype(float)
-        # ds = self.pd_dataframe.d.unique().astype(float)
-        # for b1, t1, d in [(b1_val, t1_val, d_val) for b1_val in b1s for t1_val in t1s for d_val in ds]:
-        #     # when normalizing 0 curves will be left unchanged. Data curves are unlikely 0
-        #     temp_row = self.pd_dataframe.iloc[0].copy()
-        #     temp_row.emc_signal = np.full(len(temp_row.emc_signal), 1e-5)
-        #     temp_row.t2 = 1e-3
-        #     temp_row.b1 = b1
-        #     temp_row.t1 = t1
-        #     temp_row.d = d
-        #     self.pd_dataframe.loc[len(self.pd_dataframe.index)] = temp_row
-        #     # still append 0 curves that wont get scaled -> useful if normalization leaves signal curve flat
-        #     temp_row = self.pd_dataframe.iloc[0].copy()
-        #     temp_row.emc_signal = np.zeros([len(temp_row.emc_signal)])
-        #     temp_row.t2 = 0.0
-        #     temp_row.b1 = b1
-        #     temp_row.t1 = t1
-        #     temp_row.d = d
-        #     self.pd_dataframe.loc[len(self.pd_dataframe.index)] = temp_row
-        # self.pd_dataframe = self.pd_dataframe.reset_index(drop=True)
-        # self.np_array = np.array([*self.pd_dataframe.emc_signal.to_numpy()])
-        # self.normalize()
-        # ToDo: needs to be reworked
-        pass
-
-    @classmethod
-    def build_from_sim_data(cls, sim_params: EmcParameters, sim_data: SimulationData):
-        d = {}
-        index = 0
-        for idx_t1 in range(sim_data.t1_vals.shape[0]):
-            for idx_t2 in range(sim_data.t2_vals.shape[0]):
-                for idx_b1 in range(sim_data.b1_vals.shape[0]):
-                    for idx_echo in range(sim_data.signal_mag.shape[-1]):
-                        td = {
-                            "index": index,
-                            "t1": sim_data.t1_vals[idx_t1].clone().detach().cpu().item(),
-                            "t2": sim_data.t2_vals[idx_t2].clone().detach().cpu().item(),
-                            "b1": sim_data.b1_vals[idx_b1].clone().detach().cpu().item(),
-                            "echo": idx_echo,
-                            "emc_mag": sim_data.signal_mag[
-                                idx_t1, idx_t2, idx_b1, idx_echo].clone().detach().cpu().item(),
-                            "emc_phase": sim_data.signal_phase[
-                                idx_t1, idx_t2, idx_b1, idx_echo].clone().detach().cpu().item()
-                        }
-                        d.__setitem__(index, td)
-                        index += 1
-        db_pd = pl.DataFrame(d).T
-        return cls(pl_dataframe=db_pd, sequence_config=sim_params)
-
     def get_total_num_curves(self) -> int:
-        num_b1s = len(self.pl_dataframe["b1"].unique())
-        num_t1s = len(self.pl_dataframe["t1"].unique())
-        num_t2s = len(self.pl_dataframe["t2"].unique())
-        return num_b1s * num_t2s * num_t1s
+        return self._num_t1s * self._num_t2s * self._num_b1s
 
 
 if __name__ == '__main__':
-    dl = DB.load("test/test_db_database_file.pkl")
-    dl.plot()
+    dl = DB.load("examples/simulation/results/database_test.pkl")
+    dl.plot("examples/simulation/results/figs/emc_db.html")
