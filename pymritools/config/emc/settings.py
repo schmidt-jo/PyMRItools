@@ -6,7 +6,7 @@ log_module = logging.getLogger(__name__)
 
 
 @dataclass
-class Settings(BaseClass):
+class SimulationSettings(BaseClass):
     """
     EMC - Bloch equation simulation settings
     """
@@ -77,3 +77,56 @@ class Settings(BaseClass):
         alias="-gpud", default=0,
         help="(optional) set gpu device if multiple are available"
     )
+
+
+@dataclass
+class FitSettings(BaseClass):
+    """
+    Configuration for dictionary matching of simulated databases
+    """
+    input_data: str = field(
+        alias="-i", default="",
+        help="Path to input data (.nii) file."
+    )
+    input_database: str = field(
+        alias="-db", default="",
+        help="Path to input database (.pkl) file."
+    )
+    input_b1: str = field(
+        alias="-b1", default="",
+        help="Path to input b1 map (.nii) file."
+    )
+    out_path: str = field(
+        alias="-o", default="",
+        help="Path to output directory."
+    )
+    out_name: str = field(
+        alias="-on", default="",
+        help="Optional output filename."
+    )
+    save_name_prefix: str = field(
+        alias="-pre", default="",
+        help="Optional name prefix for output data"
+    )
+    # flags & vars
+    batch_size: int = field(
+        alias="-bs", default=3000,
+        help="Set batch size for batched processing of input signal."
+    )
+    use_gpu: bool = field(
+        alias="-gpu", default=True,
+        help="Set device (gpu or cpu) for accelerated computations."
+    )
+    gpu_device: int = field(
+        alias="-gpud", default=0,
+        help="Set gpu device if multiple are available."
+    )
+    visualize: bool = field(
+        alias="-v", default=True,
+        help="Toggle visualizations"
+    )
+    debug: bool = field(
+        alias="-d", default=False,
+        help="Toggle debugging mode, and logging debug level."
+    )
+
