@@ -79,6 +79,10 @@ def nifti_save(
 def setup_program_logging(name: str, level: int = logging.INFO):
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=level)
+    # run some exclusions we dont want to expose to the user log
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("simple_parsing").setLevel(logging.WARNING)
+
     num_chars_name = len(name)
     num_chars_fill = 50
     logging.info("".ljust(num_chars_fill, "_"))
