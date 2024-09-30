@@ -2,7 +2,6 @@ import logging
 from dataclasses import dataclass
 from simple_parsing import field
 from pymritools.config.base import BaseClass
-import pathlib as plib
 
 log_module = logging.getLogger(__name__)
 
@@ -13,10 +12,6 @@ class Settings(BaseClass):
         alias="-i", default="",
         help="Input Nifti file of data to unring."
     )
-    output_path: str = field(
-        alias="-o", default="",
-        help="Output path for processed data."
-    )
     # vars
     num_shifts_per_voxel: int = field(
         alias="-m", default=100,
@@ -25,17 +20,4 @@ class Settings(BaseClass):
     voxel_neighborhood_size: int = field(
         alias="-k", default=3,
         help="The size of the neighborhood around each voxel for which to find the optimal shifted image. Default is 3."
-    )
-    # flags
-    visualize: bool = field(
-        alias="-v", default=False,
-        help="Visualize results."
-    )
-    debug: bool = field(
-        alias="-d", default=False,
-        help="Toggle debugging mode, and logging debug level."
-    )
-    use_gpu: bool = field(
-        alias="-gpu", default=False,
-        help="Use GPU acceleration if available."
     )

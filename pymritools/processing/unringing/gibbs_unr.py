@@ -28,7 +28,7 @@ def main():
 
     try:
         # prepare output path
-        path_out = plib.Path(settings.output_path).absolute()
+        path_out = plib.Path(settings.out_path).absolute()
         path_out.mkdir(exist_ok=True, parents=True)
 
         # load in data
@@ -44,7 +44,7 @@ def main():
         # save data
         nifti_save(
             data=data_unring, img_aff=input_img,
-            path_to_dir=settings.output_path, file_name=f"ur_{path_in.stem}"
+            path_to_dir=settings.out_path, file_name=f"ur_{path_in.stem}"
         )
     except Exception as e:
         logging.exception(e)

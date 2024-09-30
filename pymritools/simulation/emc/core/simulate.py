@@ -50,7 +50,7 @@ def cli_sim(params: EmcParameters, settings: EmcSimSettings):
     """
     db = core_sim(params=params, settings=settings)
     # save files
-    save_path = plib.Path(settings.save_path).absolute()
+    save_path = plib.Path(settings.out_path).absolute()
     if settings.config_file:
         c_name = plib.Path(settings.config_file).absolute().stem
     else:

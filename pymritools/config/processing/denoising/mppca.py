@@ -1,7 +1,6 @@
 from pymritools.config.base import BaseClass
-
-import logging
 from dataclasses import dataclass
+import logging
 from simple_parsing import field
 log_module = logging.getLogger(__name__)
 
@@ -12,31 +11,18 @@ class Settings(BaseClass):
     Configuration for mppca denoising
     """
     in_path: str = field(
-        alias="-i", default="",
+        alias="-i", default="./examples/processing/semc_r0p9_echo_mag.nii.gz",
         help="set filepath to .nii or .pt file"
     )
     in_affine: str = field(
         alias="-ia", default="",
         help="input affine matrix, necessary if input file is .pt, optional if .nii"
     )
-    save_path: str = field(
-        alias="-s", default="",
-        help="set path to save files (optional, if blank use input path)"
-    )
     file_prefix: str = field(
         default="d", alias="-fp",
         help=f"Output file prefix appended to name after denoising / debiasing"
     )
     # flags
-    use_gpu: bool = field(
-        default=True, alias="-gpu", help="try using gpu processing"
-    )
-    gpu_device: int = field(
-        default=0, alias="-gpud", help="specify which gpu to use if applicable, omitted if use_gpu=False"
-    )
-    debug: bool = field(
-        default=False, alias="-d", help="toggle logging debug information"
-    )
     normalize: bool = field(
         default=False, alias="-n", help="(optional), normalize data (across t dimension) to max 1 before pca"
     )

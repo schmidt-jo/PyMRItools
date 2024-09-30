@@ -19,10 +19,6 @@ class SimulationSettings(BaseClass):
         alias="-pul", default="./examples/simulation/pulse_pypulseq_default_gauss.pkl",
         help="separate pulse file to pulse class object"
     )
-    save_path: str = field(
-        alias="-s", default="./examples/simulation/results",
-        help="set path to save database and used config"
-    )
     database_name: str = field(
         alias="-db", default="database_test.pkl",
         help="set filename of database"
@@ -59,25 +55,6 @@ class SimulationSettings(BaseClass):
         help="resample pulse to lower number (duration over dt) for more efficient computations"
     )
 
-    # flags
-    visualize: bool = field(
-        alias="-v", default=True,
-        help="visualize pulse profiles and sequence scheme"
-    )
-    debug: bool = field(
-        alias="-d", default=False,
-        help="toggle debugging mode, and logging debug level"
-    )
-    use_gpu: bool = field(
-        alias="-gpu", default=False,
-        help="init gpu"
-    )
-
-    gpu_device: int = field(
-        alias="-gpud", default=0,
-        help="(optional) set gpu device if multiple are available"
-    )
-
 
 @dataclass
 class FitSettings(BaseClass):
@@ -96,10 +73,6 @@ class FitSettings(BaseClass):
         alias="-b1", default="",
         help="Path to input b1 map (.nii) file."
     )
-    out_path: str = field(
-        alias="-o", default="",
-        help="Path to output directory."
-    )
     out_name: str = field(
         alias="-on", default="",
         help="Optional output filename."
@@ -113,20 +86,5 @@ class FitSettings(BaseClass):
         alias="-bs", default=3000,
         help="Set batch size for batched processing of input signal."
     )
-    use_gpu: bool = field(
-        alias="-gpu", default=True,
-        help="Set device (gpu or cpu) for accelerated computations."
-    )
-    gpu_device: int = field(
-        alias="-gpud", default=0,
-        help="Set gpu device if multiple are available."
-    )
-    visualize: bool = field(
-        alias="-v", default=True,
-        help="Toggle visualizations"
-    )
-    debug: bool = field(
-        alias="-d", default=False,
-        help="Toggle debugging mode, and logging debug level."
-    )
+
 
