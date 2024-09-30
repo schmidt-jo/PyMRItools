@@ -16,6 +16,28 @@ class BaseClass(Serializable):
         alias="-c", default="",
         help="Input configuration file (.json) covering entries to this Settings object."
     )
+    out_path: str = field(
+        alias="-o", default="",
+        help="Path to output directory."
+    )
+    # flags
+    use_gpu: bool = field(
+        alias="-gpu", default=True,
+        help="Set device (gpu or cpu) for accelerated computations."
+    )
+    gpu_device: int = field(
+        alias="-gpud", default=0,
+        help="Set gpu device if multiple are available."
+    )
+    visualize: bool = field(
+        alias="-v", default=True,
+        help="Toggle visualizations"
+    )
+    debug: bool = field(
+        alias="-d", default=False,
+        help="Toggle debugging mode, and logging debug level."
+    )
+
 
     def _check_non_default_vars(self) -> (dict, dict):
         # create default class instance

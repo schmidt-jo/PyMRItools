@@ -44,7 +44,7 @@ class Simulation(abc.ABC):
         # setup plotting
         if self.settings.visualize:
             # set up plotting path
-            out_path = plib.Path(self.settings.save_path).absolute().joinpath("figs/")
+            out_path = plib.Path(self.settings.out_path).absolute().joinpath("figs/")
             out_path.mkdir(parents=True, exist_ok=True)
             self.fig_path = out_path
 
