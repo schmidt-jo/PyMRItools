@@ -6,8 +6,8 @@ DOI: 10.1002/mrm.27658
 _____
 24.11.2023, Jochen Schmidt
 """
-from pymritools.utils import setup_program_logging, nifti_load, nifti_save, fft, root_sum_of_squares
-from pymritools.config.processing.denoising.mppca import Settings
+from pymritools.utils import setup_program_logging, nifti_load, nifti_save, fft, root_sum_of_squares, gaussian_2d_kernel
+from pymritools.config.processing.denoising import DenoiseSettings
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from simple_parsing import ArgumentParser
 import pathlib as plib
@@ -17,28 +17,12 @@ import numpy as np
 import logging
 
 import tqdm
-import plotly.express as px
+import plotly.graph_objects as go
 from autodmri import estimator
 log_module = logging.getLogger(__name__)
 
-def main():
-    # set program logging
-    setup_program_logging(name="MPPCA Denoising", level=logging.INFO)
 
-    # set up argument parser
-    parser = ArgumentParser()
-    parser.add_argument(Settings, dest='settings')
-    args = parser.parse_args()
-
-    settings = Settings.from_cli(args.settings)
-
-    try:
-        denoise(settings=settings)
-    except Exception as e:
-        logging.exception(e)
-        parser.print_help()
-
-def denoise(settings: Settings):
+def denoise(settings: DenoiseSettings):
 
     # load in data
     input_data, input_img = nifti_load(settings.in_path)
@@ -46,8 +30,10 @@ def denoise(settings: Settings):
     # ToDo: do for non .nii input
 
     # setup save path
-    path_output = plib.Path(settings.save_path)
-    path_output.mkdir(exist_ok=True, parents=True)
+    path_output = plib.Path(settings.out_path).absolute()
+    if not path_output.exists():
+        log_module.info(f"Setting up output path: {path_output.as_posix()}")
+        path_output.mkdir(exist_ok=True, parents=True)
 
     if settings.use_gpu and torch.cuda.is_available():
         device = torch.device(f"cuda:{settings.gpu_device}")
@@ -57,13 +43,13 @@ def denoise(settings: Settings):
 
     # enable processing of coil combined data. Assume if input is 4D that we have a missing coil dim
     data_shape = input_data.shape
-    msg = ""
+    msg = f"Found dimensions: {data_shape}."
     if data_shape.__len__() < 4:
-        msg = "assume no time dimension. "
+        msg = f"{msg} Assume no time dimension -> adding dim."
         log_module.info(msg)
         input_data = input_data[..., None]
     if data_shape.__len__() < 5:
-        msg = f"{msg} assume no channel dimension. "
+        msg = f"{msg} Assume no channel dimension -> adding dim. "
         input_data = torch.unsqueeze(input_data, -2)
     data_shape = input_data.shape
     if msg:
@@ -83,6 +69,7 @@ def denoise(settings: Settings):
     if settings.fixed_p > 0:
         # no need to calculate thresholds
         p = settings.fixed_p
+        log_module.info(f"Set fixed threshold p: {p}")
         left_b = None
         right_a = None
         r_cumsum = None
@@ -151,14 +138,28 @@ def denoise(settings: Settings):
         noise_dist /= torch.linalg.norm(noise_dist)
         noise_plot = torch.concatenate((noise_hist[:, None], noise_dist[:-1, None]), dim=1)
 
+        # create plot
+        fig = go.Figure()
         name_list = ["noise voxels", f"noise dist. estimate, sigma: {sigma.item():.2f}, n: {num_channels.item()}"]
-        fig = px.line(noise_plot, labels={'x': 'signal value [a,u,]', 'y': 'normalized count'})
-        for i, trace in enumerate(fig.data):
-            trace.update(name=name_list[i])
+        for idx_d, data in enumerate([noise_voxels, noise_hist]):
+            fig.add_trace(
+                go.Scattergl(
+                    x=noise_bins, y=data, name=name_list[idx_d],
+                )
+            )
+        fig.update_layout(
+            title=go.layout.Title(
+                text="Noise histogram",
+            ),
+            xaxis=dict(title='signal value [a,u,]'),
+            yaxis=dict(title='normalized count')
+        )
+
         fig_name = f"noise_histogramm"
         fig_file = path_output.joinpath(fig_name).with_suffix(".html")
         logging.info(f"write file: {fig_file.as_posix()}")
         fig.write_html(fig_file.as_posix())
+
         data_denoised_sq = torch.movedim(torch.zeros_like(input_data), (2, 3), (0, 1))
     else:
         sigma = None
@@ -172,7 +173,6 @@ def denoise(settings: Settings):
     # reshuffle for batching data
     input_data = torch.movedim(input_data, (2, 3), (0, 1))
     data_denoised = torch.zeros_like(input_data)
-    data_noise = torch.zeros_like(input_data)
     data_access = torch.zeros(data_denoised.shape[:-1], dtype=torch.float)
     data_p = torch.zeros(data_access.shape, dtype=torch.int)
     data_p_avg = torch.zeros_like(data_p)
@@ -260,21 +260,9 @@ def denoise(settings: Settings):
             torch.divide(data_denoised.imag, data_access[:, :, :, :, None]),
             nan=0.0, posinf=0.0
         )
-        data_noise.real = torch.nan_to_num(
-            torch.divide(data_denoised.real, input_data.real),
-            nan=0.0, posinf=0.0
-        )
-        data_noise.imag = torch.nan_to_num(
-            torch.divide(data_denoised.imag, input_data.imag),
-            nan=0.0, posinf=0.0
-        )
     else:
         data_denoised = torch.nan_to_num(
             torch.divide(data_denoised, data_access[:, :, :, :, None]),
-            nan=0.0, posinf=0.0
-        )
-        data_noise = torch.nan_to_num(
-            torch.divide(data_denoised, input_data),
             nan=0.0, posinf=0.0
         )
 
@@ -295,27 +283,47 @@ def denoise(settings: Settings):
         #  Use those noise contribution stats locally to bias correct
 
     # move dims back
+    input_data = torch.movedim(input_data, (0, 1), (2, 3))
     data_denoised = torch.movedim(data_denoised, (0, 1), (2, 3))
-    data_noise = torch.movedim(data_noise, (1, 2), (3, 4))
     data_p_img = torch.nan_to_num(
         torch.divide(data_p, data_p_avg),
         nan=0.0, posinf=0.0
     )
     data_p_img = torch.movedim(data_p_img, (0, 1), (2, 3))
 
+    # compute noise
+    data_noise = input_data - data_denoised
+    # compute variance and slightly smooth in xy dir (look for spatially dependent noise patterns)
+    # for smoothing we use an fft kernel, after also taking the mean across the echoes
+    kernel_size = torch.round(torch.tensor(data_shape[:2]).to(torch.float) / 20)
+    window = gaussian_2d_kernel(
+        size_x=nx, size_y=ny, sigma=kernel_size
+    )
+    data_noise_sm_var = torch.mean(data_noise ** 2, dim=-1)
+    data_noise_sm_var = fft(data_noise_sm_var, inverse=True, axes=(0, 1))
+    if not torch.is_complex(input_data):
+        data_noise_sm_var = torch.real(data_noise_sm_var)
+    data_noise_sm_var = data_noise_sm_var * window[:, :, None, None]
+    data_noise_sm_var = fft(data_noise_sm_var, inverse=False, axes=(0, 1))
+    if not torch.is_complex(input_data):
+        data_noise_sm_var = torch.real(data_noise_sm_var)
+
     if data_denoised.shape[-2] > 1:
         # [x, y, z, ch, t]
         data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
-        # [x, y, z, ch, t]
-        data_noise = root_sum_of_squares(data_noise, dim_channel=-2)
 
     # save data
     data_denoised = torch.squeeze(data_denoised)
     data_noise = torch.squeeze(data_noise)
+    data_noise_sm_var = torch.squeeze(data_noise_sm_var)
     data_denoised *= max_val / torch.max(data_denoised)
 
     nifti_save(data=data_denoised.numpy(), img_aff=input_img, path_to_dir=path_output, file_name="denoised_data")
     nifti_save(data=data_noise.numpy(), img_aff=input_img, path_to_dir=path_output, file_name="noise_data")
+    nifti_save(
+        data=data_noise_sm_var.numpy(), img_aff=input_img, path_to_dir=path_output,
+               file_name="noise_data_smoothed_var"
+    )
     nifti_save(data=data_p_img.numpy(), img_aff=input_img, path_to_dir=path_output, file_name="avg_p")
 
     #
@@ -338,3 +346,25 @@ def manjon_corr_model(gamma):
         a = 0.9846 * (gamma - 1.86) + 0.1983
         b = gamma - 1.86 + 0.1175
         return a / b
+
+
+def main():
+    # set program logging
+    setup_program_logging(name="MPPCA Denoising", level=logging.INFO)
+
+    # set up argument parser
+    parser = ArgumentParser(prog="MPPCA Denoising")
+    parser.add_arguments(DenoiseSettings, dest='settings')
+    args = parser.parse_args()
+
+    settings = DenoiseSettings.from_cli(args.settings)
+
+    try:
+        denoise(settings=settings)
+    except Exception as e:
+        logging.exception(e)
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()
