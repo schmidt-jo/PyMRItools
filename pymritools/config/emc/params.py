@@ -142,10 +142,10 @@ class SimulationData:
             -params.length_z, params.length_z, params.sample_number
         ).to(self.device)
         sample = torch.from_numpy(
-            stats.gennorm(24).pdf(self.sample_axis / params.length_z * 1.1) + 1e-6
+            stats.gennorm(24).pdf(self.sample_axis.cpu().numpy() / params.length_z * 1.1) + 1e-6
         )
         # build bulk magnetization along axes positions
-        self.sample: torch.Tensor = torch.divide(sample, torch.max(sample))
+        self.sample: torch.Tensor = torch.divide(sample, torch.max(sample)).to(self.device)
 
         # set values with some error catches
         # t1

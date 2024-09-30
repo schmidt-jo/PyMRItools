@@ -1,0 +1,15 @@
+{
+  "config_file": "",
+  "in_path": "./examples/processing/semc_r0p9_echo_mag.nii.gz",
+  "in_affine": "",
+  "out_path": "./examples/processing/denoising/results/",
+  "file_prefix": "d",
+  "use_gpu": true,
+  "gpu_device": 0,
+  "debug": false,
+  "normalize": false,
+  "input_image_data": true,
+  "noise_bias_correction": false,
+  "fixed_p": 2,
+  "noise_bias_mask": ""
+}
