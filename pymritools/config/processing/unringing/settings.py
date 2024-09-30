@@ -8,7 +8,7 @@ log_module = logging.getLogger(__name__)
 
 @dataclass
 class Settings(BaseClass):
-    input_nifti_file: str = field(
+    input_file: str = field(
         alias="-i", default="",
         help="Input Nifti file of data to unring."
     )

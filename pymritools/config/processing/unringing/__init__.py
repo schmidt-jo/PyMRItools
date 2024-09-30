@@ -1,3 +1,3 @@
-from .settings import Settings
+from .settings import Settings as GibbsUnringingSettings
 
-__all__ = ["Settings"]
+__all__ = ["GibbsUnringingSettings"]

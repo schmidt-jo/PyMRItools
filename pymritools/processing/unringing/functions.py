@@ -106,7 +106,7 @@ def gibbs_unring_1d(
 
     # get number of coefficients and k indices
     n_c_k = shape[-1]
-    k_ind = torch.arange(-int(n_c_k / 2), int(n_c_k / 2))
+    k_ind = torch.arange(-int(n_c_k / 2), int(n_c_k / 2)).to(device)
 
     # we build M voxel shifted images
     s = torch.arange(-m, m).to(device)
@@ -153,7 +153,7 @@ def gibbs_unring_1d(
         #     file_name = path.joinpath("i_ur").with_suffix(".html")
         #     logging.info(f"Write file: {file_name}")
         #     fig.write_html(file_name.as_posix())
-    image_data_1d = np.reshape(ur_data, shape)
+    image_data_1d = torch.reshape(ur_data, shape)
     return image_data_1d
 
 
@@ -200,9 +200,15 @@ def gibbs_unring_nd(
     # save dims
     nx, ny, nz, nt = image_data_nd.shape
 
+    # setup device
+    if gpu and torch.cuda.is_available():
+        device = torch.device(f"cuda:{gpu_device}")
+    else:
+        device = torch.device("cpu")
+    log_module.info(f"\t\t- set device: {device}")
     # introduce weighting filter
-    k_x = torch.linspace(-np.pi, np.pi, nx)
-    k_y = torch.linspace(-np.pi, np.pi, ny)
+    k_x = torch.linspace(-np.pi, np.pi, nx).to(device)
+    k_y = torch.linspace(-np.pi, np.pi, ny).to(device)
 
     log_module.info(f"\t\t - calc weighting filters")
 
@@ -216,7 +222,7 @@ def gibbs_unring_nd(
     )
     g_y = torch.nan_to_num(
         torch.divide(
-            1 + np.cos(k_x[:, None]),
+            1 + torch.cos(k_x[:, None]),
             denom,
         ),
         nan=0.0, posinf=0.0, neginf=0.0
@@ -241,7 +247,7 @@ def gibbs_unring_nd(
     #     fig.write_html(file_name.as_posix())
 
     # move nd dims to front
-    nd_data = torch.movedim(image_data_nd, (2, 3), (0, 1))
+    nd_data = torch.movedim(image_data_nd, (2, 3), (0, 1)).to(device)
     # combine batches
     nd_data = torch.reshape(nd_data, (-1, nx, ny))
     nd_dim = nd_data.shape[0]

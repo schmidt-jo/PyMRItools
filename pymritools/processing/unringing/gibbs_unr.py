@@ -9,8 +9,8 @@ import pathlib as plib
 
 import torch
 
-from .functions import gibbs_unring_nd
-from pymritools.config.processing.unringing import Settings
+from pymritools.processing.unringing import gibbs_unring_nd
+from pymritools.config.processing.unringing import GibbsUnringingSettings
 from pymritools.utils import nifti_load, nifti_save, setup_program_logging
 from simple_parsing import ArgumentParser
 import logging
@@ -21,9 +21,10 @@ def main():
     setup_program_logging(name="Gibbs Unringing", level=logging.INFO)
 
     # setup argument parser
-    parser = ArgumentParser(Settings, dest="settings")
+    parser = ArgumentParser(prog="Gibbs Unringing")
+    parser.add_arguments(GibbsUnringingSettings, dest="settings")
     prog_args = parser.parse_args()
-    settings = Settings.from_cli(prog_args.settings)
+    settings = GibbsUnringingSettings.from_cli(prog_args.settings)
     settings.display()
 
     try:
@@ -32,8 +33,8 @@ def main():
         path_out.mkdir(exist_ok=True, parents=True)
 
         # load in data
-        path_in = plib.Path(settings.input_path).absolute()
-        input_data, input_img = nifti_load(settings.input_path)
+        path_in = plib.Path(settings.input_file).absolute()
+        input_data, input_img = nifti_load(settings.input_file)
 
 
         data_unring = gibbs_unring_nd(
