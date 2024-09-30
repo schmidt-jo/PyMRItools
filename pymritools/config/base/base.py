@@ -80,5 +80,5 @@ class BaseClass(Serializable):
         # display via logging
         s = "___ Config ___\n"
         for k, v in self.to_dict().items():
-            s += f"\t\t\t{k}: {v}\n"
+            s += f"\t\t\t{k}:".ljust(30) + f"{v}\n".rjust(55, ".")
         log_module.info(s)
