@@ -15,6 +15,7 @@ def fit(settings: FitSettings):
     # set shorthand for b1 processing
     b1_in = False
     b1_data = None
+    in_b1_masked = None
     if settings.input_b1:
         b1_in = True
 
@@ -49,7 +50,6 @@ def fit(settings: FitSettings):
     db_torch_mag, rho_db = normalize_data(db_torch_mag)
     # get t2 and b1 values
     t1_vals, t2_vals, b1_vals = db.get_t1t2b1()
-
 
     # load B1 if given
     if b1_in:
@@ -144,6 +144,7 @@ def fit(settings: FitSettings):
     pd = torch.clamp(pd, min=0.0, max=pd_cutoff_value).numpy(force=True)
     return t2, b1, pd, l2
 
+
 def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.Tensor):
     norm_factor = torch.linalg.norm(data, dim=dim_t, keepdim=True)
     # normalize
@@ -152,7 +153,6 @@ def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.
         nan=0.0, posinf=0.0, neginf=0.0
     )
     return norm_data, torch.squeeze(norm_factor)
-
 
 
 def main():
