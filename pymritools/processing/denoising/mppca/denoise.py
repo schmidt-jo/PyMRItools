@@ -77,7 +77,7 @@ def denoise(settings: DenoiseSettings):
         # calculate threshold. Already do parts that are constant throughout to reduce overhead
         p = None
         m_mp_arr = torch.arange(m_mp - 1)
-        left_b = 4 * torch.sqrt(torch.tensor((m_mp - m_mp_arr) / n_v)).to(device=device, dtype=torch.float64)
+        left_b = 4 * torch.sqrt((m_mp - m_mp_arr) / n_v).to(device=device, dtype=torch.float64)
         right_a = (1 / (m_mp - m_mp_arr)).to(device=device, dtype=torch.float64)
         # build a matrix to make the cummulative sum for the inequality calculation a matrix multiplication
         # dim [mmp, mmp - 1]

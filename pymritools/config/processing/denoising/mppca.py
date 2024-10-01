@@ -27,7 +27,7 @@ class Settings(BaseClass):
         default=False, alias="-n", help="(optional), normalize data (across t dimension) to max 1 before pca"
     )
     input_image_data: bool = field(
-        default=False, alias="-iimg", help="if input is in image space set to true. "
+        default=True, alias="-iimg", help="if input is in image space set to true. "
                                            "Otherwise input is assumed to be k-space data"
     )
     noise_bias_correction: bool = field(

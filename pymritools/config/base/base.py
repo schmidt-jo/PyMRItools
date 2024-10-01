@@ -38,7 +38,6 @@ class BaseClass(Serializable):
         help="Toggle debugging mode, and logging debug level."
     )
 
-
     def _check_non_default_vars(self) -> (dict, dict):
         # create default class instance
         def_config = self.__class__()
