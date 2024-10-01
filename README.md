@@ -26,3 +26,5 @@ Toolbox for all things MRI with python. Sequence Programming, Reconstruction, Si
    - PyMRItools/pymritools/processing/denoising/mppca/denoise.py -c ./examples/processing/denoising/config.json
 3) `processing_unring`:
    - PyMRItools/pymritools/processing/unringing/gibbs_unr.py -c ./examples/processing/unringing/config.json
+4) `modeling_grid_search`:
+   - PyMRItools/pymritools/modeling/dictionary/grid_search.py -c ./examples/modeling/emc/config.json

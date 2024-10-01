@@ -130,7 +130,7 @@ class DB:
         :return: mag, phase
         """
         mag, phase = self.get_numpy_arrays_t1t2b1e()
-        return torch.from_numpy(mag), torch.from_numpy(phase)
+        return torch.from_numpy(mag.copy()), torch.from_numpy(phase.copy())
 
     def plot(self,
              out_path: plib.Path | str, name: str = "",
