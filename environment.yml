@@ -1,18 +1,22 @@
 name: mri_tools_env
 channels:
   - conda-forge
+  - pytorch
+  - nvidia
 dependencies:
   - python=3.10
-  - polars
-  - pytorch-gpu
-  - cudnn=8.8.0
+  - poetry=1.8.3
+  - pip
+  - pytorch=2.4.1
+  - pytorch-cuda=12.4
+  - polars=1.8.2
   - kaleido-core=0.2.1
-  - scipy
+  - scipy=1.14.1
   - numpy=1.24.2
   - plotly=5.16.1
-  - simple-parsing
-  - tqdm
-  - nibabel
+  - simple-parsing=0.1.6
+  - tqdm=4.66.5
+  - nibabel=5.2.1
   - wandb
   - pip:
       - autodmri
