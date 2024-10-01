@@ -23,7 +23,6 @@ log_module = logging.getLogger(__name__)
 
 
 def denoise(settings: DenoiseSettings):
-
     # load in data
     input_data, input_img = nifti_load(settings.in_path)
     input_data = torch.from_numpy(input_data)
@@ -339,7 +338,7 @@ def denoise(settings: DenoiseSettings):
         )
 
 
-def manjon_corr_model(gamma):
+def manjon_corr_model(gamma: float):
     if gamma < 1.86:
         return 0.0
     else:
@@ -354,10 +353,10 @@ def main():
 
     # set up argument parser
     parser = ArgumentParser(prog="MPPCA Denoising")
-    parser.add_arguments(DenoiseSettings, dest='settings')
+    parser.add_arguments(DenoiseSettings, dest="settings")
     args = parser.parse_args()
 
-    settings = DenoiseSettings.from_cli(args.settings)
+    settings = DenoiseSettings.from_cli(args=args.settings, parser=parser)
 
     try:
         denoise(settings=settings)

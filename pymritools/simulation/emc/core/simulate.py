@@ -72,7 +72,7 @@ def main():
     parser.add_arguments(EmcSimSettings, dest="settings")
     prog_args = parser.parse_args()
 
-    settings = EmcSimSettings.from_cli(prog_args.settings)
+    settings = EmcSimSettings.from_cli(args=prog_args.settings, parser=parser)
     params = prog_args.params
 
     if prog_args.settings.debug:

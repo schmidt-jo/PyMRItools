@@ -24,7 +24,8 @@ def main():
     parser = ArgumentParser(prog="Gibbs Unringing")
     parser.add_arguments(GibbsUnringingSettings, dest="settings")
     prog_args = parser.parse_args()
-    settings = GibbsUnringingSettings.from_cli(prog_args.settings)
+
+    settings = GibbsUnringingSettings.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 
     try:

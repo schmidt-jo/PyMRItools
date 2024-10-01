@@ -49,12 +49,13 @@ class BaseClass(Serializable):
         return non_default_config
 
     @classmethod
-    def from_cli(cls, args: ArgumentParser.parse_args):
+    def from_cli(cls, args: ArgumentParser.parse_args, parser: ArgumentParser = None):
         """
         Create settings from command line interface arguments via simple parsing.
         Check for configuration file input but prioritizes additional cli input
         if given explicitly and varying from default.
-        :param args: simple-parsing parsed arguments dictionary
+        :param args: simple-parsing parsed arguments
+        :param parser: simple-parsing argument parser - (optional) will provide help message in case of error
         :return:
         """
         # create class instance via the args
@@ -73,6 +74,12 @@ class BaseClass(Serializable):
                 # overwrite non default input args (assumed to be explicit, will not catch explicitly given default args)
                 for key, value in non_default_config.items():
                     instance.__setattr__(key, value)
+        if not instance.out_path:
+            err = "No Output Path provided!"
+            log_module.error(err)
+            if parser is not None:
+                parser.print_help()
+            raise ValueError(err)
         return instance
 
     def display(self):

@@ -5,6 +5,7 @@ from pymritools.utils import setup_program_logging, nifti_save, nifti_load
 import torch
 import numpy as np
 import logging
+import pathlib as plib
 import tqdm
 from simple_parsing import ArgumentParser
 
@@ -12,6 +13,12 @@ log_module = logging.getLogger(__name__)
 
 
 def fit(settings: FitSettings):
+    # set path
+    path_out = plib.Path(settings.out_path).absolute()
+    log_module.info(f"set output path: {path_out}")
+    if not path_out.exists():
+        log_module.info(f"mkdir {path_out}".ljust(20))
+        path_out.mkdir(exist_ok=True, parents=True)
     # set shorthand for b1 processing
     b1_in = False
     b1_data = None
@@ -34,11 +41,11 @@ def fit(settings: FitSettings):
     input_data = torch.from_numpy(input_data)
     # save shape
     data_shape = input_data.shape
+    # normalize and get scaling factor (related to SNR)
+    input_data, rho_s = normalize_data(input_data)
     # get into one batch dim: [b, etl]
     input_data = torch.reshape(input_data, (-1, data_shape[-1]))
     total_data_size = input_data.shape[0]
-    # normalize and get scaling factor (related to SNR)
-    input_data, rho_s = normalize_data(input_data)
     # check for masked voxels, dont need to process 0 voxels
     mask_nii_nonzero = torch.sum(torch.abs(input_data), dim=-1) > 1e-6
 
@@ -49,7 +56,11 @@ def fit(settings: FitSettings):
     # normalize database, use magnitude only for now
     db_torch_mag, rho_db = normalize_data(db_torch_mag)
     # get t2 and b1 values
-    t1_vals, t2_vals, b1_vals = db.get_t1t2b1()
+    t1_vals, t2_vals, b1_vals = db.get_t1_t2_b1_values()
+    # cast to combined db dimension
+    t1t2b1_vals = torch.tensor([(t1, t2, b1) for t1 in t1_vals for t2 in t2_vals  for b1 in b1_vals])
+    db_torch_mag = torch.reshape(db_torch_mag, (-1, db_torch_mag.shape[-1]))
+    rho_db = rho_db.flatten()
 
     # load B1 if given
     if b1_in:
@@ -60,7 +71,9 @@ def fit(settings: FitSettings):
         # check for scaling (percentage or unitless)
         if torch.max(b1_data) > 10:
             b1_data = b1_data / 100
-        name = f"{name}_b1-in".replace(".", "p")
+        if name:
+            name = f"{name}_".replace(".", "p")
+        name = f"{name}b1-in_"
 
     # allocate space, no t1 fit for now, dont put on gpu,
     # since we only process the non zero data on gpu and fill in later
@@ -84,33 +97,36 @@ def fit(settings: FitSettings):
     b1 = torch.zeros(batch_dim_size, dtype=b1_vals.dtype, device=device)
     rho_theta = torch.zeros(batch_dim_size, dtype=rho_s.dtype, device=device)
 
+    if not b1_in:
+        fit_db = db_torch_mag.to(device)
     # batch process
     for idx_b in tqdm.trange(num_batches, desc="Batch Processing"):
         start = idx_b * batch_size
         end = min(start + batch_size, batch_dim_size)
-        data_batch = in_data_masked[start:end]
+        data_batch = in_data_masked[start:end].to(device)
 
         # b1 penalty
         if b1_in:
             b1_batch = in_b1_masked[start:end]
             b1_penalty = torch.sqrt(torch.square(b1_vals[:, None] - b1_batch[None, :]))
             b1_min_idxs = torch.min(b1_penalty, dim=1).indices
-            fit_db = db_torch_mag[:, :, b1_min_idxs, None]
-        else:
-            fit_db = db_torch_mag
+            fit_db = db_torch_mag[:, :, b1_min_idxs, None].to(device)
+
         # l2 norm difference of magnitude data vs magnitude database
         # calculate difference, dims db [t1s, t2s, b1s,t], nii-batch [x*y*z*,t]
         l2_norm_diff = torch.linalg.vector_norm(
-            fit_db[:, :, :, None] - data_batch[None, None, None, :], dim=-1)
+            fit_db[:, None] - data_batch[None, :], dim=-1)
 
         # find minimum index in db dim
         min_l2 = torch.min(l2_norm_diff, dim=0)
+        min_idx_l2 = min_l2.indices.to(torch.device("cpu"))
+        min_vals_l2 = min_l2.values.to(torch.device("cpu"))
 
         # populate maps
-        t2[start:end] = t2_vals[min_l2.indices]
-        b1[start:end] = b1_vals[min_l2.indices]
-        l2[start:end] = min_l2.values
-        rho_theta[start:end] = rho_db[min_l2.indices]
+        t2[start:end] = t1t2b1_vals[min_idx_l2, 1]
+        b1[start:end] = t1t2b1_vals[min_idx_l2, 2]
+        l2[start:end] = min_vals_l2
+        rho_theta[start:end] = rho_db[min_idx_l2]
     # fill in the whole tensor
     t2_unmasked[mask_nii_nonzero] = t2.cpu()
     l2_unmasked[mask_nii_nonzero] = l2.cpu()
@@ -127,7 +143,7 @@ def fit(settings: FitSettings):
     l2_unmasked = l2_unmasked.numpy(force=True)
     b1_unmasked = torch.reshape(b1_unmasked, data_shape[:-1]).numpy(force=True)
     rho_theta_unmasked = torch.reshape(rho_theta_unmasked, data_shape[:-1]).cpu()
-
+    r2 = np.divide(1e3, t2_unmasked, where=t2_unmasked > 1e-3, out=np.zeros_like(t2_unmasked))
     pd = torch.nan_to_num(
         torch.divide(
             torch.squeeze(rho_s),
@@ -142,7 +158,15 @@ def fit(settings: FitSettings):
     pd_hist_perc = torch.cumsum(pd_hist, dim=0) / torch.sum(pd_hist, dim=0)
     pd_cutoff_value = pd_bins[torch.nonzero(pd_hist_perc > 0.95)[0].item()]
     pd = torch.clamp(pd, min=0.0, max=pd_cutoff_value).numpy(force=True)
-    return t2, b1, pd, l2
+
+    # save data
+    nifti_save(data=r2, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}r2")
+    nifti_save(data=t2_unmasked, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}t2")
+    nifti_save(data=b1_unmasked, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}b1")
+    nifti_save(data=l2_unmasked, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}l2-err")
+    nifti_save(data=rho_s, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}rho-s")
+    nifti_save(data=rho_theta_unmasked, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}rho-theta")
+    nifti_save(data=pd, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}pd-approx")
 
 
 def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.Tensor):
@@ -160,9 +184,11 @@ def main():
     setup_program_logging(name="EMC Dictionary Grid Search", level=logging.INFO)
 
     # build parser
-    parser = ArgumentParser(EmcFitSettings, dest="settings")
+    parser = ArgumentParser(prog="EMC Dictionary Grid Search")
+    parser.add_arguments(EmcFitSettings, dest="settings")
     prog_args = parser.parse_args()
-    settings = EmcFitSettings.from_cli(prog_args.settings)
+
+    settings = EmcFitSettings.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 
     try:
