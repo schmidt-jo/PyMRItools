@@ -59,8 +59,10 @@ For common tools, we provide commands that are available once the virtual enviro
 The command line tools are based on some of the .py scripts in the repository.
 Both, scripts and commands, can parse a set of arguments available via the `--help` option.
 
-### EMC Simulation
+---
+### Simulation
 
+### EMC
 **Description:** Bloch equation simulation derived from the EMC method by [Ben-Eliezer et al. 2015](https://doi.org/10.1002/mrm.25156).
 The function creates a dictionary. Value ranges to simulate for can be given in the settings.
 The simulation needs exact sequence RF and slice selective gradient events (specified in a emc_params file) that need to be obtained from sequence simulations.
@@ -73,6 +75,9 @@ The simulation needs exact sequence RF and slice selective gradient events (spec
 python3.10 pymritools/simulation/emc/core/simulate.py \
     -c ./examples/simulation/emc_settings.json
 ```
+
+---
+### Modeling
 
 ### Dictionary Grid Search
 
@@ -103,6 +108,9 @@ python3.10 pymritools/modeling/decay/mexp/mexp.py \
     -c ./examples/modeling/mexp/config.json
 ```
 
+---
+### Processing
+
 ### Denoising MPPCA
 
 **Description:** Denoising algorithm based on the method by [Does et al. 2019](https://doi.org/10.1002/mrm.27658) employing a MP-PCA using spatial redundancy in relaxation data.
@@ -132,3 +140,5 @@ python3.10 pymritools/processing/denoising/mppca/denoise.py \
 python3.10 pymritools/processing/unringing/gibbs_unr.py \
     -c ./examples/processing/unringing/config.json
 ```
+
+---
