@@ -12,11 +12,11 @@ class SimulationSettings(BaseClass):
     """
     # files and config
     emc_params_file: str = field(
-        alias="-emc", default="./examples/simulation/emc_params.json",
+        alias="-emc", default="./examples/simulation/emc/emc_params.json",
         help="provide sequence event parameters"
     )
     pulse_file: str = field(
-        alias="-pul", default="./examples/simulation/pulse_pypulseq_default_gauss.pkl",
+        alias="-pul", default="./examples/simulation/emc/pulse_pypulseq_default_gauss.pkl",
         help="separate pulse file to pulse class object"
     )
     database_name: str = field(
