@@ -1,7 +1,8 @@
 from pymritools.config.emc import EmcFitSettings
 from pymritools.config.emc.settings import FitSettings
 from pymritools.config.database import DB
-from pymritools.utils import setup_program_logging, nifti_save, nifti_load
+from pymritools.utils import nifti_save, nifti_load
+from pymritools.config import setup_program_logging
 import torch
 import numpy as np
 import logging

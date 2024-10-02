@@ -6,7 +6,8 @@ DOI: 10.1002/mrm.27658
 _____
 24.11.2023, Jochen Schmidt
 """
-from pymritools.utils import setup_program_logging, nifti_load, nifti_save, fft, root_sum_of_squares, gaussian_2d_kernel
+from pymritools.utils import nifti_load, nifti_save, fft, root_sum_of_squares, gaussian_2d_kernel
+from pymritools.config import setup_program_logging
 from pymritools.config.processing.denoising import DenoiseSettings
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from simple_parsing import ArgumentParser

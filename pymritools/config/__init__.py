@@ -1,3 +1,4 @@
-from . import emc, rf, database, processing
+from . import emc, rf, database, processing, modeling
+from .base import BaseClass, setup_program_logging
 
-__all__ = ["emc", "rf", "database", "processing"]
+__all__ = ["BaseClass", "setup_program_logging", "emc", "rf", "database", "processing", "modeling"]

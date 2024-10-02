@@ -1,7 +1,7 @@
 from pymritools.simulation.emc import sequence
 from pymritools.config.emc import EmcParameters, EmcSimSettings
 from pymritools.config.database import DB
-from pymritools.utils import setup_program_logging
+from pymritools.config import setup_program_logging
 import logging
 import pathlib as plib
 import simple_parsing
