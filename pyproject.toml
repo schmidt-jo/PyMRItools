@@ -45,7 +45,7 @@ autodmri = "0.2.7"
 "Bug Tracker" = "https://github.com/schmidt-jo/PyMRItools"
 
 [tool.poetry.scripts]
-emc_simulation = "pymritools.simulation.emc.core.simulate:main"
+simulation_emc = "pymritools.simulation.emc.core.simulate:main"
 processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
 processing_denoise_mppca = "pymritools.processing.denoising.mppca.denoise:main"
 
