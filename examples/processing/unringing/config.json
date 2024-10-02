@@ -1,0 +1,11 @@
+{
+  "config_file": "./examples/processing/unringing/config.json",
+  "input_file": "./examples/processing/semc_r1p1_echo_mag.nii.gz",
+  "out_path": "./examples/processing/unringing/",
+  "use_gpu": true,
+  "gpu_device": 0,
+  "visualize": true,
+  "debug": false,
+  "num_shifts_per_voxel": 100,
+  "voxel_neighborhood_size": 3
+}
