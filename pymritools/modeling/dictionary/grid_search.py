@@ -2,13 +2,12 @@ from pymritools.config.emc import EmcFitSettings
 from pymritools.config.emc.settings import FitSettings
 from pymritools.config.database import DB
 from pymritools.utils import nifti_save, nifti_load
-from pymritools.config import setup_program_logging
+from pymritools.config import setup_program_logging, setup_parser
 import torch
 import numpy as np
 import logging
 import pathlib as plib
 import tqdm
-from simple_parsing import ArgumentParser
 
 log_module = logging.getLogger(__name__)
 
@@ -183,12 +182,12 @@ def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.
 def main():
     # Setup CLI Program
     setup_program_logging(name="EMC Dictionary Grid Search", level=logging.INFO)
-
-    # build parser
-    parser = ArgumentParser(prog="EMC Dictionary Grid Search")
-    parser.add_arguments(EmcFitSettings, dest="settings")
-    prog_args = parser.parse_args()
-
+    # Setup parser
+    parser, prog_args = setup_parser(
+        prog_name="EMC Dictionary Grid Search",
+        dict_config_dataclasses={"settings": EmcFitSettings}
+    )
+    # Get settings
     settings = EmcFitSettings.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 

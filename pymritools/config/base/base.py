@@ -10,6 +10,19 @@ import pathlib as plib
 log_module = logging.getLogger(__name__)
 
 
+def setup_parser(prog_name: str, dict_config_dataclasses: dict):
+    if not isinstance(dict_config_dataclasses, dict):
+        err = (f"Provide a dictionary of config dataclasses (not {type(dict_config_dataclasses)}), "
+               f"of structure: dest_name: dataclass.")
+        log_module.error(err)
+        raise AttributeError(err)
+
+    parser = ArgumentParser(prog=prog_name)
+    for name, config_dataclass in dict_config_dataclasses.items():
+        parser.add_arguments(config_dataclass, dest=name)
+    return parser, parser.parse_args()
+
+
 def setup_program_logging(name: str, level: int = logging.INFO):
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=level)

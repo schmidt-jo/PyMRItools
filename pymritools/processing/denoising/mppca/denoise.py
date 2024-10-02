@@ -7,10 +7,9 @@ _____
 24.11.2023, Jochen Schmidt
 """
 from pymritools.utils import nifti_load, nifti_save, fft, root_sum_of_squares, gaussian_2d_kernel
-from pymritools.config import setup_program_logging
+from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.processing.denoising import DenoiseSettings
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
-from simple_parsing import ArgumentParser
 import pathlib as plib
 
 import torch
@@ -351,13 +350,14 @@ def manjon_corr_model(gamma: float):
 def main():
     # set program logging
     setup_program_logging(name="MPPCA Denoising", level=logging.INFO)
-
     # set up argument parser
-    parser = ArgumentParser(prog="MPPCA Denoising")
-    parser.add_arguments(DenoiseSettings, dest="settings")
-    args = parser.parse_args()
-
-    settings = DenoiseSettings.from_cli(args=args.settings, parser=parser)
+    parser, prog_args = setup_parser(
+        prog_name="MPPCA Denoising",
+        dict_config_dataclasses={"settings": DenoiseSettings}
+    )
+    # get settings
+    settings = DenoiseSettings.from_cli(args=prog_args.settings, parser=parser)
+    settings.display()
 
     try:
         denoise(settings=settings)

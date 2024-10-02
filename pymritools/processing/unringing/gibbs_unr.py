@@ -12,8 +12,7 @@ import torch
 from pymritools.processing.unringing import gibbs_unring_nd
 from pymritools.config.processing.unringing import GibbsUnringingSettings
 from pymritools.utils import nifti_load, nifti_save
-from pymritools.config import setup_program_logging
-from simple_parsing import ArgumentParser
+from pymritools.config import setup_program_logging, setup_parser
 import logging
 log_module = logging.getLogger(__name__)
 
@@ -22,9 +21,10 @@ def main():
     setup_program_logging(name="Gibbs Unringing", level=logging.INFO)
 
     # setup argument parser
-    parser = ArgumentParser(prog="Gibbs Unringing")
-    parser.add_arguments(GibbsUnringingSettings, dest="settings")
-    prog_args = parser.parse_args()
+    parser, prog_args = setup_parser(
+        prog_name="Gibbs Unringing",
+        dict_config_dataclasses={"settings": GibbsUnringingSettings}
+    )
 
     settings = GibbsUnringingSettings.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
