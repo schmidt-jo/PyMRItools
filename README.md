@@ -61,7 +61,9 @@ Both, scripts and commands, can parse a set of arguments available via the `--he
 
 ### EMC Simulation
 
-**Description:** Todo
+**Description:** Bloch equation simulation derived from the EMC method by [Ben-Eliezer et al. 2015](https://doi.org/10.1002/mrm.25156).
+The function creates a dictionary. Value ranges to simulate for can be given in the settings.
+The simulation needs exact sequence RF and slice selective gradient events (specified in a emc_params file) that need to be obtained from sequence simulations.
 
 **Commandline Tool:** `emc_simulation`
 
@@ -72,9 +74,42 @@ python3.10 pymritools/simulation/emc/core/simulate.py \
     -c ./examples/simulation/emc_settings.json
 ```
 
+### Dictionary Grid Search
+
+**Description:** Dictionary matching method for e.g. EMC dictionary (or any database that can be converted to the DB object in `pymritools.config.database`).
+The algorithm takes input data and a dictionary and uses brute force to determine the best-matching pattern to the data in the dictionary.
+Specifically for the EMC / R2 estimation usecase, one can provide input B1 information to regularize the matching method by first selecting the sub-dictionary corresponding to the voxel B1 provided.
+
+**Commandline Tool:** `modeling_dictionary_grid_search`
+
+**Python Example:**
+
+```shell
+python3.10 pymritools/modeling/dictionary/grid_search.py \
+    -c ./examples/modeling/emc/config.json
+```
+
+### Mono-Exponential Fitting
+
+**Description:** Simple mono-exponential least squares fitting module.
+According to $S(t) = S_0 \  e^{(-R t)}$ the function saves the optimal solutions S0 and R as maps.
+
+**Commandline Tool:** `modeling_mono_exponential_fit`
+
+**Python Example:**
+
+```shell
+python3.10 pymritools/modeling/decay/mexp/mexp.py \
+    -c ./examples/modeling/mexp/config.json
+```
+
 ### Denoising MPPCA
 
-**Description:** Todo
+**Description:** Denoising algorithm based on the method by [Does et al. 2019](https://doi.org/10.1002/mrm.27658) employing a MP-PCA using spatial redundancy in relaxation data.
+Additionally, a magnitude bias correction is implemented ([Manjon et al. 2015](http://dx.doi.org/10.1016/j.media.2015.01.004)),
+which is derived from a noise property estimation from background voxels.
+The estimation is following [StJean et al. 2020](https://doi.org/10.1016/j.media.2020.101758) and using the autodmri package provided by StJean ([github - autodmri](https://github.com/samuelstjean/autodmri?tab=readme-ov-file)) .
+This noise estimation assumes stationary noise properties per imaging slice.
 
 **Commandline Tool:** `processing_denoise_mppca`
 
@@ -87,7 +122,7 @@ python3.10 pymritools/processing/denoising/mppca/denoise.py \
 
 ### Gibbs Unringing
 
-**Description:** Todo
+**Description:** Gibbs unringing algorithm based on the method by [Kellner et al. 2016](https://doi.org/10.1002/mrm.26054).
 
 **Commandline Tool:** `processing_unring`
 
@@ -97,30 +132,3 @@ python3.10 pymritools/processing/denoising/mppca/denoise.py \
 python3.10 pymritools/processing/unringing/gibbs_unr.py \
     -c ./examples/processing/unringing/config.json
 ```
-
-### Model Grid Search
-
-**Description:** Todo
-
-**Commandline Tool:** `modeling_grid_search`
-
-**Python Example:**
-
-```shell
-python3.10 pymritools/modeling/dictionary/grid_search.py \
-    -c ./examples/modeling/emc/config.json
-```
-
-
-## Test / Examples
-
-- Theoretically those should be the CLI scripts installed:
-- set working directory to top level (PyMRItools)
-1) `simulation_emc`:
-   - PyMRItools/pymritools/simulation/emc/core/simulate.py -c ./examples/simulation/emc_settings.json
-2) `processing_denoise_mppca`:
-   - PyMRItools/pymritools/processing/denoising/mppca/denoise.py -c ./examples/processing/denoising/config.json
-3) `processing_unring`:
-   - PyMRItools/pymritools/processing/unringing/gibbs_unr.py -c ./examples/processing/unringing/config.json
-4) `modeling_grid_search`:
-   - PyMRItools/pymritools/modeling/dictionary/grid_search.py -c ./examples/modeling/emc/config.json
