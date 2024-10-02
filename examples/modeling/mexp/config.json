@@ -3,7 +3,7 @@
   "out_path": "./examples/modeling/mexp/results",
   "use_gpu": true,
   "gpu_device": 0,
-  "visualize": true,
+  "visualize": false,
   "debug": false,
   "input_file": "./examples/processing/semc_r0p9_echo_mag.nii.gz",
   "echo_times": [9.5, 19.0, 28.5, 38.0, 47.5, 57.0, 66.5]
