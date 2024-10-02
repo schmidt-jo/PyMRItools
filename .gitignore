@@ -78,3 +78,4 @@ cython_debug/
 /.idea/
 /examples/simulation/results/
 /examples/processing/denoising/results/
+/arxv/
