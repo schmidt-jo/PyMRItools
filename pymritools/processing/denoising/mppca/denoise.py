@@ -8,7 +8,7 @@ _____
 """
 from pymritools.utils import nifti_load, nifti_save, fft, root_sum_of_squares, gaussian_2d_kernel
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.config.processing.denoising import DenoiseSettings
+from pymritools.config.processing import DenoiseSettings
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 import pathlib as plib
 

@@ -10,7 +10,7 @@ import pathlib as plib
 import torch
 
 from pymritools.processing.unringing import gibbs_unring_nd
-from pymritools.config.processing.unringing import GibbsUnringingSettings
+from pymritools.config.processing import GibbsUnringingSettings
 from pymritools.utils import nifti_load, nifti_save
 from pymritools.config import setup_program_logging, setup_parser
 import logging

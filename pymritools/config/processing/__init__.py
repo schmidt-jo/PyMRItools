@@ -1,4 +1,4 @@
-from .unringing import GibbsUnringingSettings
-from .denoising import DenoiseSettings
+from .unringing import Settings as GibbsUnringingSettings
+from .denoising import Settings as DenoiseSettings
 
 __all__ = ['GibbsUnringingSettings', 'DenoiseSettings']
