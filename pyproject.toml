@@ -40,6 +40,10 @@ nibabel = "5.2.1"
 wandb = "0.18.2"
 autodmri = "0.2.7"
 
+# might want to give dev branch here!
+pypulseq = "1.4.2"
+twixtools = "1.0"
+
 [tool.poetry.urls]
 "Repository" = "https://github.com/schmidt-jo/PyMRItools"
 "Bug Tracker" = "https://github.com/schmidt-jo/PyMRItools"
