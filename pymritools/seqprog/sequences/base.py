@@ -1,7 +1,6 @@
 from pymritools.seqprog.core import kernels, events
 from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.config.rf import RFPulse
 import numpy as np
 import logging
 from pypulseq import Opts, Sequence
@@ -26,14 +25,15 @@ class Sequence2D(abc.ABC):
 
     """
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters):
+
+        self.config: PulseqConfig = config
+        self.visualize: bool = config.visualize
         # set paths and flags
         path_out = plib.Path(config.out_path).absolute()
         log_module.info(f"Setting output path: {path_out.as_posix()}")
         if not path_out.exists():
             log_module.info("mkdir".ljust(20))
             path_out.mkdir(parents=True, exist_ok=True)
-        self.path_out = path_out
-        self.visualize: bool = config.visualize
         if self.visualize:
             path_figs = path_out.joinpath("figs")
             log_module.info(f"Setting figure path: {path_figs.as_posix()}")
@@ -54,14 +54,6 @@ class Sequence2D(abc.ABC):
         # set pypulseq sequence as var -> thats actually whats been build throughout the code and
         # later shipped to a .seq file
         self.sequence: Sequence = Sequence(system=self.system)
-
-        # setup pulse if available
-        rf_file = plib.Path(config.pulse_file).absolute()
-        if rf_file.is_file():
-            log_module.info(f"Loading pulse file: {rf_file.as_posix()}")
-            self.rf_file: str = rf_file.as_posix()
-        else:
-            self.rf_file: str = ""
 
         # track echoes
         self.te: list = []
@@ -208,9 +200,9 @@ class Sequence2D(abc.ABC):
 
     # writes
     def write_seq(self, name: str = ""):
-        file_name = plib.Path(self.interface.config.output_path).absolute()
+        file_name = plib.Path(self.config.out_path).absolute()
         if not name:
-            name = f"{self.params.name}_{self.params.version}"
+            name = f"MESE_{self.config.version}"
         name = f"pyp_seq_{name}"
         save_file = file_name.joinpath(name).with_suffix(".seq")
         log_module.info(f"writing file: {save_file.as_posix()}")
@@ -245,7 +237,7 @@ class Sequence2D(abc.ABC):
         )
         self.sequence.set_definition(
             "Name",
-            f"jstmc{self.params.version}"
+            f"mese_{self.config.version}".replace(".", "p")
         )
         self.sequence.set_definition(
             "AdcRasterTime",
@@ -253,11 +245,11 @@ class Sequence2D(abc.ABC):
         )
         self.sequence.set_definition(
             "GradientRasterTime",
-            self.interface.specs.grad_raster_time
+            self.specs.grad_raster_time
         )
         self.sequence.set_definition(
             "RadiofrequencyRasterTime",
-            self.interface.specs.rf_raster_time
+            self.specs.rf_raster_time
         )
 
     def simulate_grad_moments(self, t_end_ms: int, dt_steps_us: int):

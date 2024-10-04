@@ -30,7 +30,7 @@ class MESE(Sequence2D):
         self.block_refocus, self.phase_enc_time = kernels.Kernel.refocus_slice_sel_spoil(
             params=self.params,
             system=self.system,
-            pulse_file=self.rf_file,
+            pulse_file=self.config.pulse_file,
             pulse_num=1,
             return_pe_time=True,
             read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2
@@ -39,7 +39,7 @@ class MESE(Sequence2D):
         self.block_refocus_1: kernels.Kernel = kernels.Kernel.refocus_slice_sel_spoil(
             params=self.params,
             system=self.system,
-            pulse_file=self.rf_file,
+            pulse_file=self.config.pulse_file,
             pulse_num=0,
             read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2
         )
@@ -49,7 +49,7 @@ class MESE(Sequence2D):
         self.block_excitation = kernels.Kernel.excitation_slice_sel(
             params=self.params,
             system=self.system,
-            pulse_file=self.rf_file,
+            pulse_file=self.config.pulse_file,
             adjust_ramp_area=ramp_area_ref_1
         )
 
