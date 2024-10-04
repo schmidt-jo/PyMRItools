@@ -86,7 +86,7 @@ class BaseClass(Serializable):
         :return:
         """
         # create class instance via the args
-        instance = cls.from_dict(args.to_dict())
+        instance = args
 
         # here we find explicit cmd line args (if not defaults)
         non_default_config = instance._check_non_default_vars()

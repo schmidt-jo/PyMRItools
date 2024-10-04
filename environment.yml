@@ -20,3 +20,5 @@ dependencies:
   - wandb
   - pip:
       - autodmri
+      - git+https://github.com/pehses/twixtools.git@master#egg=twixtools
+      - git+https://github.com/imr-framework/pypulseq.git@dev#egg=pypulseq
