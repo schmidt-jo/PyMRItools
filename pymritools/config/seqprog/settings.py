@@ -1,8 +1,6 @@
 import logging
 from dataclasses import dataclass
 
-from pycparser.ply.yacc import default_lr
-
 from pymritools.config import BaseClass
 from simple_parsing import field
 from simple_parsing.helpers import Serializable
@@ -39,22 +37,22 @@ class Settings(BaseClass):
 class Parameters(Serializable):
     # resolution
     resolution_fov_read: float = field(
-        default=212.0, help="FoV in read direction in mm."
+        default=212.0, help="FoV in read direction [mm]."
     )
     resolution_fov_phase: float = field(
-        default=100.0, help="FoV in phase direction in %."
+        default=100.0, help="FoV in phase direction [percentage]."
     )
     resolution_base: int = field(
         default=212, help="Base Resolution, i.e. number of encodes in read direction."
     )
     resolution_slice_thickness: float = field(
-        default=1.0, help="Slice thickness of 2D slices in mm."
+        default=1.0, help="Slice thickness of 2D slices [mm]."
     )
     resolution_slice_num: int = field(
         default=30, help="Number of slices."
     )
     resolution_slice_gap: float = field(
-        default=200.0, help="Gap between slices, factor of slice thickness in %."
+        default=200.0, help="Gap between slices, factor of slice thickness [percentage]."
     )
 
     # PI / acceleration
@@ -73,19 +71,19 @@ class Parameters(Serializable):
 
     # RF - excitation
     excitation_rf_fa: float = field(
-        default=90.0, help="Excitation pulse flip angle in °."
+        default=90.0, help="Excitation pulse flip angle [°]."
     )
     excitation_rf_phase: float = field(
-        default=90.0, help="Excitation pulse phase in °"
+        default=90.0, help="Excitation pulse phase [°]"
     )
     excitation_rf_time_bw_prod: float = field(
         default=2.0, help="Excitation pulse time bandwidth product."
     )
     excitation_duration: int = field(
-        default=2000, help="Excitation pulse duration in us."
+        default=2000, help="Excitation pulse duration [us]."
     )
     excitation_grad_moment_pre: float = field(
-        default=1000.0, help="Excitation pulse slice selective pre-phasing gradient moment in Hz."
+        default=1000.0, help="Excitation pulse slice selective pre-phasing gradient moment [Hz]."
     )
     excitation_grad_rephase_factor: float = field(
         default=1.0, help="Excitation pulse rephase factor. Scales the rephasing slice gradient moment, "
@@ -94,16 +92,16 @@ class Parameters(Serializable):
 
     # RF - refocus
     refocusing_rf_fa: list[float] | float = field(
-        default=140.0, help="Refocusing pulse flip angle(s) in °"
+        default=140.0, help="Refocusing pulse flip angle(s) [°]"
     )
     refocusing_rf_phase: list[float] | float = field(
-        default=0.0 , help="Refocusing pulse phase(s) in °"
+        default=0.0 , help="Refocusing pulse phase(s) [°]"
     )
     refocusing_rf_time_bw_prod: float = field(
         default=2.0, help="Refocusing pulse time bandwidth product."
     )
     refocusing_duration: int = field(
-        default=2500, help="Refocusing pulse duration in us"
+        default=2500, help="Refocusing pulse duration [us]"
     )
     refocusing_grad_slice_scale: float = field(
         default=1.5, help="Refocusing pulse slice selective gradient scaling, "
@@ -117,11 +115,11 @@ class Parameters(Serializable):
     )
     grad_moment_slice_spoiling: float = field(
         default=1600.0, help="Spoiling gradient strength for slice selective gradient "
-                             "lobes around sl.sel. rf pulses in Hz."
+                             "lobes around sl.sel. rf pulses [Hz]."
     )
     grad_moment_slice_spoiling_end: float = field(
         default=2500.0, help="Spoiling gradient strength for slice selective gradient spoiling at "
-                             "end of readout train in Hz."
+                             "end of readout train [Hz]."
     )
     # acquisition
     interleaved_slice_acquisition: bool = field(
@@ -138,7 +136,7 @@ class Parameters(Serializable):
         default="RL", choices=["RL", "PA"], help="Set phase encode direction."
     )
     bandwidth: float = field(
-        default=357.55148741418765, help="Readout bandwidth in Hz/px."
+        default=357.55148741418765, help="Readout bandwidth [Hz/px]."
     )
     oversampling: int = field(
         default=2, help="Readout oversampling factor."
@@ -146,14 +144,14 @@ class Parameters(Serializable):
 
     # timing
     esp: float = field(
-        default=8.92, help="Set echo spacing in ms. "
+        default=8.92, help="Set echo spacing [ms]. "
                            "Shortest possible is calculated and used, except value given here is bigger."
     )
     etl: int = field(
         default=6, help="Echo train length. Defines number of refocusing pulses and echo image readouts."
     )
     tr: float = field(
-        default=4500.0, help="Repetition time in ms."
+        default=4500.0, help="Repetition time [ms]."
     )
 
     # define a bunch of properties (we dont want to serialize those)
