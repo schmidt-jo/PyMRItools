@@ -1,0 +1,11 @@
+{
+  "config_file": "./examples/raw_data/config.json",
+  "out_path": "./examples/raw_data/results/",
+  "use_gpu": true,
+  "gpu_device": 0,
+  "visualize": true,
+  "debug": false,
+  "input_file": "./examples/raw_data/meas_MID00042_FID07553_pulseq_mese_acc4.dat",
+  "input_sequence_config": "./examples/raw_data/pulseq_config.json",
+  "input_sample_config": "./examples/raw_data/sample_config.pkl"
+}
