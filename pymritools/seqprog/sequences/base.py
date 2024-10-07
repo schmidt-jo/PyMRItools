@@ -1,12 +1,11 @@
 from pymritools.seqprog.core import kernels, events
-from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters
+from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D, RD, Sampling
 from pymritools.config import setup_program_logging, setup_parser
 import numpy as np
 import logging
 from pypulseq import Opts, Sequence
 import pathlib as plib
 import abc
-import json
 
 log_module = logging.getLogger(__name__)
 
@@ -24,7 +23,7 @@ class Sequence2D(abc.ABC):
         of slices to measure, they are epi style readouts with lower resolution and can be switched on here)
 
     """
-    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters):
+    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
 
         self.config: PulseqConfig = config
         self.visualize: bool = config.visualize
@@ -45,7 +44,7 @@ class Sequence2D(abc.ABC):
             self.path_figs = None
 
         # set pulseq parameter configuration
-        self.params: PulseqParameters = params
+        self.params: PulseqParameters2D = params
 
         # get system specs
         self.specs: PulseqSystemSpecs = specs
@@ -54,6 +53,9 @@ class Sequence2D(abc.ABC):
         # set pypulseq sequence as var -> thats actually whats been build throughout the code and
         # later shipped to a .seq file
         self.sequence: Sequence = Sequence(system=self.system)
+
+        # set sampling object as var -> allows to register k-space trajectories and sampling pattern
+        self.sampling: Sampling = Sampling()
 
         # track echoes
         self.te: list = []
@@ -206,29 +208,29 @@ class Sequence2D(abc.ABC):
         name = f"pyp_seq_{name}"
         save_file = file_name.joinpath(name).with_suffix(".seq")
         log_module.info(f"writing file: {save_file.as_posix()}")
-        self._check_interface_set()
+        # self._check_interface_set()
         self.set_pyp_definitions()
         self.sequence.write(save_file.as_posix())
 
-    def write_pypsi(self, name: str = ""):
-        path = plib.Path(self.interface.config.output_path).absolute()
-        if not name:
-            name = f"{self.params.name}_{self.params.version}"
-        name = f"pypsi_{name}"
-        save_file = path.joinpath(name).with_suffix(".pkl")
-        log_module.info(f"writing file: {save_file.as_posix()}")
-        self._check_interface_set()
-        # write
-        self.interface.save(save_file.as_posix().__str__())
-
-        name = f"z-adapt-rf_{name}"
-        save_file = path.joinpath(name).with_suffix(".json")
-        log_module.info(f"writing file: {save_file.as_posix()}")
-        j_dict = {
-            "rf_scaling_z": self.rf_slice_adaptive_scaling.tolist(),
-            "z_slice_idx": np.arange(self.params.resolution_slice_num).tolist()}
-        with open(save_file.as_posix(), "w") as j_file:
-            json.dump(j_dict, j_file, indent=2)
+    # def write_pypsi(self, name: str = ""):
+    #     path = plib.Path(self.interface.config.output_path).absolute()
+    #     if not name:
+    #         name = f"{self.params.name}_{self.params.version}"
+    #     name = f"pypsi_{name}"
+    #     save_file = path.joinpath(name).with_suffix(".pkl")
+    #     log_module.info(f"writing file: {save_file.as_posix()}")
+    #     self._check_interface_set()
+    #     # write
+    #     self.interface.save(save_file.as_posix().__str__())
+    #
+    #     name = f"z-adapt-rf_{name}"
+    #     save_file = path.joinpath(name).with_suffix(".json")
+    #     log_module.info(f"writing file: {save_file.as_posix()}")
+    #     j_dict = {
+    #         "rf_scaling_z": self.rf_slice_adaptive_scaling.tolist(),
+    #         "z_slice_idx": np.arange(self.params.resolution_slice_num).tolist()}
+    #     with open(save_file.as_posix(), "w") as j_file:
+    #         json.dump(j_dict, j_file, indent=2)
 
     def set_pyp_definitions(self):
         self.sequence.set_definition(
@@ -311,8 +313,8 @@ class Sequence2D(abc.ABC):
         self._set_k_trajectories()  # raises error if not implemented
         self._write_sampling_pattern()
         # recon
-        self._set_recon_parameters_img()
-        self._set_nav_parameters()  # raises error if not implemented
+        # self._set_recon_parameters_img()
+        # self._set_nav_parameters()  # raises error if not implemented
         # emc
         self._set_emc_parameters()  # raises error if not implemented
         # pulse
@@ -345,18 +347,18 @@ class Sequence2D(abc.ABC):
             self.sequence.add_block(post_delay.to_simple_ns())
 
     # caution: this is closely tied to the pypsi module and changes in either might affect the other!
-    def _check_interface_set(self):
-        if any([not state for state in [self.k_trajectory_set, self.recon_params_set, self.sampling_pattern_set]]):
-            warn = f"pypsi interface might not have been set:" \
-                   f" Sampling Pattern ({self.sampling_pattern_set}), K-Trajectory ({self.k_trajectory_set})," \
-                   f" Recon Parameters ({self.recon_params_set})"
-            log_module.warning(warn)
-        for acq_type in self.interface.sampling_k_traj.sampling_pattern["acq_type"].unique():
-            if acq_type not in self.interface.sampling_k_traj.k_trajectories["acquisition"].unique():
-                warn = f"acquisition registered in sampling pattern: " \
-                       f"{acq_type} not registered in k-trajectory - types: " \
-                       f"{self.interface.sampling_k_traj.k_trajectories['acquisition'].unique()}"
-                log_module.warning(warn)
+    # def _check_interface_set(self):
+    #     if any([not state for state in [self.k_trajectory_set, self.recon_params_set, self.sampling_pattern_set]]):
+    #         warn = f"pypsi interface might not have been set:" \
+    #                f" Sampling Pattern ({self.sampling_pattern_set}), K-Trajectory ({self.k_trajectory_set})," \
+    #                f" Recon Parameters ({self.recon_params_set})"
+    #         log_module.warning(warn)
+    #     for acq_type in self.interface.sampling_k_traj.sampling_pattern["acq_type"].unique():
+    #         if acq_type not in self.interface.sampling_k_traj.k_trajectories["acquisition"].unique():
+    #             warn = f"acquisition registered in sampling pattern: " \
+    #                    f"{acq_type} not registered in k-trajectory - types: " \
+    #                    f"{self.interface.sampling_k_traj.k_trajectories['acquisition'].unique()}"
+    #             log_module.warning(warn)
 
     # sampling & k - space
     def _write_sampling_pattern_entry(self, slice_num: int, pe_num: int, echo_num: int,
@@ -374,52 +376,52 @@ class Sequence2D(abc.ABC):
         return echo_type_num + 1
 
     def _write_sampling_pattern(self):
-        self.interface.sampling_k_traj.sampling_pattern_from_list(sp_list=self._sampling_pattern_constr)
+        self.sampling.sampling_pattern_from_list(sp_list=self._sampling_pattern_constr)
 
     @abc.abstractmethod
     def _set_k_trajectories(self):
-        log_module.debug(f"set pypsi k-traj")
+        log_module.debug(f"set k-traj")
         # to be implemented by sequence variants
         pass
 
     def _register_k_trajectory(self, trajectory: np.ndarray, identifier: str):
-        log_module.debug(f"pypsi: register k - trajectory ({identifier}) in interface")
+        log_module.debug(f"register k - trajectory ({identifier}) in interface")
         self.k_trajectory_set = True
         # build shorthand
-        self.interface.sampling_k_traj.register_trajectory(
+        self.sampling.register_trajectory(
             trajectory=trajectory, identifier=identifier
         )
 
     # recon info
-    def _set_recon_parameters_img(self):
-        log_module.debug(f"set pypsi recon")
-        self.interface.recon.set_recon_params(
-            img_n_read=self.params.resolution_n_read, img_n_phase=self.params.resolution_n_phase,
-            img_n_slice=self.params.resolution_slice_num,
-            img_resolution_read=self.params.resolution_voxel_size_read,
-            img_resolution_phase=self.params.resolution_voxel_size_phase,
-            img_resolution_slice=self.params.resolution_slice_thickness,
-            etl=self.params.etl,
-            os_factor=self.params.oversampling,
-            read_dir=self.params.read_dir,
-            acc_factor_phase=self.params.acceleration_factor,
-            acc_read=False,
-            te=self.te
-        )
-        self.recon_params_set = True
+    # def _set_recon_parameters_img(self):
+    #     log_module.debug(f"set pypsi recon")
+    #     self.interface.recon.set_recon_params(
+    #         img_n_read=self.params.resolution_n_read, img_n_phase=self.params.resolution_n_phase,
+    #         img_n_slice=self.params.resolution_slice_num,
+    #         img_resolution_read=self.params.resolution_voxel_size_read,
+    #         img_resolution_phase=self.params.resolution_voxel_size_phase,
+    #         img_resolution_slice=self.params.resolution_slice_thickness,
+    #         etl=self.params.etl,
+    #         os_factor=self.params.oversampling,
+    #         read_dir=self.params.read_dir,
+    #         acc_factor_phase=self.params.acceleration_factor,
+    #         acc_read=False,
+    #         te=self.te
+    #     )
+    #     self.recon_params_set = True
 
-    def _set_nav_parameters(self):
-        log_module.debug(f"set pypsi recon nav")
-        if self.params.use_navs:
-            # recon
-            self.interface.recon.set_navigator_params(
-                lines_per_nav=int(self.params.resolution_n_phase * self.nav_resolution_factor / 2),
-                num_of_nav=self.params.number_central_lines + self.params.number_outer_lines,
-                nav_acc_factor=2, nav_resolution_scaling=self.nav_resolution_factor,
-                num_of_navs_per_tr=2
-            )
-        else:
-            pass
+    # def _set_nav_parameters(self):
+    #     log_module.debug(f"set pypsi recon nav")
+    #     if self.params.use_navs:
+    #         # recon
+    #         self.interface.recon.set_navigator_params(
+    #             lines_per_nav=int(self.params.resolution_n_phase * self.nav_resolution_factor / 2),
+    #             num_of_nav=self.params.number_central_lines + self.params.number_outer_lines,
+    #             nav_acc_factor=2, nav_resolution_scaling=self.nav_resolution_factor,
+    #             num_of_navs_per_tr=2
+    #         )
+    #     else:
+    #         pass
 
     # emc
     def _set_emc_parameters(self):
@@ -514,7 +516,8 @@ class Sequence2D(abc.ABC):
                 # calculate indexes
                 k_remaining = np.arange(0, k_start)
                 # build array with dim [num_slices, num_outer_lines] to sample different random scheme per slice
-                weighting_factor = np.clip(self.params.sample_weighting, 0.01, 1)
+                # hardcode weighting
+                weighting_factor = 0.3
                 log_module.info(f"\t\t-weighted random sampling of k-space phase encodes, factor: {weighting_factor}")
                 # random encodes for different echoes - random choice weighted towards center
                 weighting = np.clip(np.power(np.linspace(0, 1, k_start), weighting_factor), 1e-5, 1)
@@ -586,11 +589,11 @@ class Sequence2D(abc.ABC):
         self.block_list_nav_acq: list = self._set_nav_acquisition()
         self.id_acq_nav = "nav_acq"
 
-        if self.params.visualize:
-            self.block_nav_excitation.plot(path=self.interface.config.output_path, name="nav_excitation")
+        if self.config.visualize:
+            self.block_nav_excitation.plot(path=self.path_figs, name="nav_excitation")
 
             for k in range(3):
-                self.block_list_nav_acq[k].plot(path=self.interface.config.output_path, name=f"nav_acq_{k}")
+                self.block_list_nav_acq[k].plot(path=self.path_figs, name=f"nav_acq_{k}")
 
         # register sampling trajectories
         # need 2 trajectory lines for navigators: plus + minus directions
@@ -643,7 +646,7 @@ class Sequence2D(abc.ABC):
     def _set_nav_excitation(self) -> kernels.Kernel:
         # use excitation kernel without spoiling - only rephasing
         k_ex = kernels.Kernel.excitation_slice_sel(
-            pyp_interface=self.params,
+            params=self.params,
             system=self.system,
             use_slice_spoiling=False
         )
@@ -790,10 +793,10 @@ class Sequence2D(abc.ABC):
             sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
 
     def _set_grad_for_emc(self, grad):
-        return 1e3 / self.interface.specs.gamma * grad
+        return 1e3 / self.specs.gamma * grad
 
     def _calculate_scan_time(self):
-        t_total = (self.params.tr) * 1e-3 * (
+        t_total = self.params.tr * 1e-3 * (
                 self.params.number_central_lines + self.params.number_outer_lines + 1
         )
         log_module.info(f"\t\t-total scan time: {t_total / 60:.1f} min ({t_total:.1f} s)")
@@ -846,7 +849,7 @@ def setup_sequence_cli(name: str):
         prog_name=f"pulseq_sequence_{name}",
         dict_config_dataclasses={
             "config": PulseqConfig,
-            "parameters": PulseqParameters,
+            "parameters": PulseqParameters2D,
             "system": PulseqSystemSpecs
         })
     # get cli args - config files
@@ -871,7 +874,7 @@ def setup_sequence_cli(name: str):
     if params_file.is_file():
         msg = f"{msg} Loading: {params_file}"
         log_module.info(msg)
-        params = PulseqParameters.load(params_file)
+        params = PulseqParameters2D.load(params_file)
     else:
         msg = f"No {msg} Using default values or explicit CLI input.\nCheck if this is the setup you wanted!"
         log_module.warning(msg)

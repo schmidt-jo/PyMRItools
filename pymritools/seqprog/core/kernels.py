@@ -3,7 +3,7 @@ import typing
 import pathlib as plib
 
 from . import events
-from pymritools.config.seqprog import PulseqParameters
+from pymritools.config.seqprog import PulseqParameters2D
 
 import numpy as np
 import pypulseq as pp
@@ -104,7 +104,7 @@ class Kernel:
         return k_pos
 
     @classmethod
-    def excitation_slice_sel(cls, params: PulseqParameters, system: pp.Opts,
+    def excitation_slice_sel(cls, params: PulseqParameters2D, system: pp.Opts,
                              pulse_file: str = "",
                              use_slice_spoiling: bool = True, adjust_ramp_area: float = 0.0):
         # Excitation
@@ -158,7 +158,7 @@ class Kernel:
         return cls(rf=rf, grad_slice=grad_slice)
 
     @classmethod
-    def refocus_slice_sel_spoil(cls, params: PulseqParameters, system: pp.Opts,
+    def refocus_slice_sel_spoil(cls, params: PulseqParameters2D, system: pp.Opts,
                                 pulse_file: str = "",
                                 pulse_num: int = 0, duration_spoiler: float = 0.0, return_pe_time: bool = False,
                                 read_gradient_to_prephase: float = None):
@@ -277,7 +277,7 @@ class Kernel:
             return _instance
 
     @classmethod
-    def acquisition_fs(cls, params: PulseqParameters, system: pp.Opts,
+    def acquisition_fs(cls, params: PulseqParameters2D, system: pp.Opts,
                        invert_grad_read_dir: bool = False):
         # block : adc + read grad
         log_module.info("setup acquisition")
@@ -344,7 +344,7 @@ class Kernel:
         return cls(adc=adc, grad_read=grad_read)
 
     @classmethod
-    def acquisition_fid_nav(cls, params: PulseqParameters, system: pp.Opts,
+    def acquisition_fid_nav(cls, params: PulseqParameters2D, system: pp.Opts,
                             line_num: int, reso_degrading: float = 1 / 6):
         if line_num == 0:
             log_module.info("setup FID Navigator")
@@ -390,7 +390,7 @@ class Kernel:
         return cls(adc=adc, grad_read=grad_read, grad_phase=grad_phase)
 
     @classmethod
-    def acquisition_pf_undersampled(cls, params: PulseqParameters, system: pp.Opts):
+    def acquisition_pf_undersampled(cls, params: PulseqParameters2D, system: pp.Opts):
         # block : adc + read grad
         log_module.info("setup acquisition w undersampling partial fourier read")
         pf_factor = 0.75
@@ -458,7 +458,7 @@ class Kernel:
         return acq_block, area_pre_read
 
     @classmethod
-    def acquisition_sym_undersampled(cls, params: PulseqParameters, system: pp.Opts,
+    def acquisition_sym_undersampled(cls, params: PulseqParameters2D, system: pp.Opts,
                                      invert_grad_dir: bool = False, asym_accelerated: bool = False):
         log_module.info("setup acquisition w undersampling")
         # calculate maximum acc factor -> want to keep snr -> ie bandwidth ie dwell equal and stretch read grad
@@ -609,7 +609,7 @@ class Kernel:
         return acq, acc_max
 
     @classmethod
-    def spoil_all_grads(cls, params: PulseqParameters, system: pp.Opts):
+    def spoil_all_grads(cls, params: PulseqParameters2D, system: pp.Opts):
         grad_read = events.GRAD.make_trapezoid(
             channel=params.read_dir, system=system,
             flat_area=params.delta_k_read * params.resolution_n_read,

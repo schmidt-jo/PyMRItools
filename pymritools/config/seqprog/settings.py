@@ -34,7 +34,7 @@ class Settings(BaseClass):
 
 
 @dataclass
-class Parameters(Serializable):
+class Parameters2D(Serializable):
     # resolution
     resolution_fov_read: float = field(
         default=212.0, help="FoV in read direction [mm]."

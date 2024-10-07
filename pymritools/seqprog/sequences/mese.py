@@ -2,32 +2,32 @@ import numpy as np
 import logging
 import tqdm
 
-from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters
-from pymritools.seqprog.core import events, kernels
+from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D
+from pymritools.seqprog.core import Kernel, DELAY, ADC
 from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli
 
 log_module = logging.getLogger(__name__)
 
 
 class MESE(Sequence2D):
-    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters):
+    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
         super().__init__(config=config, specs=specs, params=params)
 
         # timing
         self.esp: float = params.esp
-        self.delay_exci_ref1: events.DELAY = events.DELAY()
-        self.delay_ref_adc: events.DELAY = events.DELAY()
+        self.delay_exci_ref1: DELAY = DELAY()
+        self.delay_ref_adc: DELAY = DELAY()
         self.phase_enc_time: float = 0.0
-        self.delay_slice: events.DELAY = events.DELAY()
+        self.delay_slice: DELAY = DELAY()
 
         # sbbs
-        self.block_acquisition: kernels.Kernel = kernels.Kernel.acquisition_fs(
+        self.block_acquisition: Kernel = Kernel.acquisition_fs(
             params=self.params,
             system=self.system
         )
         self.id_acq_se = "fs_acq"
 
-        self.block_refocus, self.phase_enc_time = kernels.Kernel.refocus_slice_sel_spoil(
+        self.block_refocus, self.phase_enc_time = Kernel.refocus_slice_sel_spoil(
             params=self.params,
             system=self.system,
             pulse_file=self.config.pulse_file,
@@ -36,7 +36,7 @@ class MESE(Sequence2D):
             read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2
         )
 
-        self.block_refocus_1: kernels.Kernel = kernels.Kernel.refocus_slice_sel_spoil(
+        self.block_refocus_1: Kernel = Kernel.refocus_slice_sel_spoil(
             params=self.params,
             system=self.system,
             pulse_file=self.config.pulse_file,
@@ -46,7 +46,7 @@ class MESE(Sequence2D):
         # calculate ramp area to slice select upon refocusing 1
         ramp_area_ref_1 = float(self.block_refocus_1.grad_slice.area[0])
 
-        self.block_excitation = kernels.Kernel.excitation_slice_sel(
+        self.block_excitation = Kernel.excitation_slice_sel(
             params=self.params,
             system=self.system,
             pulse_file=self.config.pulse_file,
@@ -104,12 +104,12 @@ class MESE(Sequence2D):
         t_half_esp = self.params.esp * 1e-3 / 2
         # add delays
         if t_exci_ref < t_half_esp:
-            self.delay_exci_ref1 = events.DELAY.make_delay(t_half_esp - t_exci_ref, system=self.system)
+            self.delay_exci_ref1 = DELAY.make_delay(t_half_esp - t_exci_ref, system=self.system)
             if not self.delay_exci_ref1.check_on_block_raster():
                 err = f"exci ref delay not on block raster"
                 log_module.error(err)
         if t_ref_1_adc < t_half_esp:
-            self.delay_ref_adc = events.DELAY.make_delay(t_half_esp - t_ref_1_adc, system=self.system)
+            self.delay_ref_adc = DELAY.make_delay(t_half_esp - t_ref_1_adc, system=self.system)
             if not self.delay_ref_adc.check_on_block_raster():
                 err = f"adc ref delay not on block raster"
                 log_module.error(err)
@@ -135,7 +135,7 @@ class MESE(Sequence2D):
         # adc
         if no_adc:
             aq_block = self.block_acquisition.copy()
-            aq_block.adc = events.ADC()
+            aq_block.adc = ADC
         else:
             aq_block = self.block_acquisition
         for idx_slice in np.arange(-1, self.params.resolution_slice_num):
@@ -286,7 +286,7 @@ class MESE(Sequence2D):
         self.block_spoil_end.grad_phase.amplitude[1:3] = - pe_end_amp
 
 
-def build(config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters):
+def build(config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
     # might be a core function
     # set object
     sequence = MESE(config=config, specs=specs, params=params)
