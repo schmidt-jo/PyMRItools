@@ -4,9 +4,43 @@ import logging
 
 import numpy as np
 import torch
+from xsdata.utils.text import suffix
 
 log_module = logging.getLogger(__name__)
 
+
+def set_save_path(path_to_dir: str | plib.Path, file_name: str, suffix: str):
+    path_to_dir = plib.Path(path_to_dir).absolute()
+    path_to_dir.mkdir(parents=True, exist_ok=True)
+    file_path = path_to_dir.joinpath(file_name).with_suffix(suffix)
+    log_module.info(f"Write file : {file_path}")
+    return file_path
+
+def set_load_path(path_to_file: str | plib.Path, suffix: str):
+    path_to_file = plib.Path(path_to_file).absolute()
+    if not path_to_file.is_file():
+        err = f"could not find file: {path_to_file}"
+        log_module.error(err)
+        raise FileNotFoundError(err)
+    if not suffix in path_to_file.suffixes:
+        err = f"file {path_to_file} not found to be a {suffix} file."
+        log_module.error(err)
+        raise AttributeError(err)
+    return path_to_file
+
+def numpy_save(
+        data: np.ndarray, path_to_file: str | plib.Path, file_name: str):
+    if not isinstance(data, np.ndarray):
+        err = f"data must be of type numpy.ndarray, but found {type(data)}"
+        log_module.error(err)
+        raise ValueError(err)
+
+    file_path = set_save_path(path_to_file, file_name, suffix=".npy")
+    np.save(file_path, data)
+
+def numpy_load(path_to_file: str | plib.Path) -> np.ndarray:
+    path_to_file = set_load_path(path_to_file, suffix=".npy")
+    return np.load(path_to_file)
 
 def nifti_load(path_to_file: str | plib.Path) -> (np.ndarray, nib.Nifti1Image):
     """
@@ -24,15 +58,7 @@ def nifti_load(path_to_file: str | plib.Path) -> (np.ndarray, nib.Nifti1Image):
             FileNotFoundError: If the specified file is not found.
             AttributeError: If the specified file is not a NIfTI file
     """
-    path_to_file = plib.Path(path_to_file).absolute()
-    if not path_to_file.is_file():
-        err = f"could not find file: {path_to_file}"
-        log_module.error(err)
-        raise FileNotFoundError(err)
-    if not ".nii" in path_to_file.suffixes:
-        err = f"file {path_to_file} not found to be a nifti file."
-        log_module.error(err)
-        raise AttributeError(err)
+    path_to_file = set_load_path(path_to_file, suffix=".nii")
     img = nib.load(path_to_file.as_posix())
     data = img.get_fdata()
     return data, img
@@ -60,9 +86,8 @@ def nifti_save(
     Logs:
         Creates an info log entry stating the path to the saved NIfTI file.
     """
-    path_to_dir = plib.Path(path_to_dir).absolute()
-    path_to_dir.mkdir(parents=True, exist_ok=True)
-    file_path = path_to_dir.joinpath(file_name).with_suffix(".nii")
+    file_path = set_save_path(path_to_dir, file_name, suffix=".nii")
+
     if torch.is_tensor(data):
         data = data.cpu().numpy()
     if torch.is_tensor(img_aff):
@@ -72,6 +97,5 @@ def nifti_save(
     else:
         img_aff = nib.Nifti1Image(data, affine=img_aff.affine)
 
-    log_module.info(f"Write file : {file_path}")
     nib.save(img_aff, file_path.as_posix())
 
