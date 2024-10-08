@@ -2,14 +2,14 @@ import logging
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd
-from pymritools.utils import numpy_save
+from pymritools.utils import torch_save, fft, root_sum_of_squares, nifti_save
 
 import pathlib as plib
 import twixtools
 log_module = logging.getLogger(__name__)
 
 
-def rd_to_ismrmrd(config: RD):
+def rd_to_torch(config: RD):
     # load sampling configuration
     path_to_file = plib.Path(config.input_sample_config).absolute()
     if not path_to_file.exists():
@@ -52,10 +52,17 @@ def rd_to_ismrmrd(config: RD):
     path_out = plib.Path(config.out_path).absolute()
 
     # save as np
-    numpy_save(k_space, path_out, "k_space")
-    numpy_save(k_sampling_mask, path_out, "k_sampling_mask")
-    numpy_save(aff, path_out, "affine")
+    torch_save(k_space, path_out, "k_space")
+    torch_save(k_sampling_mask, path_out, "k_sampling_mask")
+    torch_save(aff, path_out, "affine")
 
+    if config.visualize:
+        # transform into image
+        img = fft(k_space, inverse=True, axes=(0, 1))
+        # do rSoS
+        img = root_sum_of_squares(img, dim_channel=-2)
+        # niftii save
+        nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
 
 
 def main():
@@ -70,7 +77,7 @@ def main():
     rd_config.display()
 
     try:
-        rd_to_ismrmrd(config=rd_config)
+        rd_to_torch(config=rd_config)
     except Exception as e:
         parser.print_help()
         logging.exception(e)

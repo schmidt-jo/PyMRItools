@@ -1,7 +1,6 @@
 import nibabel as nib
 import pathlib as plib
 import logging
-
 import numpy as np
 import torch
 
@@ -40,6 +39,17 @@ def numpy_save(
 def numpy_load(path_to_file: str | plib.Path) -> np.ndarray:
     path_to_file = set_load_path(path_to_file, suffix=".npy")
     return np.load(path_to_file)
+
+def torch_save(
+        data: torch.Tensor | np.ndarray, path_to_file: str | plib.Path, file_name: str):
+    if not torch.is_tensor(data):
+        data = torch.from_numpy(data.copy())
+    file_path = set_save_path(path_to_file, file_name, suffix=".pt")
+    torch.save(data, file_path.as_posix())
+
+def torch_load(path_to_file: str | plib.Path) -> np.ndarray:
+    path_to_file = set_load_path(path_to_file, suffix=".pt")
+    return torch.load(path_to_file)
 
 def nifti_load(path_to_file: str | plib.Path) -> (np.ndarray, nib.Nifti1Image):
     """
