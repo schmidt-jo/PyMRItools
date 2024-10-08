@@ -7,6 +7,9 @@ log_module = logging.getLogger(__name__)
 def fft(
         input_data: np.ndarray | torch.Tensor,
         inverse: bool = False, axes: tuple | int = (-1, -2)):
+    """
+    from image space to k-space: inverse - False
+    """
     if isinstance(axes, int):
         # make tuple
         axes = (axes,)
