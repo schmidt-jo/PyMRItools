@@ -65,8 +65,6 @@ def get_whitening_matrix(noise_data_n_samples_channel):
         )
         noise_data_n_samples_channel = np.swapaxes(noise_data_n_samples_channel, -1, -2)
 
-    psi_l_inv = 0
-    noise_cov = 0
     # get covariance matrix for all scans, i.e. noise dimension
     # we can calculate the batched covariance matrix for all individual noise channels
     bcov = np.einsum(
@@ -270,48 +268,19 @@ def load_pulseq_rd(
     ])
     fov = np.array([*(k_space.shape[:2] * voxel_dims[:2]), geometry.voxelsize[-1]])
 
-    # if nav:
-    #     # remove oversampling
-    #     k_nav = helper_fns.remove_os(
-    #         data=k_nav, data_input_sampled_in_time=True, read_dir=0, os_factor=nav_params.os_factor
-    #     )
-    #     # correct gradient directions
-    #     # k_nav = np.flip(k_nav, axis=(0, 1, 2))
-    #     # k_nav_mask = np.flip(k_nav_mask, axis=(0, 1))
-    #
-    #     # scale values
-    #     kn_max = np.max(np.abs(k_nav))
-    #     k_nav *= scale_to_max_val / kn_max
-    #
     # swap dims if phase dir RL
     if transpose_xy:
         k_space = np.swapaxes(k_space, 0, 1)
         k_sampling_mask = np.swapaxes(k_sampling_mask, 0, 1)
         voxel_dims = voxel_dims[[1, 0, 2]]
         fov = fov[[1, 0, 2]]
-    #     if nav:
-    #         k_nav = np.swapaxes(k_nav, 0, 1)
-    #         k_nav_mask = np.swapaxes(k_nav_mask, 0, 1)
-    #
+    # get affine
     aff = get_affine(
         geometry,
         voxel_sizes_mm=voxel_dims,
         fov_mm=fov,
         slice_gap_mm=gap
     )
-    #
-    # if nav:
-    #     # navigators scaled (lower resolution)
-    #     nav_scale_x = k_space.shape[0] / k_nav.shape[0]
-    #     nav_scale_y = k_space.shape[1] / k_nav.shape[1]
-    #     aff_nav = np.matmul(
-    #         np.diag([nav_scale_x, nav_scale_y, 1, 1]),
-    #         aff
-    #     )
-    # else:
-    #     aff_nav = None
-    #
-    #
     return k_space, k_sampling_mask, aff
 
 
