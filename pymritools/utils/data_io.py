@@ -4,7 +4,6 @@ import logging
 
 import numpy as np
 import torch
-from xsdata.utils.text import suffix
 
 log_module = logging.getLogger(__name__)
 
