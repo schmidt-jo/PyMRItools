@@ -2,11 +2,149 @@ import logging
 from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
 from pymritools.config.seqprog import Sampling, PulseqParameters2D
+from pymritools.seqprog.rawdata.utils import remove_oversampling
+from scipy.spatial.transform import Rotation
 import numpy as np
-import tqdm
 import polars as pl
 
 log_module = logging.getLogger(__name__)
+
+
+def get_k_space_indices_from_trajectory_grid(trajectory: np.ndarray, n_read: int, os_factor: int):
+    """
+    Calculate the closest points on grid from a trajectory array (ranging from -0.5, to 0.5).
+    We assume the total number of samples is given by n_read * os_factor.
+    We shift the samples onto the next available position on the grid by rounding.
+    Theres a check for multiple counts of the same position.
+    The function returns the index positions.
+    """
+    # calculate the closest points on grid from trajectory. get positions
+    # We could use gridding algorithms here in case we have no close grid positions.
+    # I.e. for fancy sampling or use of field probes
+    traj_pos = (0.5 + trajectory) * n_read * os_factor
+    # just round to the nearest point in 1d
+    traj_pos = np.round(traj_pos).astype(int)
+    # find indices of points that are actually within the k-space in case the trajectory maps too far out
+    traj_valid_index = np.squeeze(
+        np.nonzero(
+            (traj_pos >= 0) & (traj_pos < os_factor * n_read)
+        )
+    )
+    # find positions of those indices
+    traj_valid_pos = traj_pos[traj_valid_index].astype(int)
+    indices_in_k_sampling_img = (traj_valid_pos[::os_factor] / os_factor).astype(int)
+    return traj_valid_pos, indices_in_k_sampling_img
+
+
+def get_whitening_matrix(noise_data_n_samples_channel):
+    """
+    Calculate pre-whitening matrix for channel decorrelation.
+    Input all noise data with dimensions [batch, num_samples_adc, num_channels].
+    """
+    # whiten data, psi_l_inv dim [nch, nch], k-space dims [nfe, npe, nsli, nch, nechos]
+    log_module.info("noise decorrelation")
+    acq_type = "noise_scan"
+    if noise_data_n_samples_channel.shape.__len__() < 2:
+        err = (f"Need at least one noise scan with multiple ADC samples for all channels. "
+               f"But found noise data shape: ({noise_data_n_samples_channel.shape})!")
+        log_module.error(err)
+        raise AttributeError(err)
+    if noise_data_n_samples_channel.shape.__len__() > 3:
+        msg = ("\t\t - noise covariance calculation only implemented for max 3D arrays of "
+               "[num-noise scans, num scanned samples, num channels]. But got > 3D array")
+        log_module.error(msg)
+        raise AttributeError(msg)
+    while noise_data_n_samples_channel.shape.__len__() < 3:
+        # if less than 3D assume only one noise scan [num_samples, num_channels]
+        noise_data_n_samples_channel = noise_data_n_samples_channel[None]
+    if noise_data_n_samples_channel.shape[-1] > 100 > noise_data_n_samples_channel.shape[-2]:
+        log_module.warning(
+            f"found noise data shape: {noise_data_n_samples_channel.shape}, "
+            f"but assume dimensions [batch, samples, channels]. "
+            f"Try to swap last two dimensions."
+        )
+        noise_data_n_samples_channel = np.swapaxes(noise_data_n_samples_channel, -1, -2)
+
+    psi_l_inv = 0
+    noise_cov = 0
+    # get covariance matrix for all scans, i.e. noise dimension
+    # we can calculate the batched covariance matrix for all individual noise channels
+    bcov = np.einsum(
+        'ijk, ijl -> ikl',
+        noise_data_n_samples_channel,
+        noise_data_n_samples_channel.conj()
+    ) / noise_data_n_samples_channel.shape[1]
+
+    # we average over the number of scans
+    psi = np.mean(bcov, axis=0)
+
+    psi_l = np.linalg.cholesky(psi)
+    if not np.allclose(psi, np.dot(psi_l, psi_l.T.conj())):
+        # verify that L * L.H = A
+        err = "cholesky decomposition error"
+        logging.error(err)
+        raise AssertionError(err)
+    return np.linalg.inv(psi_l)
+
+
+def get_affine(
+        geom: Geometry,
+        voxel_sizes_mm: np.ndarray,
+        fov_mm: np.ndarray,
+        slice_gap_mm: float = 0.0):
+    # handle rotations
+    # get rotation matrix from geom
+    rot_mat = Rotation.from_matrix(geom.rotmatrix)
+    # handle in plane rotations
+    # get normal vector of slab / slice
+    normal_vec = np.array(geom.normal)
+    # get rotation around plane
+    inp_rot_mat = Rotation.from_rotvec(geom.inplane_rot * normal_vec, degrees=False)
+    # update affine with rotation part, calculate whole rotation
+    affine_rot = (inp_rot_mat * rot_mat).as_matrix()
+
+    # set zoom
+    scaling_mat = np.diag(voxel_sizes_mm)
+    # add gap
+    scaling_mat[-1, -1] += slice_gap_mm
+    # update affine
+    affine_rot_zoom = np.matmul(scaling_mat, affine_rot)
+
+    # add offset
+    # we have for one the center offset saved in geometry
+    center_offset = np.array(geom.offset)
+    # additionally, we have the origin to be defined as left-posterior-inferior position of the data array
+    # we can get this via the fov, set the origin to lpi corner, we need to make up for the asymmetric k-space center
+    voxel_offset = - fov_mm / 2
+    # if the normal vector of the slice plane is aligned with z dimension, this is the offset already.
+    # if deviating from the z direction we can calculate the offset shift by applying a rotation that would yield
+    # the normal vector, if starting from the e_z basis
+    # for this we calculate the vector perpendicular to e_z and the normal vector and the angle between them
+    # around which we need to rotate
+    normal_perp = np.cross(np.array([0, 0, 1]), normal_vec)
+    perp_norm = np.linalg.norm(normal_perp)
+    # since both vectors are normalized to 1, we get the angle from the sin
+    perp_rot_angle = np.arcsin(perp_norm)
+    # normalize the rotation vector
+    normal_perp = np.abs(normal_perp / perp_norm)
+    # we get the rotation matrix
+    perp_rot_mat = Rotation.from_rotvec(perp_rot_angle * normal_perp)
+    # apply rotation to voxel origin vector
+    voxel_offset = (inp_rot_mat * perp_rot_mat).apply(voxel_offset)
+    # add both offsets
+    offset = voxel_offset + center_offset
+
+    # construct affine
+    aff_matrix = np.zeros((4, 4))
+    aff_matrix[:3, :3] = affine_rot_zoom
+    aff_matrix[:-1, -1] = offset
+    aff_matrix[-1, -1] = 1.0
+
+    # experimentally we found adjustments necessary, data seems to be reoriented after rotation as compared to RAS+
+    aff_matrix = np.matmul(np.diag([-1, 1, 1, 1]), aff_matrix)
+    aff_matrix[:3, :3] = aff_matrix[:3, :3].T
+
+    return aff_matrix
 
 
 def load_pulseq_rd(
@@ -43,7 +181,7 @@ def load_pulseq_rd(
         dtype=bool
     )
 
-    log_module.info(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
+    log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
     # remove data not needed, i.e. SYNCDATA acquisitions
     data_mdbs = [d for d in data_mdbs if "SYNCDATA" not in d.get_active_flags()]
 
@@ -53,155 +191,85 @@ def load_pulseq_rd(
                f"({len(sampling_config.samples)}) then input data ({len(data_mdbs)})!")
         log_module.warning(msg)
 
-    log_module.info(f"Start sorting".ljust(20))
+    log_module.debug(f"Start sorting".ljust(20))
     # save noise scans separately, used later
     noise_scans = None
 
-    for a in sampling_config.df_sampling_pattern["acquisition"].unique():
-        log_module.info(f"Processing acquisition type: {a}")
+    for acq in sampling_config.df_sampling_pattern["acquisition"].unique():
+        log_module.info(f"Processing acquisition type: {acq}")
         # take all sampled lines belonging to respective acquisition
-        sampled_lines = sampling_config.df_sampling_pattern.filter(pl.col("acquisition") == a)
+        sampled_lines = sampling_config.df_sampling_pattern.filter(pl.col("acquisition") == acq)
         # get scan numbers
         sampled_scan_numbers = sampled_lines["scan_number"].to_list()
         # get corresponding data
         data = np.array([data_mdbs[k].data for k in sampled_scan_numbers])
-        if a == "noise_scan":
+        if acq == "noise_scan":
             # save separately, no further sorting necessary
             noise_scans = data
             continue
+        if "nav" in acq:
+            log_module.info("not yet implemented any navigator scans".rjust(50))
+            continue
         # sort data into k-space and sampling mask
+        # get corresponding phase encodes
+        sampled_phase_encodes = sampled_lines["phase_encode_number"].to_numpy()
+        # get corresponding echo numbers
+        sampled_echo_numbers = sampled_lines["echo_number"].to_numpy()
+        # get corresponding slice numbers
+        sampled_slice_numbers = sampled_lines["slice_number"].to_numpy()
 
-        # # get the corresponding line sample from the config object
-        # sample_line = sampling_config.samples[idx_s]
-        # # get acquisition type
-        # acq = sample_line.acquisition_type
-        # # retrieve data as numpy array, dim [num_channels, adc samples]
-        # data = np.array(d.data)
-        # # raise sample line counter
-        # idx_s += 1
-        # # check for noise scan
-        # if acq
-        #     # we want to save noise scans for later use
-        #     noise_scans.append(data)
-        #     # then exit
-        #     continue
-        # # otherwise we want to retrieve trajectory, in case acquisition type changed
-        # if acq != acquisition:
-        #     # new acquisition, load acquisition trajectory
-        #     log_module.info(f"Loading trajectory {acq}")
-        #     k_traj = [t for t in sampling_config.trajectories if t.name == acq][0]
-        #     acquisition = acq
-        #     # calculate the closest points on grid from trajectory. get positions
-        #     k_traj_pos = (0.5 + k_traj.trajectory) * n_read * os_factor
-        #     # just round to the nearest point in 1d
-        #     k_traj_pos = np.round(k_traj_pos).astype(int)
-        #     # find indices of points that are actually within our k-space in case the trajectory maps too far out
-        #     k_traj_valid_index = np.squeeze(
-        #         np.nonzero((k_traj_pos >= 0) & (k_traj_pos < os_factor * n_read)))
-        #     # find positions of those indices
-        #     k_traj_valid_pos = k_traj_pos[k_traj_valid_index].astype(int)
-        #     indices_in_k_sampling_img = (k_traj_valid_pos[::os_factor] / os_factor).astype(int)
-        #
-        # # get all sampled lines
-        # # get indices needed from sampling conf of the sampled line
-        # n_echo = sample_line.echo_number
-        # n_slice = sample_line.slice_number
-        # n_phase = sample_line.phase_encode_number
-        #
-        # # use trajectory to populate k_space data
-        # k_space[k_traj_valid_pos, n_phase, n_slice, :, n_echo] = np.moveaxis(data, 0, 1)
-        # k_sampling_mask[indices_in_k_sampling_img, n_phase, n_echo] = True
+        # if not noise scan we want to retrieve trajectory
+        log_module.debug(f"Loading trajectory {acq}")
+        k_traj = [t for t in sampling_config.trajectories if t.name == acq][0]
 
-    log_module.info("Finished sorting".ljust(20))
-
-
-
-
-
-
-    # log_module.debug(f"allocate navigator arrays")
-    # nav = nav_params.n_read > 0
-    # if nav:
-    #     nav_shape = (nav_params.n_read * nav_params.os_factor, nav_params.n_phase, nav_params.n_slice, num_coils)
-    #     k_nav = np.zeros(nav_shape, dtype=complex)
-    #     k_nav_mask = np.zeros(nav_shape[:2], dtype=bool)
-    # else:
-    #     k_nav = None
-    #     k_nav_mask = None
-
-    # setup tkb
-    # # use tkbnufft interpolation to get k-space data from trajectory
-    # device = torch.device("cpu")
-    # # we want to regrid the data to the regular grid but have oversampling in read direction
-    # img_size = (img_params.os_factor * img_params.n_read,)
-    # grid_size = (img_params.os_factor * img_params.n_read,)
-    # tkbn_interp = tkbn.KbInterpAdjoint(
-    #     im_size=img_size,
-    #     grid_size=grid_size,
-    #     device=device
-    # )
-
-    log_module.debug("loop through acquisition types")
-    for acq_type in sampling_config.acquisitions:
-        pyp_processing_acq_data(
-            acq_type=acq_type, interface=interface, nav=nav, mdb_list=mdb_list,
-            k_space=k_space, k_sampling_mask=k_sampling_mask, img_params=img_params,
-            k_nav=k_nav, k_nav_mask=k_nav_mask, nav_params=nav_params
+        # get indices on grid (no gridding algorithms or similar)
+        k_pos, sampling_idxs = get_k_space_indices_from_trajectory_grid(
+            trajectory=k_traj.trajectory, n_read=n_read, os_factor=os_factor
         )
-    log_module.info(f"\t -- done!")
-    #
-    # # remove oversampling
-    # k_space = helper_fns.remove_os(
-    #     data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=img_params.os_factor
-    # )
-    # # fft bandpass filter not consistent with undersampled in the 0 filled regions data, remove artifacts
-    # k_space *= k_sampling_mask[:, :, None, None, :]
-    #
-    # # whiten data, psi_l_inv dim [nch, nch], k-space dims [nfe, npe, nsli, nch, nechos]
-    # log_module.info("noise decorrelation")
-    # acq_type = "noise_scan"
-    # # get all sampling pattern entries matching acq. type and no navigator
-    # sp_sub = interface.sampling_k_traj.sampling_pattern[
-    #     (interface.sampling_k_traj.sampling_pattern["acq_type"] == acq_type)
-    # ]
-    # # get line numbers
-    # line_nums = sp_sub.index.to_list()
-    # # get cov
-    # noise_lines = np.array([mdb_list[i].data.T for i in line_nums])
-    # while noise_lines.shape.__len__() < 3:
-    #     noise_lines = noise_lines[None]
-    # psi_l_inv = 0
-    # noise_cov = 0
-    # for k in range(noise_lines.shape[0]):
-    #     psi, cov = get_noise_cov_matrix(noise_data_line=noise_lines[k])
-    #     psi_l_inv += psi
-    #     noise_cov += cov
-    # psi_l_inv /= noise_lines.shape[0]
-    # noise_cov /= noise_lines.shape[0]
-    #
-    # k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv, optimize="optimal")
-    # if nav:
-    #     k_nav = np.einsum("ijkm, lm -> ijkl", k_nav, psi_l_inv, optimize="optimal")
-    #
-    # # correct gradient directions - at the moment we have reversed z dir
-    # k_space = np.flip(k_space, axis=2)
-    # # k_sampling_mask = np.flip(k_sampling_mask, axis=(0, 1))
-    #
+
+        # sort k_space data
+        k_space[
+        k_pos[None, :],
+        sampled_phase_encodes[:, None],
+        sampled_slice_numbers[:, None],
+        :,
+        sampled_echo_numbers[:, None]
+        ] = np.moveaxis(data, -2, -1)
+
+    log_module.info(f"Finished extracting all acquisitions!")
+
+    # remove oversampling
+    k_space = remove_oversampling(
+        data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+    )
+    # fft bandpass filter for oversampling removal not consistent with undersampled in the 0 filled regions data, remove artifacts
+    k_space *= k_sampling_mask[:, :, None, None, :]
+
+    # decorrelate channels
+    if noise_scans is not None:
+        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
+        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv, optimize="optimal")
+
+    # correct gradient directions - at the moment we have reversed z dir
+    k_space = np.flip(k_space, axis=2)
+
     # # scale values
     # ks_max = np.max(np.abs(k_space))
     # k_space *= scale_to_max_val / ks_max
-    #
-    # # this is very dependent on the geom object from pulseq, can change with different pulseg.dll on scanner,
-    # # which defines resolution and matrix sizes
-    # gap = (geom.voxelsize[-1] - img_params.n_slice * img_params.resolution_slice) / (img_params.n_slice - 1)
+
+    log_module.info(f"Extract geometry & affine information")
+    # this is very dependent on the geom object from pulseq, can change with different pulseg.dll on scanner,
+    # which defines resolution and matrix sizes
+    # gap = (geometry.voxelsize[-1] - n_slice * resolution_slice) / (n_slice - 1)
+    gap = pulseq_config.resolution_slice_gap / 100 * pulseq_config.resolution_slice_thickness
     # # for affine
-    # voxel_dims = np.array([
-    #     interface.recon.multi_echo_img.resolution_read,
-    #     interface.recon.multi_echo_img.resolution_phase,
-    #     interface.recon.multi_echo_img.resolution_slice
-    # ])
-    # fov = np.array([*(k_space.shape[:2] * voxel_dims[:2]), geom.voxelsize[-1]])
-    #
+    voxel_dims = np.array([
+        pulseq_config.resolution_voxel_size_read,
+        pulseq_config.resolution_voxel_size_phase,
+        pulseq_config.resolution_slice_thickness
+    ])
+    fov = np.array([*(k_space.shape[:2] * voxel_dims[:2]), geometry.voxelsize[-1]])
+
     # if nav:
     #     # remove oversampling
     #     k_nav = helper_fns.remove_os(
@@ -215,22 +283,22 @@ def load_pulseq_rd(
     #     kn_max = np.max(np.abs(k_nav))
     #     k_nav *= scale_to_max_val / kn_max
     #
-    # # swap dims if phase dir RL
-    # if transpose_xy:
-    #     k_space = np.swapaxes(k_space, 0, 1)
-    #     k_sampling_mask = np.swapaxes(k_sampling_mask, 0, 1)
-    #     voxel_dims = voxel_dims[[1, 0, 2]]
-    #     fov = fov[[1, 0, 2]]
+    # swap dims if phase dir RL
+    if transpose_xy:
+        k_space = np.swapaxes(k_space, 0, 1)
+        k_sampling_mask = np.swapaxes(k_sampling_mask, 0, 1)
+        voxel_dims = voxel_dims[[1, 0, 2]]
+        fov = fov[[1, 0, 2]]
     #     if nav:
     #         k_nav = np.swapaxes(k_nav, 0, 1)
     #         k_nav_mask = np.swapaxes(k_nav_mask, 0, 1)
     #
-    # aff = get_affine(
-    #     geom,
-    #     voxel_sizes_mm=voxel_dims,
-    #     fov_mm=fov,
-    #     slice_gap_mm=gap
-    # )
+    aff = get_affine(
+        geometry,
+        voxel_sizes_mm=voxel_dims,
+        fov_mm=fov,
+        slice_gap_mm=gap
+    )
     #
     # if nav:
     #     # navigators scaled (lower resolution)
@@ -244,7 +312,8 @@ def load_pulseq_rd(
     #     aff_nav = None
     #
     #
-    # pass
+    return k_space, k_sampling_mask, aff
+
 
 def load_siemens_rd():
     pass

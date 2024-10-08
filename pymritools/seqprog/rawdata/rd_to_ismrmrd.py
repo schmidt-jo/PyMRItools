@@ -2,6 +2,8 @@ import logging
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd
+from pymritools.utils import numpy_save
+
 import pathlib as plib
 import twixtools
 log_module = logging.getLogger(__name__)
@@ -40,11 +42,20 @@ def rd_to_ismrmrd(config: RD):
     data_mdbs = twix["mdb"]
     hdr = twix["hdr"]
     log_module.info("Loading RD")
-    load_pulseq_rd(
+    k_space, k_sampling_mask, aff = load_pulseq_rd(
         pulseq_config=pulseq, sampling_config=sampling,
         data_mdbs=data_mdbs, geometry=geometry, hdr=hdr
     )
-    log_module.info("Done")
+
+    log_module.info("Saving")
+    # output path
+    path_out = plib.Path(config.out_path).absolute()
+
+    # save as np
+    numpy_save(k_space, path_out, "k_space")
+    numpy_save(k_sampling_mask, path_out, "k_sampling_mask")
+    numpy_save(aff, path_out, "affine")
+
 
 
 def main():
