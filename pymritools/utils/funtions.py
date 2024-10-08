@@ -6,7 +6,10 @@ log_module = logging.getLogger(__name__)
 
 def fft(
         input_data: np.ndarray | torch.Tensor,
-        inverse: bool = False, axes: tuple = (-1, -2)):
+        inverse: bool = False, axes: tuple | int = (-1, -2)):
+    if isinstance(axes, int):
+        # make tuple
+        axes = (axes,)
     if torch.is_tensor(input_data):
         if inverse:
             func = torch.fft.ifftn
