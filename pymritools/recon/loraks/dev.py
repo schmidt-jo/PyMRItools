@@ -1,48 +1,40 @@
-import torch
 import pathlib as plib
 import tqdm
-from pymritools.utils.phantom import SheppLogan
-from pymritools.utils import fft
-from pymritools.recon.loraks import operators
+
+import torch
+from torch import nn
+from torch import optim as TorchOptim
 import plotly.graph_objects as go
+import plotly.subplots as psub
+
+from pymritools.recon.loraks.recon import recon
+from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import fft, root_sum_of_squares
+from pymritools.recon.loraks import operators
 
 
 def main():
-    path_fig = plib.Path("./dev/figs")
+    path_fig = plib.Path("/data/pt_np-jschmidt/data/05_code_dev/loraks")
     path_fig.mkdir(exist_ok=True, parents=True)
 
     size_x, size_y = 200, 200
     # import shepp logan
     max_val = 100
-    sl_phantom = SheppLogan((size_x, size_y), as_torch_tensor=True) * max_val
+    # sl_phantom = SheppLogan((size_x, size_y), as_torch_tensor=True) * max_val
     # convert to k-space
-    sl_k = fft(sl_phantom, img_to_k=True, axes=(0, 1))
+    # sl_k = fft(sl_phantom, img_to_k=True, axes=(0, 1))
     # set up sampling pattern - keep central phase encodes and skip some outer ones
-    sampling_mask = torch.zeros_like(sl_k, dtype=torch.int)
+    # sampling_mask = torch.zeros_like(sl_k, dtype=torch.int)
     # sampling_mask[:, torch.randint(low=0, high=size_y, size=(int(size_y/2),))] = 1
-    sampling_mask[:, ::3] = 1
-    sampling_mask[:, int(2/5 * size_y):int(3/5 * size_y)] = 1
+    # sampling_mask[:, ::3] = 1
+    # sampling_mask[:, int(2/5 * size_y):int(3/5 * size_y)] = 1
+    sampling_mask = torch.load("/LOCAL/jschmidt/PyMRItools/examples/raw_data/results/k_sampling_mask.pt")
 
-    # fig = go.Figure()
-    # fig.add_trace(
-    #     go.Heatmap(z=torch.abs(sampling_mask).numpy())
-    # )
-    # fig.show()
-
-    sl_undersampled_k = sl_k * sampling_mask
-
-    # fig = go.Figure()
-    # fig.add_trace(
-    #     go.Heatmap(z=torch.log(torch.abs(sl_undersampled_k)).numpy())
-    # )
-    # fig.show()
-    #
+    # sl_undersampled_k = sl_k * sampling_mask
+    sl_undersampled_k = torch.load("/LOCAL/jschmidt/PyMRItools/examples/raw_data/results/k_space.pt")
+    # take only middle slice
+    sl_undersampled_k = sl_undersampled_k[:, :, int(sl_undersampled_k.shape[2] / 2)]
     sl_image_recon_us = torch.abs(fft(sl_undersampled_k, img_to_k=False, axes=(0, 1)))
-    # fig = go.Figure()
-    # fig.add_trace(
-    #     go.Heatmap(z=sl_image_recon_us.numpy())
-    # )
-    # fig.show()
 
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
@@ -50,125 +42,113 @@ def main():
         device = torch.device("cpu")
     print(f"using device: {device}")
 
-    access_matrix, hankel_matrix = construct_hankel_access_matrix(torch.ones(20), 3)
-
     # setup operator
-    loraks_c_op = operators.C(k_space_dims=(size_x, size_y, 1, 1), radius=3)
-    # initialize c_matrix with undersampled k-space data
-    c_matrix_init = loraks_c_op.operator(k_space=sl_undersampled_k[:, :, None, None]).to(device)
-    # set c_matrix to be tensor to be optimized
-    c_matrix = c_matrix_init.clone().requires_grad_(True).to(device)
-    m_matrix = loraks_c_op.operator(torch.ones_like(sl_k)).to(device)
+    loraks_operator = operators.S(k_space_dims=sl_image_recon_us.shape, radius=3)
+    nb_size = loraks_operator.operator(torch.ones_like(sl_undersampled_k)).shape[-1]
+    rank = torch.ones(1) * 200
+    scaling_factor = torch.nan_to_num(
+        1 / loraks_operator.p_star_p(torch.ones_like(sl_undersampled_k)),
+        nan=0.0, posinf=0.0, neginf=0.0
+    )
 
-    # introduce rank reduction by multiplication of constant tensor
-    # s_factor = torch.ones(loraks_c_op.nb_size, dtype=torch.float32).to(device)
-    # s_factor[10:] = 0.0
+    s_threshold = torch.ones(nb_size, dtype=torch.float32, device=device)
+    # s_threshold = torch.linspace(0, nb_size, nb_size, dtype=torch.float32, device=device)
+    # s_threshold[rank:] = 0.0
+    k = nn.Parameter(sl_undersampled_k.clone().to(device), requires_grad=True)
 
-    # want to optimize for the rank value too - normalized via sigmoid function to go from 0 to neighborhood size
-    rank_cutoff = torch.tensor([0.2], device=device, requires_grad=True)
-    s_factor = torch.linspace(10, -10, loraks_c_op.nb_size, device=device)
+    optim = TorchOptim.SGD(params=[k], lr=0.2)
 
-    # get scaling factor for back transformation i.e. adjoint operation
-    scaling_factor = torch.reshape(loraks_c_op.p_star_p(torch.ones_like(sl_k)), (size_x, size_y))
-
-    # set some optimization vars
-    max_iter = 5000
-    lambda_data_consistency = 0.8
-    grad_step = 0.1
+    max_iter = 100
+    data_consistency = 0.95
 
     losses = []
-    conv = []
-    conv_counter = 0
     bar = tqdm.trange(max_iter, desc="Optimization")
     for _ in bar:
-        # start = time.time_ns()
-        u, s, vt = torch.linalg.svd(c_matrix, full_matrices=False)
-        # end = time.time_ns()
-        # total = 1e-6 * (end - start)
-        # print(f"total ms: {total:.2f}")
-        rc = torch.nn.Sigmoid()(rank_cutoff)    # get cutoff between 0 and 1
-        s = s * torch.nn.Sigmoid()(s_factor + 10 * rc)
+        # get operator matrix
+        matrix = loraks_operator.operator(k)
 
-        loss_1 = torch.sum(s)
-
-        c_recon_loraks = torch.matmul(
-            torch.matmul(u, torch.diag(s).to(u.dtype)),
+        # do svd
+        # s = torch.linalg.svdvals(matrix)
+        u, s, vt = torch.linalg.svd(matrix, full_matrices=False)
+        # first part of loss
+        # cutoff lower svals via sig function
+        st = s_threshold.clone()
+        st[int(rank.item()):] = 0.0
+        s_r = s * st
+        # loss_1 = torch.sum(torch.pow(s * s_threshold, 1.5))
+        k_recon_loraks = torch.matmul(
+            torch.matmul(u, torch.diag(s_r).to(u.dtype)),
             vt
         )
-        # k_recon_loraks = torch.reshape(loraks_c_op.operator_adjoint(c_recon_loraks), (size_x, size_y)) / scaling_factor
+        # first part of loss
+        # calculate difference to low rank approx
+        loss_1 = torch.linalg.norm(matrix - k_recon_loraks)
 
-        # loss_2 = torch.linalg.norm(k_recon_loraks * sampling_mask - sl_undersampled_k)
-        loss_2 = torch.linalg.norm((c_recon_loraks - c_matrix_init) * m_matrix)
+        # second part, calculate reconstructed k
+        k_recon_loraks = torch.reshape(
+            loraks_operator.operator_adjoint(k_recon_loraks) * scaling_factor, sl_image_recon_us.shape
+        )
+        # take difference to sampled k for samples
+        loss_2 = torch.linalg.norm(k_recon_loraks * sampling_mask[:, :, None] - sl_undersampled_k)
 
-        loss = lambda_data_consistency * loss_2 + (1 - lambda_data_consistency) * loss_1
+        loss = data_consistency * loss_2 + (1 - data_consistency) * loss_1
+
         loss.backward()
+        optim.step()
+        optim.zero_grad()
+
         losses.append(loss.item())
 
-        # grad step
-        with torch.no_grad():
-            c_matrix -= c_matrix.grad * grad_step
-            rank_cutoff -= rank_cutoff.grad * grad_step
-        convergence = torch.sum(torch.abs(c_matrix.grad))
-        c_matrix.grad.zero_()
-        rank_cutoff.grad.zero_()
-
-        conv.append(convergence.item())
-        if convergence < 1e-4:
-            conv_counter += 1
-            if conv_counter > 5:
-                break
-
         bar.postfix = (
-            f"loss 1 : {loss_1.item():.2f} -- loss 2 {loss_2.item():.2f} -- total_loss: {loss.item():.2f} -- "
-            f"convergence: {convergence.item():.2f}, rank: {rc.item() * 29:.2f}, "
+            f"loss 1: {loss_1.item():.2f} -- loss 2: {loss_2.item():.2f} -- total_loss: {loss.item():.2f} -- rank: {rank.item()}"
         )
 
-    k_recon_loraks = torch.nan_to_num(
-        torch.reshape(
-            loraks_c_op.operator_adjoint(c_matrix.detach().clone()).cpu(),
-            (size_x, size_y)
-        ) / scaling_factor,
-        nan=0.0, posinf=0.0, neginf=0.0
-    ).cpu()
-
+    k_recon_loraks = torch.reshape(k.detach(), sl_undersampled_k.shape).cpu()
     recon_image = fft(k_recon_loraks, img_to_k=False, axes=(0, 1))
 
-    fig = go.Figure()
-    fig.add_trace(go.Scattergl(y=losses, name="loss"))
-    fig.add_trace(go.Scattergl(y=conv, name="convergence"))
-    fig.update_layout(title="Loss")
-    file_name = path_fig.joinpath("losses").with_suffix(".html")
-    print(f"saving figure to {file_name}")
-    fig.write_html(file_name.as_posix())
+    idx_c = int(recon_image.shape[-2] / 2)
+    idx_t = int(recon_image.shape[-1] / 2)
 
-    print(s)
-
-    plot_fig(recon_image, path_fig, "image_recon", k_space=False, max_val=max_val)
-    plot_fig(sl_image_recon_us, path_fig, "image_orig_us_fft", k_space=False, max_val=max_val)
-    plot_fig(recon_image - sl_image_recon_us, path_fig, "image difference", k_space=False, max_val=max_val)
-    plot_fig(k_recon_loraks, path_fig, "k_recon", k_space=True)
-    plot_fig(sl_undersampled_k, path_fig, "k_orig", k_space=True)
-
-
-def plot_fig(data_2d, path, name, k_space: bool = False, max_val: float = 1.0):
-    data_2d = torch.abs(data_2d)
-    zmin = 0
-    zmax = max_val
-    if k_space:
-        data_2d = torch.log(data_2d)
-        zmin = -14
-        zmax = 0
-    fig = go.Figure()
-    fig.add_trace(
-        go.Heatmap(
-            z=data_2d.numpy(),
-            # zmin=zmin, zmax=zmax,
-            colorscale="Magma")
+    fig = psub.make_subplots(
+        rows=2, cols=4,
+        specs=[
+            [{}, {}, {}, {}],
+            [{"colspan": 4}, None, None, None]
+        ]
     )
-    fig.update_layout(title=name)
-    file_name = path.joinpath(name).with_suffix(".html")
+    for idx_d, d in enumerate([recon_image, sl_image_recon_us, k_recon_loraks, sl_undersampled_k]):
+        row = 1
+        col = 1 + idx_d
+        d = torch.abs(d[:, :, idx_c, idx_t])
+        if idx_d > 1:
+            zmin = -14
+            zmax = 0
+            d = torch.log(d)
+        else:
+            zmin = 0
+            zmax = max_val
+        fig.add_trace(
+            go.Heatmap(
+                z=d.numpy(),
+                zmin=zmin, zmax=zmax,
+                colorscale="Magma", showscale=False),
+            row=row, col=col
+        )
+        x = fig.data[-1].xaxis
+        fig.update_xaxes(visible=False, row=row, col=col)
+        fig.update_yaxes(visible=False, scaleanchor=x, row=row, col=col)
+
+    fig.add_trace(go.Scattergl(y=losses, name="loss"), row=2, col=1)
+    fig.update_xaxes(title="Iteration", row=2, col=1)
+    fig.update_yaxes(title="Loss", row=2, col=1)
+
+    fig.update_layout(
+        title=f"Results Rank: {rank.item()}, data consistency: {data_consistency:.2f}"
+    )
+    file_name = path_fig.joinpath(f"results_dc{data_consistency:.2f}_r{rank.item()}".replace(".", "p")).with_suffix(".html")
     print(f"saving figure to {file_name}")
     fig.write_html(file_name.as_posix())
+
 
 if __name__ == '__main__':
     main()
