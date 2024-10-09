@@ -21,6 +21,6 @@ def remove_oversampling(data: np.ndarray, data_input_sampled_in_time: bool = Tru
     data = np.moveaxis(data, 0, read_dir)
 
     if data_input_sampled_in_time:
-        # data was in time domain originally, hence we move back
+        # data was originally in time domain originally, hence we move back
         data = fft(input_data=data, img_to_k=False, axes=read_dir)
     return data
