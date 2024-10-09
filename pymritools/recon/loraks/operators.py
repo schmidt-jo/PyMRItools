@@ -53,6 +53,7 @@ class LoraksOperator:
         )
         self.nb_coos_point_symmetric = self.get_point_symmetric_neighborhoods()
         self.nb_coos_linear = self.get_lin_neighborhoods()
+        self.nb_size: int = self.nb_coos_linear.shape[-2]
 
     def operator(self, k_space: torch.tensor) -> torch.tensor:
         """ k-space input in 2d, [xy, ch_t(possibly batched)]"""

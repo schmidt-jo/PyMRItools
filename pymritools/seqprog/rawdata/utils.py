@@ -12,7 +12,7 @@ def remove_oversampling(data: np.ndarray, data_input_sampled_in_time: bool = Tru
 
     if data_input_sampled_in_time:
         # data not in frequency domain, need to transform
-        data = fft(input_data=data, inverse=False, axes=read_dir)
+        data = fft(input_data=data, img_to_k=True, axes=read_dir)
 
     # data in freq domain, do removal
     lower_idx = int((os_factor - 1) / (2 * os_factor) * nx)
@@ -22,5 +22,5 @@ def remove_oversampling(data: np.ndarray, data_input_sampled_in_time: bool = Tru
 
     if data_input_sampled_in_time:
         # data was in time domain originally, hence we move back
-        data = fft(input_data=data, inverse=True, axes=read_dir)
+        data = fft(input_data=data, img_to_k=False, axes=read_dir)
     return data

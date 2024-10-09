@@ -86,7 +86,7 @@ def denoise(settings: DenoiseSettings):
         # if input is k-space data we convert to img space
         # loop over dim slices, batch dim channels
         logging.info(f"fft to image space")
-        input_data = fft(input_data, inverse=False, axes=(0, 1))
+        input_data = fft(input_data, img_to_k=False, axes=(0, 1))
 
     # save max value to rescale later
     # if too high we set it to 1000
@@ -299,11 +299,11 @@ def denoise(settings: DenoiseSettings):
         size_x=nx, size_y=ny, sigma=kernel_size
     )
     data_noise_sm_var = torch.mean(data_noise ** 2, dim=-1)
-    data_noise_sm_var = fft(data_noise_sm_var, inverse=True, axes=(0, 1))
+    data_noise_sm_var = fft(data_noise_sm_var, img_to_k=True, axes=(0, 1))
     if not torch.is_complex(input_data):
         data_noise_sm_var = torch.real(data_noise_sm_var)
     data_noise_sm_var = data_noise_sm_var * window[:, :, None, None]
-    data_noise_sm_var = fft(data_noise_sm_var, inverse=False, axes=(0, 1))
+    data_noise_sm_var = fft(data_noise_sm_var, img_to_k=False, axes=(0, 1))
     if not torch.is_complex(input_data):
         data_noise_sm_var = torch.real(data_noise_sm_var)
 

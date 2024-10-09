@@ -6,15 +6,15 @@ log_module = logging.getLogger(__name__)
 
 def fft(
         input_data: np.ndarray | torch.Tensor,
-        inverse: bool = False, axes: tuple | int = (-1, -2)):
+        img_to_k: bool = False, axes: tuple | int = (-1, -2)):
     """
-    from image space to k-space: inverse - False
+    from image space to k-space:  - False
     """
     if isinstance(axes, int):
         # make tuple
         axes = (axes,)
     if torch.is_tensor(input_data):
-        if inverse:
+        if img_to_k:
             func = torch.fft.ifftn
         else:
             func = torch.fft.fftn
@@ -29,7 +29,7 @@ def fft(
             dim=axes
         )
     else:
-        if inverse:
+        if img_to_k:
             func = np.fft.ifftn
         else:
             func = np.fft.fftn
