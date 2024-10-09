@@ -58,7 +58,7 @@ def rd_to_torch(config: RD):
 
     if config.visualize:
         # transform into image
-        img = fft(k_space, img_to_k=True, axes=(0, 1))
+        img = fft(k_space, img_to_k=False, axes=(0, 1))
         # do rSoS
         img = root_sum_of_squares(img, dim_channel=-2)
         # niftii save
