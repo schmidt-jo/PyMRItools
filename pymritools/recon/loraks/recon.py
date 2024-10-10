@@ -2,17 +2,18 @@ import logging
 import pathlib as plib
 
 import torch
-from torch.onnx.symbolic_opset9 import logit
+import plotly.graph_objects as go
 
 from pymritools.config.recon import PyLoraksConfig
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.utils import torch_load
+from pymritools.utils import torch_save, torch_load, root_sum_of_squares, nifti_save, fft
 from pymritools.processing.coil_compression import compress_channels
+from pymritools.recon.loraks.ac_loraks import ACLoraks
 
 log_module = logging.getLogger(__name__)
 
 
-def setup_data(settings: PyLoraksConfig):
+def load_data(settings: PyLoraksConfig):
     logging.debug("Load data")
     k_space = torch_load(settings.in_k_space)
     affine = torch_load(settings.in_affine)
@@ -90,31 +91,34 @@ def recon(settings: PyLoraksConfig):
     else:
         device = torch.device("cpu")
     torch.manual_seed(0)
-
-    k_space, f_indexes, affine = setup_data(settings=settings)
+    
+    # load data
+    k_space, f_indexes, affine = load_data(settings=settings)
 
     log_module.info(f"___ Loraks Reconstruction ___")
     log_module.info(f"{settings.flavour}; Radius - {settings.radius}; ")
     log_module.info(
-        f"Rank C - {settings.rank_c}; Lambda C - {settings.lambda_c}; Rank S - {settings.rank_s}; Lambda S - {settings.lambda_s}; "
-                 f"coil compression - {opts.coil_compression}")
+        f"Rank C - {settings.c_rank}; Lambda C - {settings.c_lambda}; "
+        f"Rank S - {settings.s_rank}; Lambda S - {settings.s_lambda}; "
+        f"coil compression - {settings.coil_compression}")
 
-    loraks_name = f"loraks_k_space_recon_r-{opts.radius}"
-    if opts.lambda_c > 1e-6:
-        loraks_name = f"{loraks_name}_lc-{opts.lambda_c:.3f}_rank-c-{opts.rank_c}"
-    if opts.lambda_s > 1e-6:
-        loraks_name = f"{loraks_name}_ls-{opts.lambda_s:.3f}_rank-s-{opts.rank_s}"
+    # set up name
+    loraks_name = f"loraks_k_space_recon_r-{settings.radius}"
+    if settings.c_lambda > 1e-6:
+        loraks_name = f"{loraks_name}_lc-{settings.c_lambda:.3f}_rank-c-{settings.c_rank}"
+    if settings.s_lambda > 1e-6:
+        loraks_name = f"{loraks_name}_ls-{settings.s_lambda:.3f}_rank-s-{settings.s_rank}"
     loraks_name = loraks_name.replace(".", "p")
 
     # recon sos and phase coil combination
-    solver = algorithm.ACLoraks(
+    solver = ACLoraks(
         k_space_input=k_space, mask_indices_input=f_indexes,
-        radius=opts.radius,
-        rank_c=opts.rank_c, lambda_c=opts.lambda_c,
-        rank_s=opts.rank_s, lambda_s=opts.lambda_s,
-        max_num_iter=opts.max_num_iter, conv_tol=opts.conv_tol,
-        fft_algorithm=False, device=device, fig_path=fig_path,
-        channel_batch_size=opts.batch_size
+        radius=settings.radius,
+        rank_c=settings.c_rank, lambda_c=settings.c_lambda,
+        rank_s=settings.s_rank, lambda_s=settings.s_lambda,
+        max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
+        fft_algorithm=False, device=device, fig_path=path_figs,
+        channel_batch_size=settings.batch_size
     )
     solver.reconstruct()
 
@@ -134,70 +138,45 @@ def recon(settings: PyLoraksConfig):
 
     # get k-space
     loraks_recon = solver.get_k_space()
-    # ToDo implement aspire phase reconstruction
+    # ToDo implement (aspire) phase reconstruction
 
     # switch back
-    if opts.read_dir > 0:
+    if settings.read_dir > 0:
         loraks_recon = torch.swapdims(loraks_recon, 0, 1)
 
-    if opts.process_slice:
+    if settings.process_slice:
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
 
     logging.info(f"Save k-space reconstruction")
-    file_name = out_path.joinpath(loraks_name).with_suffix(".pt")
+    file_name = path_out.joinpath(loraks_name).with_suffix(".pt")
     logging.info(f"write file: {file_name}")
     torch.save(loraks_recon, file_name.as_posix())
 
-    # save recon as nii for now to look at
-    # rSoS k-space-data for looking at it
-    loraks_recon_mag = torch.sqrt(
-        torch.sum(
-            torch.square(
-                torch.abs(loraks_recon)
-            ),
-            dim=-2
-        )
-    )
+    # loraks_phase = torch.angle(loraks_recon)
+    # loraks_phase = torch.mean(loraks_phase, dim=-2)
+    # loraks_mag = torch.abs(loraks_recon)
 
-    loraks_phase = torch.angle(loraks_recon)
-    loraks_phase = torch.mean(loraks_phase, dim=-2)
-
-    loraks_recon_k = loraks_recon_mag * torch.exp(1j * loraks_phase)
-    if opts.process_slice:
+    # loraks_recon_k = loraks_mag * torch.exp(1j * loraks_phase)
+    if settings.process_slice:
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
 
-    utils.save_data(out_path=out_path, name=loraks_name, data=loraks_recon_k, affine=affine)
+    # save data as tensors, for further usage of whole data
+    torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
 
     logging.info("FFT into image space")
     # fft into real space
-    loraks_recon_img = torch.fft.fftshift(
-        torch.fft.fft2(
-            torch.fft.ifftshift(
-                loraks_recon, dim=(0, 1)
-            ),
-            dim=(0, 1)
-        ),
-        dim=(0, 1)
-    )
+    loraks_recon_img = fft(loraks_recon, img_to_k=False, axes=(0, 1))
 
     logging.info("rSoS channels")
     # for nii we rSoS combine channels
-    loraks_recon_mag = torch.sqrt(
-        torch.sum(
-            torch.square(
-                torch.abs(loraks_recon_img)
-            ),
-            dim=-2
-        )
-    )
+    loraks_recon_mag = root_sum_of_squares(input_data=loraks_recon_img, dim_channel=-2)
 
     loraks_phase = torch.angle(loraks_recon_img)
     loraks_phase = torch.mean(loraks_phase, dim=-2)
 
-    loraks_recon_img = loraks_recon_mag * torch.exp(1j * loraks_phase)
-
     nii_name = loraks_name.replace("k_space", "image")
-    utils.save_data(out_path=out_path, name=nii_name, data=loraks_recon_img, affine=affine)
+    nifti_save(data=loraks_recon_mag, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_mag")
+    nifti_save(data=loraks_phase, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_phase")
 
 
 def main():
