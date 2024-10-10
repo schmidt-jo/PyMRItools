@@ -8,11 +8,12 @@ from torch import optim as TorchOptim
 import plotly.graph_objects as go
 import plotly.subplots as psub
 
-from pymritools.config.modeling.b1_afi import log_module
 from pymritools.recon.loraks.recon import recon
 from pymritools.utils.phantom import SheppLogan
 from pymritools.utils import fft, root_sum_of_squares
-from pymritools.recon.loraks import operators
+from pymritools.recon.loraks.algorithm import operators
+
+log_module = logging.getLogger(__name__)
 
 
 def nystrom_method(matrix: torch.Tensor, rank: int, num_samples: int = None, sample_axis: int = 0):
