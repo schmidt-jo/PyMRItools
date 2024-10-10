@@ -5,11 +5,13 @@ we implement a base class which computes and stores those objects upon init
 Jochen Schmidt, 12.03.2024
 """
 import abc
-import torch
 import logging
-from pymritools.recon.loraks import fns_ops
-from .. utils import plotting
 import pathlib as plib
+
+import torch
+
+from pymritools.recon.loraks.algorithm import operators
+
 log_module = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ class Base:
         self.max_num_iter: int = max_num_iter
         self.conv_tol: float = conv_tol
         # neighborhood dim
-        self.dim_nb = fns_ops.get_k_radius_grid_points(self.radius).shape[0]
+        self.dim_nb = operators.get_k_radius_grid_points(self.radius).shape[0]
         # want to set z to first dimension
         self.k_space_dims = k_space_input.shape
         k_space_input = torch.moveaxis(k_space_input, 2, 0)
@@ -77,10 +79,10 @@ class Base:
         # get a dict with residuals and iteration
         self.stats: dict = {}
         # get operator
-        self.op_s: fns_ops.S = fns_ops.get_operator_from_mode(
+        self.op_s: operators.S = operators.get_operator_from_mode(
             mode="s", k_space_dims=self.k_space_dims, radius=self.radius
         )
-        self.op_c: fns_ops.C = fns_ops.get_operator_from_mode(
+        self.op_c: operators.C = operators.get_operator_from_mode(
             mode="c", k_space_dims=self.k_space_dims, radius=self.radius
         )
         # p*p is the same matrix irrespective of channel / time sampling information,
@@ -94,28 +96,28 @@ class Base:
         self.visualize: bool = visualize
         self.fig_path: plib.Path = fig_path
 
-        if self.visualize:
-            log_module.debug(f"Plotting P*P")
-            if self.lambda_c > 1e-6:
-                plotting.plot_slice(
-                    torch.reshape(self.p_star_p_c, (self.dim_read, self.dim_phase)),
-                    name="p_star_p_c", outpath=self.fig_path,
-                )
-            if self.lambda_s > 1e-6:
-                plotting.plot_slice(
-                    torch.reshape(self.p_star_p_s, (self.dim_read, self.dim_phase)),
-                    name="p_star_p_s", outpath=self.fig_path,
-                )
-            log_module.debug(f"Plotting fhf and fhd")
-            for idx_e in range(min(self.dim_echoes, 3)):
-                plotting.plot_slice(
-                    torch.reshape(self.fhf[:, idx_e], (self.dim_read, self.dim_phase)),
-                    f"fhf_e-{idx_e+1}", outpath=self.fig_path
-                )
-                plotting.plot_slice(
-                    torch.reshape(self.fhd[0, :, 0, idx_e], (self.dim_read, self.dim_phase)),
-                    f"fhd_sli-0_ch-0_e-{idx_e+1}", outpath=self.fig_path
-                )
+        # if self.visualize:
+            # log_module.debug(f"Plotting P*P")
+            # if self.lambda_c > 1e-6:
+            #     plotting.plot_slice(
+            #         torch.reshape(self.p_star_p_c, (self.dim_read, self.dim_phase)),
+            #         name="p_star_p_c", outpath=self.fig_path,
+            #     )
+            # if self.lambda_s > 1e-6:
+            #     plotting.plot_slice(
+            #         torch.reshape(self.p_star_p_s, (self.dim_read, self.dim_phase)),
+            #         name="p_star_p_s", outpath=self.fig_path,
+            #     )
+            # log_module.debug(f"Plotting fhf and fhd")
+            # for idx_e in range(min(self.dim_echoes, 3)):
+            #     plotting.plot_slice(
+            #         torch.reshape(self.fhf[:, idx_e], (self.dim_read, self.dim_phase)),
+            #         f"fhf_e-{idx_e+1}", outpath=self.fig_path
+            #     )
+            #     plotting.plot_slice(
+            #         torch.reshape(self.fhd[0, :, 0, idx_e], (self.dim_read, self.dim_phase)),
+            #         f"fhd_sli-0_ch-0_e-{idx_e+1}", outpath=self.fig_path
+            #     )
 
     def reconstruct(self):
         log_module.info(f"start processing")
