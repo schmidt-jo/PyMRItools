@@ -47,7 +47,7 @@ def torch_save(
     file_path = set_save_path(path_to_file, file_name, suffix=".pt")
     torch.save(data, file_path.as_posix())
 
-def torch_load(path_to_file: str | plib.Path) -> np.ndarray:
+def torch_load(path_to_file: str | plib.Path) -> torch.Tensor:
     path_to_file = set_load_path(path_to_file, suffix=".pt")
     return torch.load(path_to_file)
 
