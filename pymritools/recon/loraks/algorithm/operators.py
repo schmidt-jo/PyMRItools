@@ -167,7 +167,7 @@ class C(LoraksOperator):
         :return: flattened k-space vector
         """
         # build indices
-        p_nb_nx_ny_idxs = self.get_lin_neighborhoods()
+        p_nb_nx_ny_idxs = self.nb_coos_linear
         if x_matrix.shape[0] < x_matrix.shape[1]:
             # want neighborhood dim to be in column
             x_matrix = x_matrix.T
