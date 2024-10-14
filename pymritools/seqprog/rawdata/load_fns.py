@@ -119,14 +119,18 @@ def get_affine(
     # the normal vector, if starting from the e_z basis
     # for this we calculate the vector perpendicular to e_z and the normal vector and the angle between them
     # around which we need to rotate
-    normal_perp = np.cross(np.array([0, 0, 1]), normal_vec)
-    perp_norm = np.linalg.norm(normal_perp)
-    # since both vectors are normalized to 1, we get the angle from the sin
-    perp_rot_angle = np.arcsin(perp_norm)
-    # normalize the rotation vector
-    normal_perp = np.abs(normal_perp / perp_norm)
-    # we get the rotation matrix
-    perp_rot_mat = Rotation.from_rotvec(perp_rot_angle * normal_perp)
+    if np.linalg.norm(normal_vec - np.array([0, 0, 1])) > 1e-5:
+        normal_perp = np.cross(np.array([0, 0, 1]), normal_vec)
+        perp_norm = np.linalg.norm(normal_perp)
+        # since both vectors are normalized to 1, we get the angle from the sin
+        perp_rot_angle = np.arcsin(perp_norm)
+        # normalize the rotation vector
+        normal_perp = np.abs(normal_perp / perp_norm)
+        # we get the rotation matrix
+        perp_rot_mat = Rotation.from_rotvec(perp_rot_angle * normal_perp)
+    else:
+        # just identity matrix
+        perp_rot_mat = Rotation.from_matrix(np.eye(3))
     # apply rotation to voxel origin vector
     voxel_offset = (inp_rot_mat * perp_rot_mat).apply(voxel_offset)
     # add both offsets
@@ -234,6 +238,12 @@ def load_pulseq_rd(
         sampled_echo_numbers[:, None]
         ] = np.moveaxis(data, -2, -1)
 
+        # sampling equal for all slice numbers, we can reduce to one of the slices
+        sampled_mask_vals = sampled_lines.filter(pl.col("slice_number") == 0)
+        sampled_mask_pe = sampled_mask_vals["phase_encode_number"].to_numpy()
+        sampled_mask_echoes = sampled_mask_vals["echo_number"].to_numpy()
+        k_sampling_mask[sampling_idxs[:, None], sampled_mask_pe[None, :], sampled_mask_echoes[None, :]] = True
+
     log_module.info(f"Finished extracting all acquisitions!")
 
     # remove oversampling
@@ -274,6 +284,7 @@ def load_pulseq_rd(
         k_sampling_mask = np.swapaxes(k_sampling_mask, 0, 1)
         voxel_dims = voxel_dims[[1, 0, 2]]
         fov = fov[[1, 0, 2]]
+
     # get affine
     aff = get_affine(
         geometry,
@@ -281,8 +292,10 @@ def load_pulseq_rd(
         fov_mm=fov,
         slice_gap_mm=gap
     )
+
     return k_space, k_sampling_mask, aff
 
 
 def load_siemens_rd():
-    pass
+    log_module.error(f"Siemens raw data extraction not yet implemented!")
+    return None, None, None
