@@ -124,10 +124,10 @@ def main():
     # sl_undersampled_k = sl_undersampled_k[:, :, int(sl_undersampled_k.shape[2] / 2)]
     sl_image_recon_us = torch.abs(fft(sl_undersampled_k, img_to_k=False, axes=(0, 1)))
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda:0")
-    else:
-        device = torch.device("cpu")
+    # if torch.cuda.is_available():
+    #     device = torch.device("cuda:0")
+    # else:
+    device = torch.device("cpu")
     log_module.info(f"using device: {device}")
 
     # setup operator
@@ -148,9 +148,10 @@ def main():
     s_threshold = torch.ones(nb_size, dtype=torch.float32, device=device)
     # s_threshold = torch.linspace(0, nb_size, nb_size, dtype=torch.float32, device=device)
     # s_threshold[rank:] = 0.0
-    k = nn.Parameter(sl_undersampled_k.clone().to(device), requires_grad=True)
+    # k = nn.Parameter(sl_undersampled_k.clone().to(device), requires_grad=True)
+    k = sl_undersampled_k.clone().to(device).requires_grad_(True)
 
-    optim = TorchOptim.SGD(params=[k], lr=0.1)
+    # optim = TorchOptim.SGD(params=[k], lr=0.1)
 
     max_iter = 50
     data_consistency = 0.95
@@ -194,9 +195,17 @@ def main():
         loss = data_consistency * loss_2 + (1 - data_consistency) * loss_1
 
         loss.backward()
-        optim.step()
-        optim.zero_grad()
 
+        with torch.no_grad():
+            # gu, gs, gv = torch.linalg.svd(torch.squeeze(k.grad), full_matrices=False)
+            # # want to step along svd axis
+            # gs[10:] = 0.0
+            # p_grad = torch.matmul(torch.matmul(gu, torch.diag(gs).to(gu.dtype)), gv)
+            k -= k.grad * 0.4
+
+        k.grad.zero_()
+        # optim.step()
+        # optim.zero_grad()
         losses.append(loss.item())
 
         bar.postfix = (
