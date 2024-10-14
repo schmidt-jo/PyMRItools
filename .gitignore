@@ -82,3 +82,4 @@ cython_debug/
 /.idea/
 /src/
 /resources/specs/
+/examples/raw_data/rd_file/
