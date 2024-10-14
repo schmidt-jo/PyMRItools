@@ -32,7 +32,7 @@ torch = {version = "2.4.1", source = "torch"}
 polars = "1.8.2"
 kaleido = "0.2.1"
 scipy = "1.14.1"
-numpy = "1.24.2"
+numpy = "2.0.0"
 plotly = "5.16.1"
 simple-parsing = "0.1.6"
 tqdm = "4.66.5"
