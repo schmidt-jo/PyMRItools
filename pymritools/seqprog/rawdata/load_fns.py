@@ -256,21 +256,20 @@ def load_pulseq_rd(
 
     # remove oversampling, use gpu if set
     k_space = remove_oversampling(
-        data=torch.from_numpy(k_space).to(device), data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+        data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
     )
 
     # fft bandpass filter for oversampling removal not consistent
     # with undersampled in the 0 filled regions data, remove artifacts
-    k_space *= torch.from_numpy(k_sampling_mask[:, :, None, None, :]).to(device)
+    k_space *= k_sampling_mask[:, :, None, None, :]
 
     # decorrelate channels
     if noise_scans is not None:
-        in_noise = torch.from_numpy(noise_scans).to(device)
-        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=torch.swapdims(in_noise, -2, -1))
-        k_space = torch.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv)
+        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
+        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv)
 
     # correct gradient directions - at the moment we have reversed z dir
-    k_space = np.flip(k_space.cpu().numpy(), axis=2)
+    k_space = np.flip(k_space, axis=2)
 
     # # scale values
     # ks_max = np.max(np.abs(k_space))

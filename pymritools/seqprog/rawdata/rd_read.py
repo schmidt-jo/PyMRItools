@@ -73,7 +73,7 @@ def rd_to_torch(config: RD):
         img = root_sum_of_squares(img, dim_channel=-2)
         # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
-        nifti_save(data=k_sampling_mask, img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
+        nifti_save(data=k_sampling_mask.astype(int), img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
 
 
 def main():
