@@ -25,7 +25,7 @@ class Settings(BaseClass):
     )
     # vars
     coil_compression: int = field(
-        alias="-cc", default=None,
+        alias="-cc", default=32,
         help=f"Specify coil compression for multi channel data. Default working mode is "
              f"Joint-Echo-Channel reconstruction, which can lead to memory problems. "
              f"Compression can help in those cases."
