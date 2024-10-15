@@ -59,7 +59,7 @@ class MEGESSE(Sequence2D):
         # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
         # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
         # accounting for ramp area
-        ramp_area = np.trapz(
+        ramp_area = np.trapezoid(
             x=self.block_refocus_1.grad_slice.t_array_s[:2],
             y=self.block_refocus_1.grad_slice.amplitude[:2]
         )
@@ -87,13 +87,13 @@ class MEGESSE(Sequence2D):
         self._mod_block_prewind_echo_read(self.block_refocus)
 
         # plot files for visualization
-        if self.params.visualize:
-            self.block_excitation.plot(path=self.interface.config.output_path, name="excitation")
-            self.block_refocus_1.plot(path=self.interface.config.output_path, name="refocus-1")
-            self.block_refocus.plot(path=self.interface.config.output_path, name="refocus")
-            # self.block_pf_acquisition.plot(path=self.interface.config.output_path, name="partial-fourier-acqusisition")
-            self.block_bu_acq.plot(path=self.interface.config.output_path, name="bu-acquisition")
-            self.block_bd_acq.plot(path=self.interface.config.output_path, name="bd-acquisition")
+        if self.config.visualize:
+            self.block_excitation.plot(path=self.path_figs, name="excitation")
+            self.block_refocus_1.plot(path=self.path_figs, name="refocus-1")
+            self.block_refocus.plot(path=self.path_figs, name="refocus")
+            # self.block_pf_acquisition.plot(path=self.path_figs, name="partial-fourier-acqusisition")
+            self.block_bu_acq.plot(path=self.path_figs, name="bu-acquisition")
+            self.block_bd_acq.plot(path=self.path_figs, name="bd-acquisition")
 
         # register all slice select kernel pulse gradients
         self.kernel_pulses_slice_select = [self.block_excitation, self.block_refocus_1, self.block_refocus]
@@ -128,15 +128,16 @@ class MEGESSE(Sequence2D):
 
     # emc
     def _fill_emc_info(self):
-        t_rephase = (self.block_excitation.get_duration() -
-                     (self.block_excitation.rf.t_duration_s + self.block_excitation.rf.t_delay_s))
-        amp_rephase = self.block_excitation.grad_slice.area[-1] / t_rephase
-        self.interface.emc.gradient_excitation_rephase = self._set_grad_for_emc(amp_rephase)
-        self.interface.emc.duration_excitation_rephase = t_rephase * 1e6
+        # t_rephase = (self.block_excitation.get_duration() -
+        #              (self.block_excitation.rf.t_duration_s + self.block_excitation.rf.t_delay_s))
+        # amp_rephase = self.block_excitation.grad_slice.area[-1] / t_rephase
+        # self.interface.emc.gradient_excitation_rephase = self._set_grad_for_emc(amp_rephase)
+        # self.interface.emc.duration_excitation_rephase = t_rephase * 1e6
+        pass
 
     def _mod_spoiling_end(self):
         # want to enable complete refocusing of read gradient when spoiling factor -0.5 is chosen in opts
-        readout_area = np.trapz(
+        readout_area = np.trapezoid(
             x=self.block_bd_acq.grad_read.t_array_s,
             y=self.block_bd_acq.grad_read.amplitude
         )
@@ -296,10 +297,10 @@ class MEGESSE(Sequence2D):
         if no_adc:
             # bu readout
             aq_block_bu = self.block_bu_acq.copy()
-            aq_block_bu.adc = events.ADC()
+            aq_block_bu.adc = ADC()
             # bd readout
             aq_block_bd = self.block_bd_acq.copy()
-            aq_block_bd.adc = events.ADC()
+            aq_block_bd.adc = ADC()
         else:
             aq_block_bu = self.block_bu_acq
             aq_block_bd = self.block_bd_acq
@@ -314,11 +315,11 @@ class MEGESSE(Sequence2D):
         for num_readout in range(self.num_e_per_rf):
             if int(num_readout % 2) == 0:
                 # add bu sampling
-                self.pp_seq.add_block(*aq_block_bu.list_events_to_ns())
+                self.sequence.add_block(*aq_block_bu.list_events_to_ns())
                 id_acq = self.id_bu_acq
             else:
                 # add bd sampling
-                self.pp_seq.add_block(*aq_block_bd.list_events_to_ns())
+                self.sequence.add_block(*aq_block_bd.list_events_to_ns())
                 id_acq = self.id_bd_acq
             if not no_adc:
                 # write sampling pattern
@@ -337,11 +338,11 @@ class MEGESSE(Sequence2D):
 
             # -- excitation --
             # add block
-            self.pp_seq.add_block(*self.block_excitation.list_events_to_ns())
+            self.sequence.add_block(*self.block_excitation.list_events_to_ns())
 
             # delay if necessary
             if self.t_delay_exc_ref1.get_duration() > 1e-7:
-                self.pp_seq.add_block(self.t_delay_exc_ref1.to_simple_ns())
+                self.sequence.add_block(self.t_delay_exc_ref1.to_simple_ns())
 
             # -- first refocus --
             # set flip angle from param list
@@ -349,11 +350,11 @@ class MEGESSE(Sequence2D):
             # looping through slices per phase encode, set phase encode for ref 1
             self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0)
             # add block
-            self.pp_seq.add_block(*self.block_refocus_1.list_events_to_ns())
+            self.sequence.add_block(*self.block_refocus_1.list_events_to_ns())
 
             # delay if necessary
             if self.t_delay_ref1_se1.get_duration() > 1e-7:
-                self.pp_seq.add_block(self.t_delay_ref1_se1.to_simple_ns())
+                self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
 
             # add bu and bd samplings
             self._add_gesse_readouts(
@@ -368,7 +369,7 @@ class MEGESSE(Sequence2D):
                 # looping through slices per phase encode, set phase encode for ref 1
                 self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx)
                 # refocus
-                self.pp_seq.add_block(*self.block_refocus.list_events_to_ns())
+                self.sequence.add_block(*self.block_refocus.list_events_to_ns())
 
                 self._add_gesse_readouts(
                     idx_pe_loop=idx_pe_n, idx_slice_loop=idx_slice,
@@ -378,9 +379,9 @@ class MEGESSE(Sequence2D):
             # set phase encode of final spoiling grad
             self._set_end_spoil_phase_grad()
             # end with spoiling
-            self.pp_seq.add_block(*self.block_spoil_end.list_events_to_ns())
+            self.sequence.add_block(*self.block_spoil_end.list_events_to_ns())
             # set slice delay
-            self.pp_seq.add_block(self.delay_slice.to_simple_ns())
+            self.sequence.add_block(self.delay_slice.to_simple_ns())
 
     def _loop_lines(self):
         # through phase encodes
@@ -398,7 +399,7 @@ class MEGESSE(Sequence2D):
         factor = np.array([0.5, 1.0, 0.5])
 
         # get phase moment of last phase encode
-        pe_last_area = np.trapz(
+        pe_last_area = np.trapezoid(
             x=self.block_refocus.grad_phase.t_array_s[-4:],
             y=self.block_refocus.grad_phase.amplitude[-4:]
         )
@@ -419,7 +420,7 @@ def main():
     megesse = MEGESSE(config=config, specs=specs, params=params)
     # run prog
     try:
-        build(config=config, sequence=megesse)
+        build(config=config, sequence=megesse, name="megesse")
     except Exception as e:
         parser.print_help()
         log_module.exception(e)

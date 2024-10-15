@@ -375,7 +375,7 @@ class GRAD(Event):
                 log_module.error(f"pre-phase / spoil pre -- slice select not optimized for opposite sign grads")
                 # we can adopt here also with doubling the ramp times in case we have opposite signs
 
-            # (1) check if ramp to amplitude exceeds set area if using maximum slew
+            # (1) check if ramp to amplitude exceeds set area if using maximum slew, i.e. smallest possible area
             grad_instance._calc_check_single_ramp_area_vs_set_area(
                 area=pre_moment, amplitude=amplitude, identifier="pre-phasing / pre-spoil"
             )
@@ -423,7 +423,7 @@ class GRAD(Event):
             )
             times.append(times[-1] + duration_pre_grad)
             amps.append(amplitude)
-            areas.append(np.trapz(x=times, y=amps))
+            areas.append(np.trapezoid(x=times, y=amps))
 
         # flat part of slice select gradient. an rf would start here, hence save delay
         delay = times[-1] + rf_raster_delay
@@ -441,7 +441,7 @@ class GRAD(Event):
             # very specific requirement jstmc sequence. adjust for ramp up of next slice selective gradient
             re_spoil_moment -= adjust_ramp_area
             areas.append(re_spoil_moment)
-            # (1) check if ramp to amplitude exceeds set area if using maximum slew
+            # (1) check if ramp to amplitude exceeds set area if using maximum slew, i.e. smallest possible area
             grad_instance._calc_check_single_ramp_area_vs_set_area(
                 area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
             )

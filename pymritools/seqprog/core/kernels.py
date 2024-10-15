@@ -4,18 +4,17 @@ import pathlib as plib
 
 from . import events
 from pymritools.config.seqprog import PulseqParameters2D
-
 import numpy as np
-import pypulseq as pp
 import logging
 
+from pypulseq import Opts
 import plotly.subplots as psub
 import plotly.graph_objects as go
 
 log_module = logging.getLogger(__name__)
 
 
-def set_on_grad_raster_time(system: pp.Opts, time: float):
+def set_on_grad_raster_time(system: Opts, time: float):
     return np.ceil(time / system.grad_raster_time) * system.grad_raster_time
 
 
@@ -26,7 +25,7 @@ class Kernel:
     """
 
     def __init__(
-            self, system: pp.Opts = pp.Opts(),
+            self, system: Opts = Opts(),
             rf: events.RF = events.RF(),
             grad_read: events.GRAD = events.GRAD(),
             grad_phase: events.GRAD = events.GRAD(),
@@ -93,10 +92,10 @@ class Kernel:
         grad_areas_for_t_adc = np.zeros(self.adc.num_samples)
 
         # calculate gradient area til first sample, including prephasing area
-        grad_areas_for_t_adc[0] = pre_read_area + np.trapz(x=t_pre_adc_grad, y=grad_amp_pre_adc)
+        grad_areas_for_t_adc[0] = pre_read_area + np.trapezoid(x=t_pre_adc_grad, y=grad_amp_pre_adc)
         # calculate gradient area for each sample iteratively, adding to the previous
         for amp_idx in np.arange(1, grad_areas_for_t_adc.shape[0]):
-            grad_areas_for_t_adc[amp_idx] = grad_areas_for_t_adc[amp_idx - 1] + np.trapz(
+            grad_areas_for_t_adc[amp_idx] = grad_areas_for_t_adc[amp_idx - 1] + np.trapezoid(
                 grad_amp_adc_sampling[amp_idx - 1: amp_idx + 1], dx=self.adc.t_dwell_s
             )
         # calculate k-positions
@@ -104,7 +103,7 @@ class Kernel:
         return k_pos
 
     @classmethod
-    def excitation_slice_sel(cls, params: PulseqParameters2D, system: pp.Opts,
+    def excitation_slice_sel(cls, params: PulseqParameters2D, system: Opts,
                              pulse_file: str = "",
                              use_slice_spoiling: bool = True, adjust_ramp_area: float = 0.0):
         # Excitation
@@ -158,7 +157,7 @@ class Kernel:
         return cls(rf=rf, grad_slice=grad_slice)
 
     @classmethod
-    def refocus_slice_sel_spoil(cls, params: PulseqParameters2D, system: pp.Opts,
+    def refocus_slice_sel_spoil(cls, params: PulseqParameters2D, system: Opts,
                                 pulse_file: str = "",
                                 pulse_num: int = 0, duration_spoiler: float = 0.0, return_pe_time: bool = False,
                                 read_gradient_to_prephase: float = None):
@@ -277,7 +276,7 @@ class Kernel:
             return _instance
 
     @classmethod
-    def acquisition_fs(cls, params: PulseqParameters2D, system: pp.Opts,
+    def acquisition_fs(cls, params: PulseqParameters2D, system: Opts,
                        invert_grad_read_dir: bool = False):
         # block : adc + read grad
         log_module.info("setup acquisition")
@@ -344,7 +343,7 @@ class Kernel:
         return cls(adc=adc, grad_read=grad_read)
 
     @classmethod
-    def acquisition_fid_nav(cls, params: PulseqParameters2D, system: pp.Opts,
+    def acquisition_fid_nav(cls, params: PulseqParameters2D, system: Opts,
                             line_num: int, reso_degrading: float = 1 / 6):
         if line_num == 0:
             log_module.info("setup FID Navigator")
@@ -390,7 +389,7 @@ class Kernel:
         return cls(adc=adc, grad_read=grad_read, grad_phase=grad_phase)
 
     @classmethod
-    def acquisition_pf_undersampled(cls, params: PulseqParameters2D, system: pp.Opts):
+    def acquisition_pf_undersampled(cls, params: PulseqParameters2D, system: Opts):
         # block : adc + read grad
         log_module.info("setup acquisition w undersampling partial fourier read")
         pf_factor = 0.75
@@ -438,14 +437,14 @@ class Kernel:
             xp=grad_read_fs.t_array_s,
             fp=grad_read_fs.amplitude
         )
-        area_post_read = np.trapz(x=times, y=amps)
+        area_post_read = np.trapezoid(x=times, y=amps)
 
         if adc.t_delay_s < system.adc_dead_time:
             warn = f"adc delay will be bigger than set, due to system dead time constraints"
             log_module.warning(warn)
         # sanity check
         grad_area = grad_read_fs.area
-        if np.abs(np.trapz(x=grad_read_fs.t_array_s, y=grad_read_fs.amplitude) - grad_area) > 1e-9:
+        if np.abs(np.trapezoid(x=grad_read_fs.t_array_s, y=grad_read_fs.amplitude) - grad_area) > 1e-9:
             logging.error(f"pf read gradient area calculation error")
         if np.abs(grad_area - area_pre_read - area_post_read) > 1e-9:
             logging.error(f"gradient 0th echo rewind calculation error")
@@ -458,7 +457,7 @@ class Kernel:
         return acq_block, area_pre_read
 
     @classmethod
-    def acquisition_sym_undersampled(cls, params: PulseqParameters2D, system: pp.Opts,
+    def acquisition_sym_undersampled(cls, params: PulseqParameters2D, system: Opts,
                                      invert_grad_dir: bool = False, asym_accelerated: bool = False):
         log_module.info("setup acquisition w undersampling")
         # calculate maximum acc factor -> want to keep snr -> ie bandwidth ie dwell equal and stretch read grad
@@ -566,9 +565,9 @@ class Kernel:
                 2 * ramp_time + 2 * flat_time_us + 2 * ramp_time_between + flat_time_fs,
             ])
             grad_read.area = np.array([
-                np.trapz(y=grad_read.amplitude[:4], x=grad_read.t_array_s[:4]),
+                np.trapezoid(y=grad_read.amplitude[:4], x=grad_read.t_array_s[:4]),
                 flat_time_fs * grad_amp_fs,
-                np.trapz(y=grad_read.amplitude[4:], x=grad_read.t_array_s[4:]),
+                np.trapezoid(y=grad_read.amplitude[4:], x=grad_read.t_array_s[4:]),
             ])
             grad_read.flat_area = np.array([
                 grad_amp_us * flat_time_us,
@@ -609,7 +608,7 @@ class Kernel:
         return acq, acc_max
 
     @classmethod
-    def spoil_all_grads(cls, params: PulseqParameters2D, system: pp.Opts):
+    def spoil_all_grads(cls, params: PulseqParameters2D, system: Opts):
         grad_read = events.GRAD.make_trapezoid(
             channel=params.read_dir, system=system,
             flat_area=params.delta_k_read * params.resolution_n_read,
@@ -655,152 +654,87 @@ class Kernel:
         return cls(system=system, grad_slice=grad_slice, grad_phase=grad_phase, grad_read=grad_read_spoil)
 
     def plot(self, path: typing.Union[str, plib.Path], name: str = "", file_suffix: str = "png"):
-        pass
-        # # build dataframe
-        # # columns - index, facet, ampl_1, ampl_2, ampl_3, time
-        # # plot rf abs(1) phase(2) + or adc on one facet, plot grads on one facet
-        # arr_facet = []
-        # arr_time = np.zeros(0)
-        # amplitude = np.zeros(0)
-        # ev_type = []
-        #
-        # # rf
-        # rf_toggle = False
-        # if self.rf.get_duration() > 0:
-        #     rf_toggle = True
-        #     # get time
-        #     times = np.zeros(int(1e6 * self.rf.t_duration_s) + 3)
-        #     times[1:-1] = int(self.rf.t_delay_s * 1e6) - 0.1
-        #     times[2:-1] = times[1] + 0.1 + np.arange(1e6 * self.rf.t_duration_s).astype(int)
-        #     times[-1] = times[-2] + 1
-        #     # get signals
-        #     # amplitude
-        #     abs = np.zeros_like(times)
-        #     abs[2:-1] = np.abs(self.rf.signal)
-        #     abs /= np.max(abs)
-        #     # add
-        #     arr_time = np.concatenate((arr_time, times), axis=0)
-        #     amplitude = np.concatenate((amplitude, abs), axis=0)
-        #     ev_type += ["rf amplitude"] * times.shape[0]
-        #     arr_facet += ["rf / adc"] * times.shape[0]
-        #     # phase
-        #     phase = np.zeros_like(times)
-        #     phase[2:-1] = np.angle(self.rf.signal) / np.pi
-        #     phase[abs > 1e-7] += self.rf.phase_rad / np.pi
-        #     # add
-        #     arr_time = np.concatenate((arr_time, times), axis=0)
-        #     amplitude = np.concatenate((amplitude, phase), axis=0)
-        #     ev_type += ["rf phase"] * times.shape[0]
-        #     arr_facet += ["rf / adc"] * times.shape[0]
-        #
-        # # grad slice
-        # if self.grad_slice.get_duration() > 0:
-        #     times = (np.array([0, self.grad_slice.t_delay_s - 1e-6,
-        #                        *(self.grad_slice.t_delay_s + self.grad_slice.t_array_s)]) * 1e6).astype(int)
-        #     amp = np.zeros_like(times)
-        #     amp[2:] = self.grad_slice.amplitude * 1e3 / 42577478.518
-        #     # add
-        #     arr_time = np.concatenate((arr_time, times), axis=0)
-        #     amplitude = np.concatenate((amplitude, amp), axis=0)
-        #     ev_type += ["grad slice"] * times.shape[0]
-        #     arr_facet += ["grads"] * times.shape[0]
-        #
-        # # grad read
-        # if self.grad_read.get_duration() > 0:
-        #     times = (np.array([0, self.grad_read.t_delay_s - 1e-6,
-        #                        *(self.grad_read.t_delay_s + self.grad_read.t_array_s)]) * 1e6).astype(int)
-        #     amp = np.zeros_like(times)
-        #     amp[2:] = self.grad_read.amplitude * 1e3 / 42577478.518
-        #     # add
-        #     arr_time = np.concatenate((arr_time, times), axis=0)
-        #     amplitude = np.concatenate((amplitude, amp), axis=0)
-        #     ev_type += ["grad read"] * times.shape[0]
-        #     arr_facet += ["grads"] * times.shape[0]
-        #
-        # # grad phase
-        # if self.grad_phase.get_duration() > 0:
-        #     times = (np.array([0, self.grad_phase.t_delay_s - 1e-6,
-        #                        *(self.grad_phase.t_delay_s + self.grad_phase.t_array_s)]) * 1e6).astype(int)
-        #     amp = np.zeros_like(times)
-        #     amp[2:] = self.grad_phase.amplitude * 1e3 / 42577478.518
-        #     # add
-        #     arr_time = np.concatenate((arr_time, times), axis=0)
-        #     amplitude = np.concatenate((amplitude, amp), axis=0)
-        #     ev_type += ["grad phase"] * times.shape[0]
-        #     arr_facet += ["grads"] * times.shape[0]
-        #
-        # # adc
-        # if self.adc.get_duration() > 0:
-        #     times = (
-        #             np.array([
-        #                 0,
-        #                 self.adc.t_delay_s - 1e-9,
-        #                 self.adc.t_delay_s + 1e-9,
-        #                 self.adc.t_delay_s + self.adc.t_duration_s - 1e-9,
-        #                 self.adc.t_delay_s + self.adc.t_duration_s + 1e-9,
-        #                 self.adc.get_duration() - 1e-9,
-        #                 self.adc.get_duration() + 1e-9
-        #             ]) * 1e6
-        #     ).astype(int)
-        #     amp = np.array([0, 0, 1, 1, 0.25, 0.2, 0])
-        #     # we sketch dead time here
-        #     # add
-        #     arr_time = np.concatenate((arr_time, times), axis=0)
-        #     amplitude = np.concatenate((amplitude, amp), axis=0)
-        #     ev_type += ["adc"] * times.shape[0]
-        #     arr_facet += ["rf / adc"] * times.shape[0]
-        #
-        # df = pd.DataFrame({"facet": arr_facet, "time": arr_time, "amplitude": amplitude, "type": ev_type})
-        #
-        # if rf_toggle:
-        #     fig = px.line(df, x="time", y="amplitude", color="type", facet_row="facet", labels={
-        #         "time": "Time [\u00B5s]", "facet": ""
-        #     }, title=name)
-        #     fig.update_yaxes(matches=None)
-        #     fig.update_layout({
-        #         "yaxis2": {"title": "RF Amplitude [A.U.] + Phase [\u03C0]"},
-        #         "yaxis": {"title": "Gradient Amplitude [mT/m]"}
-        #     })
-        #     for annotation in fig.layout.annotations:
-        #         annotation["text"] = ""
-        # else:
-        #     # Create figure with secondary y-axis
-        #     fig = psub.make_subplots(specs=[[{"secondary_y": True}]])
-        #
-        #     # Add traces
-        #     p_df = df[df["facet"] == "rf / adc"]
-        #     fig.add_trace(
-        #         go.Scattergl(x=p_df["time"], y=p_df["amplitude"], name="adc", fill="tozeroy", opacity=0.6),
-        #         secondary_y=False,
-        #     )
-        #     # Add traces
-        #     p_df = df[df["facet"] == "grads"]
-        #     for dat in px.line(p_df, x="time", y="amplitude", color="type").data:
-        #         fig.add_trace(
-        #             dat,
-        #             secondary_y=True,
-        #         )
-        #     # if pf acquisition
-        #     if hasattr(self, "t_mid"):
-        #         fig.add_vline(x=1e6 * self.t_mid, line_dash="dash", line_color="red",
-        #                       annotation_text="k-space-read-center", annotation_position="top left")
-        #     # color cycle (maximally adc + 3 grads) - purple, cyan, orange, lime
-        #     colors = ["#5c15ad", "#1fdeab", "#de681f", "#de681f"]
-        #     for idx_data in range(fig.data.__len__()):
-        #         fig.data[idx_data]["line"].color = colors[idx_data]
-        #     # Add figure title
-        #     fig.update_layout(title_text=name)
-        #     # Set axes titles
-        #     fig.update_yaxes(title_text="ADV on/off", secondary_y=False, range=[0, 2],
-        #                      tickmode="array", tickvals=[0, 1, 2], ticktext=["Off", "On", ""])
-        #     fig.update_yaxes(title_text="Gradient Amplitude [mT/m]", secondary_y=True)
-        #     fig.update_xaxes(title_text="Time [\u00B5s]")
-        # fig.update_layout(width=900, height=600)
-        # fig_path = plib.Path(path).absolute().joinpath("plots/")
-        # fig_path.mkdir(parents=True, exist_ok=True)
-        # fig_path = fig_path.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
-        # log_module.info(f"writing file: {fig_path.as_posix()}")
-        # if file_suffix in ["png", "pdf"]:
-        #     fig.write_image(fig_path.as_posix())
-        # else:
-        #     fig.write_html(fig_path.as_posix())
+        # want to capture all different event data and plot
+        fig = psub.make_subplots(
+             specs=[[{"secondary_y": True}]]
+        )
+        max_secondary = 0
+        max_primary = 0
+        adc_no_rf = False
+
+        for idx_e, e in enumerate(self.list_events()):
+            if e.t_duration_s > 1e-9:
+                if isinstance(e, events.ADC):
+                    adc_no_rf = True
+                    timing = (
+                            np.array([
+                                0,
+                                self.adc.t_delay_s - 1e-9,
+                                self.adc.t_delay_s + 1e-9,
+                                self.adc.t_delay_s + self.adc.t_duration_s - 1e-9,
+                                self.adc.t_delay_s + self.adc.t_duration_s + 1e-9,
+                                self.adc.get_duration() - 1e-9,
+                                self.adc.get_duration() + 1e-9
+                            ]) * 1e6
+                    ).astype(int)
+                    array = np.array([0, 0, 1, 1, 0.25, 0.2, 0])
+                    if np.max(array) > max_secondary:
+                        max_secondary = np.max(array)
+                    fig.add_trace(
+                        go.Scattergl(x=timing, y=array, name="ADC", fill="tozeroy", mode="lines"),
+                        secondary_y=True
+                    )
+                if isinstance(e, events.RF):
+                    t_offset = e.t_delay_s
+                    t_rf = self.rf.t_array_s + t_offset
+                    t_rf = (1e6 * t_rf).astype(int)
+                    amp_rf = np.abs(self.rf.signal)
+                    phase_rf = np.angle(self.rf.signal)
+                    phase_rf /= np.pi * np.max(amp_rf)
+
+                    if np.max(np.abs(amp_rf)) > max_secondary:
+                        max_secondary = np.max(np.abs(amp_rf))
+                    fig.add_trace(
+                        go.Scattergl(x=t_rf, y=amp_rf, name="RF Amplitude", mode="lines"),
+                        secondary_y=True
+                    )
+                    fig.add_trace(
+                        go.Scattergl(x=t_rf, y=phase_rf, name="RF Phase", mode="lines"),
+                        secondary_y=True
+                    )
+                    fig.add_trace(
+                        go.Scattergl(x=[np.min(t_rf), np.max(t_rf)], y=[np.max(amp_rf), np.max(amp_rf)],
+                                     line=dict(dash='dash'), name="Max Amp | π", mode="lines"),
+                        secondary_y=True
+                    )
+                if isinstance(e, events.GRAD):
+                    timing = (np.array([0, e.t_delay_s - 1e-6, *(e.t_delay_s + e.t_array_s)]) * 1e6).astype(int)
+                    grad = np.zeros_like(timing)
+                    grad[2:] = e.amplitude * 1e3 / 42577478.518
+                    if np.max(np.abs(grad)) > max_primary:
+                        max_primary = np.max(np.abs(grad))
+                    fig.add_trace(
+                        go.Scattergl(x=timing, y=grad, name=f"Gradient {e.channel}", mode="lines"),
+                        secondary_y=False
+                    )
+        fig.update_yaxes(
+            title="Gradient Amplitude [mT/m]", secondary_y=False, range=(-1.1*max_primary, 1.1*max_primary)
+        )
+        if adc_no_rf:
+            title = "ADC"
+        else:
+            title = "RF Amplitude [1/max(Amp)] | RF Phase [1/π]"
+        fig.update_yaxes(
+            title=title, secondary_y=True, range=(-1.1*max_secondary, 1.1*max_secondary)
+        )
+
+        fig.update_layout(
+            width=900, height=600
+        )
+        path.mkdir(parents=True, exist_ok=True)
+        fig_path = path.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
+        log_module.info(f"writing file: {fig_path.as_posix()}")
+        if file_suffix in ["png", "pdf"]:
+            fig.write_image(fig_path.as_posix())
+        else:
+            fig.write_html(fig_path.as_posix())
