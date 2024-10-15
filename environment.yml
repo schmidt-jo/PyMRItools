@@ -18,6 +18,7 @@ dependencies:
   - tqdm=4.66.5
   - nibabel=5.2.1
   - wandb
+  - pytest
   - pip:
       - autodmri
       - git+https://github.com/pehses/twixtools.git@master#egg=twixtools

@@ -37,7 +37,7 @@ def get_idx_2d_square_grid(size_x: int, size_y: int):
 
 def get_idx_2d_square_neighborhood_patches_in_shape(shape_2d: tuple[int], nb_size: int):
     """
-    fn to generate indices of all square patches of neighboring voxels in a neighborhood of size nb_size,
+    Generates indices of all square patches of neighboring voxels in a neighborhood of size nb_size,
     on a 2d grid.
     :param shape_2d: [tuple[int, int]] shape of 2d grid.
     :param nb_size: [int]
@@ -45,7 +45,7 @@ def get_idx_2d_square_neighborhood_patches_in_shape(shape_2d: tuple[int], nb_siz
     """
     # build indices of grid for whole shape
     shape_grid = get_idx_2d_square_grid(size_x=shape_2d[0] - nb_size, size_y=shape_2d[1] - nb_size)
-    # get indices of grid for neighborhood
+    # get indices of grid for the neighborhood
     nb_grid = get_idx_2d_square_grid(size_x=nb_size, size_y=nb_size)
     # build index grid
     grid = shape_grid[:, None, :] + nb_grid[None, :, :]
