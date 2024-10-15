@@ -1,0 +1,24 @@
+name: mri_tools_env
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+dependencies:
+  - python=3.10
+  - poetry=1.8.3
+  - pip
+  - pytorch=2.4.1
+  - polars=1.8.2
+  - kaleido-core=0.2.1
+  - scipy=1.14.1
+  - numpy=2.0.0
+  - plotly=5.16.1
+  - simple-parsing=0.1.6
+  - tqdm=4.66.5
+  - nibabel=5.2.1
+  - wandb
+  - pytest
+  - pip:
+      - autodmri
+      - git+https://github.com/pehses/twixtools.git@master#egg=twixtools
+      - git+https://github.com/imr-framework/pypulseq.git@dev#egg=pypulseq
