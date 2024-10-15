@@ -67,10 +67,10 @@ def rd_to_torch(config: RD):
 
 def main():
     # setup logging
-    setup_program_logging(name="Raw Data to ISMRMRD", level=logging.INFO)
+    setup_program_logging(name="Raw Data to torch", level=logging.INFO)
 
     # setup parser
-    parser, args = setup_parser(prog_name="Raw Data to ISMRMRD", dict_config_dataclasses={"settings": RD})
+    parser, args = setup_parser(prog_name="Raw Data to torch", dict_config_dataclasses={"settings": RD})
 
     # get config
     rd_config = RD.from_cli(args=args.settings, parser=parser)
