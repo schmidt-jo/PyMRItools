@@ -1,3 +1,5 @@
+import sys
+import os
 import nibabel as nib
 import pathlib as plib
 import logging
@@ -14,6 +16,7 @@ def set_save_path(path_to_dir: str | plib.Path, file_name: str, suffix: str):
     log_module.info(f"Write file : {file_path}")
     return file_path
 
+
 def set_load_path(path_to_file: str | plib.Path, suffix: str):
     path_to_file = plib.Path(path_to_file).absolute()
     if not path_to_file.is_file():
@@ -26,6 +29,7 @@ def set_load_path(path_to_file: str | plib.Path, suffix: str):
         raise AttributeError(err)
     return path_to_file
 
+
 def numpy_save(
         data: np.ndarray, path_to_file: str | plib.Path, file_name: str):
     if not isinstance(data, np.ndarray):
@@ -36,9 +40,11 @@ def numpy_save(
     file_path = set_save_path(path_to_file, file_name, suffix=".npy")
     np.save(file_path, data)
 
+
 def numpy_load(path_to_file: str | plib.Path) -> np.ndarray:
     path_to_file = set_load_path(path_to_file, suffix=".npy")
     return np.load(path_to_file)
+
 
 def torch_save(
         data: torch.Tensor | np.ndarray, path_to_file: str | plib.Path, file_name: str):
@@ -47,9 +53,11 @@ def torch_save(
     file_path = set_save_path(path_to_file, file_name, suffix=".pt")
     torch.save(data, file_path.as_posix())
 
+
 def torch_load(path_to_file: str | plib.Path) -> torch.Tensor:
     path_to_file = set_load_path(path_to_file, suffix=".pt")
     return torch.load(path_to_file)
+
 
 def nifti_load(path_to_file: str | plib.Path) -> (np.ndarray, nib.Nifti1Image):
     """
@@ -108,3 +116,18 @@ def nifti_save(
 
     nib.save(img_aff, file_path.as_posix())
 
+
+class HidePrints:
+    """
+    We use the logging module to track all logs.
+    Some packages (like twixtools) are written with print statements.
+    We try to fix and pull request to get them integrated.
+    Meanwhile this helper prevents unnecessary print() calls to spam our log
+    """
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout

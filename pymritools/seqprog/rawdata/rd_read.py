@@ -6,7 +6,7 @@ import torch
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd
-from pymritools.utils import torch_save, fft, root_sum_of_squares, nifti_save
+from pymritools.utils import torch_save, fft, root_sum_of_squares, nifti_save, HidePrints
 import twixtools
 
 log_module = logging.getLogger(__name__)
@@ -40,12 +40,13 @@ def rd_to_torch(config: RD):
         err = "File not recognized as .dat raw data file."
         log_module.error(err)
         raise ValueError(err)
-    # set device
-    if RD.use_gpu and torch.cuda.is_available():
-        device = torch.device(f"cuda:{RD.gpu_device}")
-    else:
-        device = torch.device("cpu")
-    twix = twixtools.read_twix(path_to_file.as_posix(), parse_geometry=True, verbose=True, include_scans=-1)[0]
+    # ToDo: set device - have to optimize to fit gpu, for now too big
+    # if RD.use_gpu and torch.cuda.is_available():
+    #     device = torch.device(f"cuda:{RD.gpu_device}")
+    # else:
+    device = torch.device("cpu")
+    with HidePrints():
+        twix = twixtools.read_twix(path_to_file.as_posix(), parse_geometry=True, verbose=True, include_scans=-1)[0]
     geometry = twix["geometry"]
     data_mdbs = twix["mdb"]
     hdr = twix["hdr"]

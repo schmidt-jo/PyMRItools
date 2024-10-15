@@ -60,6 +60,6 @@ modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search:ma
 # sequence programing
 seqprog_mese = "pymritools.seqprog.sequences.mese:main"
 seqprog_megesse = "pymritools.seqprog.sequences.megesse:main"
-seqprog_raw_data_to_torch = "pymritools.seqprog.rawdata.rd_read:rd_to_torch"
+seqprog_raw_data_to_torch = "pymritools.seqprog.rawdata.rd_read:main"
 # reconstruction
 recon_loraks = "pymritools.recon.loraks.recon:main"
