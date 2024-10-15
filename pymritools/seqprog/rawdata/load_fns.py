@@ -1,4 +1,6 @@
 import logging
+
+import torch
 from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
 from pymritools.config.seqprog import Sampling, PulseqParameters2D
@@ -151,7 +153,12 @@ def get_affine(
 
 def load_pulseq_rd(
         pulseq_config: PulseqParameters2D, sampling_config: Sampling,
-        data_mdbs: list[Mdb], geometry: Geometry, hdr: dict):
+        data_mdbs: list[Mdb], geometry: Geometry, hdr: dict,
+        device: torch.device = torch.device("cpu")):
+    if device != torch.device("cpu") and not torch.cuda.is_available():
+        device = torch.device("cpu")
+    log_module.info(f"setup device")
+
     log_module.debug(f"setup dimension info")
     # find number of coils
     num_coils = data_mdbs[-1].block_len
@@ -246,20 +253,23 @@ def load_pulseq_rd(
 
     log_module.info(f"Finished extracting all acquisitions!")
 
-    # remove oversampling
+    # remove oversampling, use gpu if set
     k_space = remove_oversampling(
-        data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+        data=torch.from_numpy(k_space).to(device), data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
     )
-    # fft bandpass filter for oversampling removal not consistent with undersampled in the 0 filled regions data, remove artifacts
-    k_space *= k_sampling_mask[:, :, None, None, :]
+
+    # fft bandpass filter for oversampling removal not consistent
+    # with undersampled in the 0 filled regions data, remove artifacts
+    k_space *= torch.from_numpy(k_sampling_mask[:, :, None, None, :]).to(device)
 
     # decorrelate channels
     if noise_scans is not None:
-        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv, optimize="optimal")
+        in_noise = torch.from_numpy(noise_scans).to(device)
+        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=torch.swapdims(in_noise, -2, -1))
+        k_space = torch.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv)
 
     # correct gradient directions - at the moment we have reversed z dir
-    k_space = np.flip(k_space, axis=2)
+    k_space = np.flip(k_space.cpu().numpy(), axis=2)
 
     # # scale values
     # ks_max = np.max(np.abs(k_space))

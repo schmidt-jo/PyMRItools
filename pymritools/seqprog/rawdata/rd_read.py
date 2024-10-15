@@ -1,11 +1,14 @@
 import logging
+import pathlib as plib
+
+import torch
+
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd
 from pymritools.utils import torch_save, fft, root_sum_of_squares, nifti_save
-
-import pathlib as plib
 import twixtools
+
 log_module = logging.getLogger(__name__)
 
 
@@ -33,10 +36,15 @@ def rd_to_torch(config: RD):
         log_module.error(err)
         raise FileNotFoundError(err)
     log_module.info(f"Loading raw data file: {path_to_file.as_posix()}")
-    if not ".dat" in path_to_file.suffixes:
+    if ".dat" not in path_to_file.suffixes:
         err = "File not recognized as .dat raw data file."
         log_module.error(err)
         raise ValueError(err)
+    # set device
+    if RD.use_gpu and torch.cuda.is_available():
+        device = torch.device(f"cuda:{RD.gpu_device}")
+    else:
+        device = torch.device("cpu")
     twix = twixtools.read_twix(path_to_file.as_posix(), parse_geometry=True, verbose=True, include_scans=-1)[0]
     geometry = twix["geometry"]
     data_mdbs = twix["mdb"]
@@ -44,7 +52,8 @@ def rd_to_torch(config: RD):
     log_module.info("Loading RD")
     k_space, k_sampling_mask, aff = load_pulseq_rd(
         pulseq_config=pulseq, sampling_config=sampling,
-        data_mdbs=data_mdbs, geometry=geometry, hdr=hdr
+        data_mdbs=data_mdbs, geometry=geometry, hdr=hdr,
+        device=device
     )
 
     log_module.info("Saving")
@@ -61,8 +70,9 @@ def rd_to_torch(config: RD):
         img = fft(k_space, img_to_k=False, axes=(0, 1))
         # do rSoS
         img = root_sum_of_squares(img, dim_channel=-2)
-        # niftii save
+        # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
+        nifti_save(data=k_sampling_mask, img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
 
 
 def main():
