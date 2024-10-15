@@ -199,7 +199,8 @@ class ACLoraks(Base):
             return self._get_m_1_diag_vector(f=x, v_s=v_s, v_c=v_c)
 
         xmin, res_vec, results = cgd(
-            func_operator=func_op, x=torch.zeros_like(b),
+            func_operator=func_op,
+            x=torch.zeros_like(b), b=b,
             iter_bar=iter_bar, max_num_iter=self.max_num_iter,
             conv_tol=self.conv_tol
         )
