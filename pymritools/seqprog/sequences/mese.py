@@ -4,7 +4,7 @@ import tqdm
 
 from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D
 from pymritools.seqprog.core import Kernel, DELAY, ADC
-from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli
+from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli, build
 
 log_module = logging.getLogger(__name__)
 
@@ -286,22 +286,13 @@ class MESE(Sequence2D):
         self.block_spoil_end.grad_phase.amplitude[1:3] = - pe_end_amp
 
 
-def build(config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
-    # might be a core function
-    # set object
-    sequence = MESE(config=config, specs=specs, params=params)
-    # build sequence
-    sequence.build()
-    # plot if set
-    # save
-
-
 def main():
     parser, config, specs, params = setup_sequence_cli("MESE")
-
+    # setup sequence object
+    mese = MESE(config=config, specs=specs, params=params)
     # run prog
     try:
-        build(config=config, specs=specs, params=params)
+        build(config=config, sequence=mese)
     except Exception as e:
         parser.print_help()
         log_module.exception(e)

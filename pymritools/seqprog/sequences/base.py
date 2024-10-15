@@ -887,3 +887,15 @@ def setup_sequence_cli(name: str):
 
     return parser, config, specs, params
 
+
+
+def build(config: PulseqConfig, sequence: Sequence2D):
+    # build sequence
+    sequence.build()
+    # plot if set
+    if config.visualize:
+        pass
+    # save
+
+
+

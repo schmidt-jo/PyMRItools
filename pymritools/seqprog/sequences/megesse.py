@@ -4,7 +4,7 @@ import tqdm
 
 from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D
 from pymritools.seqprog.core import Kernel, DELAY, ADC
-from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli
+from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli, build
 
 log_module = logging.getLogger(__name__)
 
@@ -413,5 +413,17 @@ class MEGESSE(Sequence2D):
         self.block_spoil_end.grad_phase.amplitude[1:3] = - pe_end_amp
 
 
+def main():
+    parser, config, specs, params = setup_sequence_cli("MEGESSE")
+    # setup sequence object
+    megesse = MEGESSE(config=config, specs=specs, params=params)
+    # run prog
+    try:
+        build(config=config, sequence=megesse)
+    except Exception as e:
+        parser.print_help()
+        log_module.exception(e)
+
+
 if __name__ == '__main__':
-    pass
+    main()
