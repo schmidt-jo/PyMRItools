@@ -99,8 +99,15 @@ def randomized_svd(matrix: torch.Tensor, sampling_size: int, power_projections: 
 
 
 def main():
+    if torch.cuda.is_available():
+        device = torch.device("cuda:0")
+    else:
+        device = torch.device("cpu")
+    log_module.info(f"using device: {device}")
+
     # to check the figures - use accessible path
-    path_fig = plib.Path("/data/pt_np-jschmidt/data/05_code_dev/loraks")
+    # path_fig = plib.Path("/data/pt_np-jschmidt/data/05_code_dev/loraks")
+    path_fig = plib.Path("/home/patrick/Workspace/PycharmProjects/PyMRItools/results")
     path_fig.mkdir(exist_ok=True, parents=True)
 
     # here we can adjust the phantom sizes
@@ -124,12 +131,6 @@ def main():
     # sl_undersampled_k = sl_undersampled_k[:, :, int(sl_undersampled_k.shape[2] / 2)]
     sl_image_recon_us = torch.abs(fft(sl_undersampled_k, img_to_k=False, axes=(0, 1)))
 
-    # if torch.cuda.is_available():
-    #     device = torch.device("cuda:0")
-    # else:
-    device = torch.device("cpu")
-    log_module.info(f"using device: {device}")
-
     # setup operator
     loraks_operator = operators.S(k_space_dims=sl_image_recon_us.shape, radius=3)
     nb_size = loraks_operator.operator(torch.ones_like(sl_undersampled_k)).shape[-1]
@@ -140,8 +141,9 @@ def main():
     # log_module.info(f"reducing matrix dimensions on long axes to "
     #                 f"{svd_sampling_size} (was ({matrix_size, nb_size}))")
 
+    # Todo: Fix nans in a better way or check
     scaling_factor = torch.nan_to_num(
-        1 / loraks_operator.p_star_p(torch.ones_like(sl_undersampled_k)),
+        1 / loraks_operator.p_star_p(torch.ones_like(sl_undersampled_k, device=device)),
         nan=0.0, posinf=0.0, neginf=0.0
     )
 
@@ -173,10 +175,10 @@ def main():
         st = s_threshold.clone()
         st[rank:] = 0.0
         s_r = s * st
+
         # not using the sum anymore
         # loss_1 = torch.sum(torch.pow(s * s_threshold, 1.5))
-
-        # instead reconstruct the low rank approximation - need to movedims if using randomized svd
+        # instead reconstruct the low rank approximation
         matrix_recon_loraks = torch.matmul(
             torch.matmul(u, torch.diag(s_r).to(u.dtype)),
             vh
