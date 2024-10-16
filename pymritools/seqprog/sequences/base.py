@@ -1267,7 +1267,7 @@ def setup_sequence_cli(name: str):
 
     rf_file = plib.Path(config.pulse_file).absolute()
     if rf_file.is_file():
-        log_module.info(f"Setting pulse file: {rf_file.as_posix()}. Might override setting given in Parameter file.")
+        log_module.info(f"Setting pulse file: {rf_file.as_posix()}.")
         params.rf_file = rf_file
     params.display()
 

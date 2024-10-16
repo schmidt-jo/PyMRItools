@@ -1,7 +1,7 @@
 {
-  "resolution_fov_read": 212.0,
+  "resolution_fov_read": 157.0,
   "resolution_fov_phase": 100.0,
-  "resolution_base": 304,
+  "resolution_base": 224,
   "resolution_slice_thickness": 0.7,
   "resolution_slice_num": 30,
   "resolution_slice_gap": 200,
