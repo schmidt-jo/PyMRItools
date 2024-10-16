@@ -64,7 +64,7 @@ def measure_cuda_function_call(func, *args, device: torch.device, iterations=10,
     # Warmup phase
     # This should be necessary as I'm not sure if the compilation takes place on the call or during the first run.
     for _ in range(3):
-        compiled_func(*args)
+        compiled_func(*args, device=device)
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
