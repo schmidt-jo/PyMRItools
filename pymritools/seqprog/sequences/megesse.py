@@ -60,7 +60,8 @@ class MEGESSE(Sequence2D):
         # we need to prephase this gradient
         self.block_refocus_1, _ = Kernel.refocus_slice_sel_spoil(
             params=self.params, system=self.system, pulse_num=0, return_pe_time=True,
-            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2
+            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2,
+            pulse_file=self.config.pulse_file
         )
         # via kernels we can build slice selective blocks of excitation and refocusing
         # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
@@ -72,14 +73,16 @@ class MEGESSE(Sequence2D):
 
         # excitation pulse
         self.block_excitation = Kernel.excitation_slice_sel(
-            params=self.params, system=self.system, adjust_ramp_area=ramp_area
+            params=self.params, system=self.system, adjust_ramp_area=ramp_area,
+            pulse_file=self.config.pulse_file
         )
 
         # Now were left with building the kernels for all remaining refocusing pulses.
         # Again, the blip up read gradient needs to be prephased, to start measurement after the ref. pulse kernel.
         self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
             params=self.params, system=self.system, pulse_num=1, return_pe_time=True,
-            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2
+            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2,
+            pulse_file=self.config.pulse_file
         )
 
         # dependent on the number of gradient echo readouts in the readout train we might need to change the sign
@@ -143,9 +146,16 @@ class MEGESSE(Sequence2D):
 
     def _mod_spoiling_end(self):
         # want to enable complete refocusing of read gradient when spoiling factor -0.5 is chosen in opts
+        # get correct last gradient
+        if self.num_gre % 2 == 0:
+            # even number of GRE readouts after / before SE, the last read gradient is bu grad
+            block_acq = self.block_bu_acq
+        else:
+            # odd number of GRE readouts after / before SE, the last readgradient is bd grad
+            block_acq = self.block_bd_acq
         readout_area = np.trapezoid(
-            x=self.block_bd_acq.grad_read.t_array_s,
-            y=self.block_bd_acq.grad_read.amplitude
+            x=block_acq.grad_read.t_array_s,
+            y=block_acq.grad_read.amplitude
         )
         spoil_area = self.params.read_grad_spoiling_factor * readout_area
         # now we need to plug in new amplitude into spoiling read gradient
