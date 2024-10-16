@@ -1,11 +1,11 @@
 {
-  "config_file": "./examples/seqprog/mese/config.json",
-  "out_path": "./examples/seqprog/mese/results/",
+  "config_file": "./examples/seqprog/megesse/config.json",
+  "out_path": "./examples/seqprog/megesse/results/",
   "use_gpu": false,
   "gpu_device": 0,
   "visualize": true,
   "debug": false,
   "system_specs_file": "./resources/specs/system_specifications_7T_TerraX_mpi_cbs_safety.json",
-  "parameter_file": "./examples/seqprog/mese/params.json",
+  "parameter_file": "./examples/seqprog/megesse/params.json",
   "pulse_file": "./resources/pulses/gauss.json"
 }

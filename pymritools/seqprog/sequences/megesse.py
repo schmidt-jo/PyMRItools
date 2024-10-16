@@ -46,12 +46,21 @@ class MEGESSE(Sequence2D):
         # add id
         self.id_bd_acq: str = "bd_fs"
 
-        # spoiling at end of echo train - modifications
+        # sanity check
+        if np.abs(np.sum(self.block_bu_acq.grad_read.area)) - np.abs(np.sum(self.block_bd_acq.grad_read.area)) > 1e-8:
+            err = f"readout areas of echo readouts differ"
+            log_module.error(err)
+            raise ValueError(err)
+
+        # spoiling at end of echo train - modifications to base class if wanted
         self._mod_spoiling_end()
 
         # refocusing
+        # starting readout sampling always with the blip up gradient. hence after first gradient echo
+        # we need to prephase this gradient
         self.block_refocus_1, _ = Kernel.refocus_slice_sel_spoil(
-            params=self.params, system=self.system, pulse_num=0, return_pe_time=True
+            params=self.params, system=self.system, pulse_num=0, return_pe_time=True,
+            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2
         )
         # via kernels we can build slice selective blocks of excitation and refocusing
         # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
@@ -59,32 +68,29 @@ class MEGESSE(Sequence2D):
         # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
         # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
         # accounting for ramp area
-        ramp_area = np.trapezoid(
-            x=self.block_refocus_1.grad_slice.t_array_s[:2],
-            y=self.block_refocus_1.grad_slice.amplitude[:2]
-        )
+        ramp_area = float(self.block_refocus_1.grad_slice.area[0])
+
         # excitation pulse
         self.block_excitation = Kernel.excitation_slice_sel(
             params=self.params, system=self.system, adjust_ramp_area=ramp_area
         )
 
+        # Now were left with building the kernels for all remaining refocusing pulses.
+        # Again, the blip up read gradient needs to be prephased, to start measurement after the ref. pulse kernel.
         self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
-            params=self.params, system=self.system, pulse_num=1, return_pe_time=True
+            params=self.params, system=self.system, pulse_num=1, return_pe_time=True,
+            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2
         )
-        # sanity check
-        if np.abs(np.sum(self.block_bu_acq.grad_read.area)) - np.abs(np.sum(self.block_bd_acq.grad_read.area)) > 1e-8:
-            err = f"readout areas of echo readouts differ"
-            log_module.error(err)
-            raise ValueError(err)
 
-        # for the first we need a different gradient rewind to rephase the partial fourier readout k-space travel
-        # self.block_refocus_1: Kernel = Kernel.copy(self.block_refocus)
-        # self._mod_first_refocus_rewind_0_echo(grad_pre_area=grad_read_pre_area)
-        # # need to adapt echo read prewinder and rewinder
-        # self._mod_block_prewind_echo_read(self.block_refocus_1)
+        # dependent on the number of gradient echo readouts in the readout train we might need to change the sign
+        # of the rewinding gradient lobes. I.e. we prewind the readout gradient moment after the refocusing and
+        # to balance the sequence we need to rewind the readout gradient moment before the next refocusing.
+        # The number of readouts determines the last readout polarity.
+        # First refocusing doesnt need to rewind anything
+        self._check_and_mod_rewind_echo_read(self.block_refocus)
 
-        self._mod_block_rewind_echo_read(self.block_refocus)
-        self._mod_block_prewind_echo_read(self.block_refocus)
+        # self._mod_block_rewind_echo_read(self.block_refocus)
+        # self._mod_block_prewind_echo_read(self.block_refocus)
 
         # plot files for visualization
         if self.config.visualize:
@@ -150,20 +156,20 @@ class MEGESSE(Sequence2D):
         )
         self.block_spoil_end.grad_read.amplitude[-3:-1] = spoil_area / t_sr
 
-    def _mod_block_prewind_echo_read(self, sbb: Kernel):
-        # need to prewind readout echo gradient
-        area_read = np.sum(self.block_bu_acq.grad_read.area)
-        area_prewind = - 0.5 * area_read
-        delta_times_last_grad_part = np.diff(sbb.grad_read.t_array_s[-4:])
-        amplitude = area_prewind / np.sum(np.array([0.5, 1.0, 0.5]) * delta_times_last_grad_part)
-        if np.abs(amplitude) > self.system.max_grad:
-            err = f"amplitude violation when prewinding first echo readout gradient"
-            log_module.error(err)
-            raise ValueError(err)
-        sbb.grad_read.amplitude[-3:-1] = amplitude
-        sbb.grad_read.area[-1] = area_prewind
+    # def _mod_block_prewind_echo_read(self, sbb: Kernel):
+    #     # need to prewind readout echo gradient
+    #     area_read = np.sum(self.block_bu_acq.grad_read.area)
+    #     area_prewind = - 0.5 * area_read
+    #     delta_times_last_grad_part = np.diff(sbb.grad_read.t_array_s[-4:])
+    #     amplitude = area_prewind / np.sum(np.array([0.5, 1.0, 0.5]) * delta_times_last_grad_part)
+    #     if np.abs(amplitude) > self.system.max_grad:
+    #         err = f"amplitude violation when prewinding first echo readout gradient"
+    #         log_module.error(err)
+    #         raise ValueError(err)
+    #     sbb.grad_read.amplitude[-3:-1] = amplitude
+    #     sbb.grad_read.area[-1] = area_prewind
 
-    def _mod_block_rewind_echo_read(self, sbb: Kernel):
+    def _check_and_mod_rewind_echo_read(self, sbb: Kernel):
         # need to rewind readout echo gradient
         if self.num_gre % 2 == 0:
             # even number of GRE readouts after / before SE, we need to rewind the last bu grad
@@ -171,16 +177,24 @@ class MEGESSE(Sequence2D):
         else:
             # odd number of GRE readouts after / before SE, we need to rewind the last bd grad
             block_acq = self.block_bd_acq
-        area_read = np.sum(block_acq.grad_read.area)
-        area_rewind = - 0.5 * area_read
-        delta_t_first_grad_part = np.diff(sbb.grad_read.t_array_s[:4])
-        amplitude = area_rewind / np.sum(np.array([0.5, 1.0, 0.5]) * delta_t_first_grad_part)
-        if np.abs(amplitude) > self.system.max_grad:
-            err = f"amplitude violation when prewinding first echo readout gradient"
-            log_module.error(err)
-            raise ValueError(err)
-        sbb.grad_read.amplitude[1:3] = amplitude
-        sbb.grad_read.area[0] = area_rewind
+        # get polarity
+        last_readout_polarity = np.sign(np.sum(block_acq.grad_read.area))
+        # need to do for refocusing kernels
+        if not np.sign(sbb.grad_read.area[-1]) == - last_readout_polarity:
+            # need to flip signs
+            # assumes trapezoidal gradients
+            sbb.grad_read.amplitude[:4] *= -1
+            sbb.grad_read.area[0] *= -1
+            # area_read = np.sum(block_acq.grad_read.area)
+            # area_rewind = - 0.5 * area_read
+        # delta_t_first_grad_part = np.diff(sbb.grad_read.t_array_s[:4])
+        # amplitude = area_rewind / np.sum(np.array([0.5, 1.0, 0.5]) * delta_t_first_grad_part)
+        # if np.abs(amplitude) > self.system.max_grad:
+        #     err = f"amplitude violation when prewinding first echo readout gradient"
+        #     log_module.error(err)
+        #     raise ValueError(err)
+        # sbb.grad_read.amplitude[1:3] = amplitude
+        # sbb.grad_read.area[0] = area_rewind
 
     def _build_variant(self):
         log_module.info(f"build -- calculate minimum ESP")
@@ -221,9 +235,11 @@ class MEGESSE(Sequence2D):
 
         # time to either side between excitation - ref - se needs to be equal, calculate appropriate delays
         if t_exc_1ref < esp_1 / 2:
+            delay_ref_e = 0.0
             self.t_delay_exc_ref1 = DELAY.make_delay(esp_1 / 2 - t_exc_1ref, system=self.system)
-        if t_ref_e1 < esp_1 / 2:
-            self.t_delay_ref1_se1 = DELAY.make_delay(esp_1 / 2 - t_ref_e1, system=self.system)
+        else:
+            delay_ref_e = esp_1 / 2 - t_ref_e1
+            self.t_delay_ref1_se1 = DELAY.make_delay(delay_ref_e, system=self.system)
 
         # write echo times to array
         self.te.append(esp_1)
@@ -232,7 +248,9 @@ class MEGESSE(Sequence2D):
         # after this a rf pulse is played out and we can iteratively add the rest of the echoes
         for k in np.arange(self.num_e_per_rf, self.params.etl * self.num_e_per_rf, self.num_e_per_rf):
             # take last echo time (gre sampling after se) need to add time from gre to rf and from rf to gre (equal)
-            self.te.append(self.te[k - 1] + 2 * t_ref_e1)
+            # if we would need to add an delay (if ref to e is quicker than from excitation to ref),
+            # we would do it before the echoes and after the echoes to symmetrize
+            self.te.append(self.te[k - 1] + 2 * (t_ref_e1 + delay_ref_e))
             # take this time and add time between gre and se / readout to readout
             for _ in range(self.num_gre):
                 self.te.append(self.te[-1] + t_e2e)
