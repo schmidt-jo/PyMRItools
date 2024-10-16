@@ -30,7 +30,7 @@ priority = "explicit"
 python = "^3.10"
 torch = {version = "2.4.1", source = "torch"}
 polars = "1.8.2"
-kaleido = "0.2.1"
+kaleido = "0.1.0"
 scipy = "1.14.1"
 numpy = "2.0.0"
 plotly = "5.16.1"
