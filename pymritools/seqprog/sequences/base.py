@@ -354,7 +354,7 @@ class Sequence2D(abc.ABC):
         log_module.info(f"set recon info data")
         # sampling + k traj
         self._set_k_trajectories()  # raises error if not implemented
-        self._write_sampling_pattern()
+        # self._write_sampling_pattern()
         # recon
         # self._set_recon_parameters_img()
         # self._set_nav_parameters()  # raises error if not implemented
@@ -424,8 +424,8 @@ class Sequence2D(abc.ABC):
         self.scan_idx += 1
         return echo_type_num + 1
 
-    def _write_sampling_pattern(self):
-        self.sampling.sampling_pattern_from_list(sp_list=self._sampling_pattern_constr)
+    # def _write_sampling_pattern(self):
+    #     self.sampling.sampling_pattern_from_list(sp_list=self._sampling_pattern_constr)
 
     @abc.abstractmethod
     def _set_k_trajectories(self):
