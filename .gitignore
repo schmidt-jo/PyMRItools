@@ -81,5 +81,5 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 /.idea/
 /src/
-/resources/specs/
+
 /examples/raw_data/rd_file/
