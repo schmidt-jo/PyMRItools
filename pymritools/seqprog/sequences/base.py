@@ -223,10 +223,10 @@ class Sequence2D(abc.ABC):
             name = f"seq"
         voxel_size = ""
         for k in range(3):
-            voxel_size += f"{self.params.get_voxel_size()[k]:.2f}-"
+            voxel_size += f"-{self.params.get_voxel_size()[k]:.2f}"
         name = (f"{name}_v{self.config.version}_"
                 f"acc-{self.params.acceleration_factor:.1f}_"
-                f"res-{voxel_size}").replace(".", "p")
+                f"res{voxel_size}").replace(".", "p")
         if self.params.rf_adapt_z:
             name = f"{name}_rf-ad-z"
         # write sequence file
@@ -239,7 +239,7 @@ class Sequence2D(abc.ABC):
         # write pulseq file
         save_file = file_name.joinpath(f"{name}_pulseq_config").with_suffix(".json")
         log_module.info(f"writing file: {save_file.as_posix()}")
-        self.config.save_json(save_file.as_posix(), indent=2)
+        self.params.save_json(save_file.as_posix(), indent=2)
 
         # write sampling file
         save_file = file_name.joinpath(f"{name}_sampling_config").with_suffix(".pkl")
@@ -409,12 +409,18 @@ class Sequence2D(abc.ABC):
                                       nav_acq: bool = False):
         log_module.debug(f"set pypsi sampling pattern")
         self.sampling_pattern_set = True
+        # register sample in sampling obj
+        self.sampling.register_sample(
+            scan_num=self.scan_idx, slice_num=slice_num, pe_num=pe_num, echo_num=echo_num,
+            acq_type=acq_type, echo_type=echo_type, echo_type_num=echo_type_num,
+            nav_acq=nav_acq
+        )
         # save to list
-        self._sampling_pattern_constr.append({
-            "scan_num": self.scan_idx, "slice_num": slice_num, "pe_num": pe_num, "acq_type": acq_type,
-            "echo_num": echo_num, "echo_type": echo_type, "echo_type_num": echo_type_num,
-            "nav_acq": nav_acq
-        })
+        # self._sampling_pattern_constr.append({
+        #     "scan_num": self.scan_idx, "slice_num": slice_num, "pe_num": pe_num, "acq_type": acq_type,
+        #     "echo_num": echo_num, "echo_type": echo_type, "echo_type_num": echo_type_num,
+        #     "nav_acq": nav_acq
+        # })
         self.scan_idx += 1
         return echo_type_num + 1
 
