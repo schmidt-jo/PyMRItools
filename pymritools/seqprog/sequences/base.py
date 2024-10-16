@@ -922,13 +922,16 @@ class Sequence2D(abc.ABC):
         grad_channels = ['gx', 'gy', 'gz']
 
         def append_to_lists(time: float | int | list, value: float | list, label: str):
-            if isinstance(time, float) or isinstance(time, int):
+            if isinstance(time, int):
+                time = float(time)
+                value = float(value)
+            if isinstance(time, float):
                 times.append(time)
                 values.append(value)
                 labels.append(label)
             else:
-                times.extend(time)
-                values.extend(value)
+                times.extend(np.array(time).astype(float).tolist())
+                values.extend(np.array(value).astype(float).tolist())
                 labels.extend([label] * len(time))
 
         # start with first block after start time

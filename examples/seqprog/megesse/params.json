@@ -33,7 +33,7 @@
   "refocusing_duration": 2500,
   "refocusing_grad_slice_scale": 1.5,
   "read_grad_spoiling_factor": 0.5,
-  "grad_moment_slice_spoiling": 2000.0,
+  "grad_moment_slice_spoiling": 1600.0,
   "grad_moment_slice_spoiling_end": 2500,
   "interleaved_acquisition": true,
   "ext_rf_exc": "/data/pt_np-jschmidt/data/ds_mese_cbs_js/97_pulseq/sequence/gauss120_b375_pypsi.pkl",
