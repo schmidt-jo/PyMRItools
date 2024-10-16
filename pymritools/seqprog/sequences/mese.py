@@ -135,7 +135,7 @@ class MESE(Sequence2D):
         # adc
         if no_adc:
             aq_block = self.block_acquisition.copy()
-            aq_block.adc = ADC
+            aq_block.adc = ADC()
         else:
             aq_block = self.block_acquisition
         for idx_slice in np.arange(-1, self.params.resolution_slice_num):
