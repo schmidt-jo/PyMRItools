@@ -343,16 +343,17 @@ class GRAD(Event):
             system: pp.Opts, pre_moment: float = 0.0, re_spoil_moment: float = 0.0,
             rephase: float = 0.0, t_minimum_re_grad: float = 0.0, adjust_ramp_area: float = 0.0):
         """
-                create slice selective gradient with merged pre and re moments (optional)
-                - one can set the minimum time for those symmetrical moments with t_minimum_re_grad to match other grad timings
-                - the rephase parameter gives control over rephasing the slice select moment in the re-moment.
-                    It can be helpful to introduce correction factors: rephase = 1.0 will do
-                    conventional rephasing of half of the slice select area.
-                    From simulations it was found that eg. for one particular used slr pulse an increase of 8%
-                    gives better phase properties. hence one could use rephase=1.08.
-                - adjust_ramp_area gives control over additional adjustments.
-                    In the jstmc implementation this is used to account for the ramp area of a successive slice select pulse
-                - ensure arbitrary pulse-grad shape obeys rf dead time (rf cannot start before dead time delay)
+        create slice selective gradient with merged pre and re moments (optional)
+        - one can set the minimum time for those symmetrical moments with t_minimum_re_grad to match other grad timings
+        - the rephase parameter gives control over rephasing the slice select moment in the re-moment.
+            It can be helpful to introduce correction factors: rephase = 1.0 will do
+            conventional rephasing of half of the slice select area.
+            From simulations it was found that eg. for one particular used slr pulse an increase of 8%
+            gives better phase properties. hence one could use rephase=1.08.
+        - adjust_ramp_area gives control over additional adjustments.
+            This is used to account for the ramp area of a successive slice select pulse like refocusing
+            to merge gradients.
+        - ensure arbitrary pulse-grad shape obeys rf dead time (rf cannot start before dead time delay)
         """
         # init
         grad_instance = cls()
@@ -553,6 +554,10 @@ class GRAD(Event):
             grad_amplitude = np.sign(area) * np.sqrt(
                 np.abs(area) * self.system.max_slew + np.abs(amplitude) ** 2 / 2
             )
+            if np.abs(grad_amplitude) < np.abs(amplitude):
+                err = f"area cannot accommodated with maximum slew. Choose higher {identifier} moment."
+                log_module.error(err)
+                raise ValueError(err)
             t_flat = 0.0
         else:
             # fix gradient at max value and calculate flat time
