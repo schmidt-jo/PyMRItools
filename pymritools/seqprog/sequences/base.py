@@ -221,7 +221,14 @@ class Sequence2D(abc.ABC):
         file_name = plib.Path(self.config.out_path).absolute()
         if not name:
             name = f"seq"
-        name = f"{name}_v{self.config.version}".replace(".", "p")
+        voxel_size = ""
+        for k in range(3):
+            voxel_size += f"{self.params.get_voxel_size()[k]:.2f}-"
+        name = (f"{name}_v{self.config.version}_"
+                f"acc-{self.params.acceleration_factor:.1f}_"
+                f"res-{voxel_size}").replace(".", "p")
+        if self.params.rf_adapt_z:
+            name = f"{name}_rf-ad-z"
         # write sequence file
         save_file = file_name.joinpath(f"{name}_sequence").with_suffix(".seq")
         log_module.info(f"writing file: {save_file.as_posix()}")
@@ -235,7 +242,7 @@ class Sequence2D(abc.ABC):
         self.config.save_json(save_file.as_posix(), indent=2)
 
         # write sampling file
-        # save_file = file_name.joinpath(f"{name}_sampling_config").with_suffix(".pkl")
+        save_file = file_name.joinpath(f"{name}_sampling_config").with_suffix(".pkl")
         # log_module.info(f"writing file: {save_file.as_posix()}")
         self.sampling.save(save_file.as_posix())
 
@@ -1244,16 +1251,19 @@ def setup_sequence_cli(name: str):
 
     params = args.parameters
     # check if pulse file was given in config
-
-    params_file = plib.Path(config.parameter_file).absolute()
     msg = f"Parameters configuration file given as CLI argument or in config file."
+    if not config.parameter_file:
+        msg = f"No {msg}. Using default values or explicit CLI input.\nCheck if this is the setup you wanted!"
+        log_module.warning(msg)
+    params_file = plib.Path(config.parameter_file).absolute()
     if params_file.is_file():
-        msg = f"{msg} Loading: {params_file}"
         log_module.info(msg)
+        log_module.info(f"Loading file: {params_file}")
         params = PulseqParameters2D.load(params_file)
     else:
-        msg = f"No {msg} Using default values or explicit CLI input.\nCheck if this is the setup you wanted!"
-        log_module.warning(msg)
+        msg = f"File {params_file} not found"
+        log_module.error(msg)
+        raise FileNotFoundError(msg)
 
     rf_file = plib.Path(config.pulse_file).absolute()
     if rf_file.is_file():
