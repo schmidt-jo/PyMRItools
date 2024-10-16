@@ -235,8 +235,8 @@ class Sequence2D(abc.ABC):
         self.config.save_json(save_file.as_posix(), indent=2)
 
         # write sampling file
-        save_file = file_name.joinpath(f"{name}_sampling_config").with_suffix(".pkl")
-        log_module.info(f"writing file: {save_file.as_posix()}")
+        # save_file = file_name.joinpath(f"{name}_sampling_config").with_suffix(".pkl")
+        # log_module.info(f"writing file: {save_file.as_posix()}")
         self.sampling.save(save_file.as_posix())
 
         # ToDo: write pulse file

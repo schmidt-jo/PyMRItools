@@ -146,9 +146,16 @@ class MEGESSE(Sequence2D):
 
     def _mod_spoiling_end(self):
         # want to enable complete refocusing of read gradient when spoiling factor -0.5 is chosen in opts
+        # get correct last gradient
+        if self.num_gre % 2 == 0:
+            # even number of GRE readouts after / before SE, the last read gradient is bu grad
+            block_acq = self.block_bu_acq
+        else:
+            # odd number of GRE readouts after / before SE, the last readgradient is bd grad
+            block_acq = self.block_bd_acq
         readout_area = np.trapezoid(
-            x=self.block_bd_acq.grad_read.t_array_s,
-            y=self.block_bd_acq.grad_read.amplitude
+            x=block_acq.grad_read.t_array_s,
+            y=block_acq.grad_read.amplitude
         )
         spoil_area = self.params.read_grad_spoiling_factor * readout_area
         # now we need to plug in new amplitude into spoiling read gradient

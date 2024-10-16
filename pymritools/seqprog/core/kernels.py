@@ -116,10 +116,11 @@ class Kernel:
         if pulse_file:
             log_module.info(f"rf -- loading rf from file: {pulse_file}")
             rf = events.RF.load_from_pypsi_pulse(
-                fname=pulse_file, flip_angle_rad=params.excitation_rf_rad_fa,
+                fname=pulse_file,
+                flip_angle_rad=params.excitation_rf_rad_fa,
                 phase_rad=params.excitation_rf_rad_phase,
-                system=system, duration_s=params.excitation_duration * 1e-6,
-                pulse_type='excitation'
+                delay_s=0, duration_s=params.excitation_duration * 1e-6,
+                system=system, pulse_type='excitation'
             )
         else:
             log_module.info(f"rf -- build gauss pulse")
@@ -197,14 +198,16 @@ class Kernel:
             log_module.info(f"rf -- loading pulse from file {pulse_file}")
             rf = events.RF.load_from_pypsi_pulse(
                 fname=pulse_file, system=system,
-                duration_s=params.refocusing_duration * 1e-6, flip_angle_rad=np.pi,
-                phase_rad=0.0, pulse_type='refocusing'
+                duration_s=params.refocusing_duration * 1e-6,
+                flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
+                phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
+                pulse_type='refocusing'
             )
         else:
             log_module.info(f"rf -- build sync pulse")
             rf = events.RF.make_gauss_pulse(
-                flip_angle_rad=params.refocusing_rf_rad_fa[pulse_num],
-                phase_rad=params.refocusing_rf_rad_phase[pulse_num],
+                flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
+                phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
                 pulse_type="refocusing",
                 delay_s=0.0,
                 duration_s=params.refocusing_duration * 1e-6,
