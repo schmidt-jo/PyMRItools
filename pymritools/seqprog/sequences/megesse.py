@@ -60,7 +60,8 @@ class MEGESSE(Sequence2D):
         # we need to prephase this gradient
         self.block_refocus_1, _ = Kernel.refocus_slice_sel_spoil(
             params=self.params, system=self.system, pulse_num=0, return_pe_time=True,
-            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2
+            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2,
+            pulse_file=self.config.pulse_file
         )
         # via kernels we can build slice selective blocks of excitation and refocusing
         # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
@@ -72,14 +73,16 @@ class MEGESSE(Sequence2D):
 
         # excitation pulse
         self.block_excitation = Kernel.excitation_slice_sel(
-            params=self.params, system=self.system, adjust_ramp_area=ramp_area
+            params=self.params, system=self.system, adjust_ramp_area=ramp_area,
+            pulse_file=self.config.pulse_file
         )
 
         # Now were left with building the kernels for all remaining refocusing pulses.
         # Again, the blip up read gradient needs to be prephased, to start measurement after the ref. pulse kernel.
         self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
             params=self.params, system=self.system, pulse_num=1, return_pe_time=True,
-            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2
+            read_gradient_to_prephase=self.block_bu_acq.grad_read.area / 2,
+            pulse_file=self.config.pulse_file
         )
 
         # dependent on the number of gradient echo readouts in the readout train we might need to change the sign
