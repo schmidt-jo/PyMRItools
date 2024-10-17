@@ -69,6 +69,9 @@ def rd_to_torch(config: RD):
     if config.visualize:
         # transform into image
         img = fft(k_space, img_to_k=False, axes=(0, 1))
+        for i in torch.randint(low=0, high=img.shape[3], size=(3,)):
+            nifti_save(data=torch.abs(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"naive_recon_mag_ch-{i}")
+            nifti_save(data=torch.angle(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"naive_recon_phase_ch-{i}")
         # do rSoS
         img = root_sum_of_squares(img, dim_channel=-2)
         # nifti save

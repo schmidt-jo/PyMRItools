@@ -665,6 +665,8 @@ class Kernel:
         max_primary = 0
         adc_no_rf = False
 
+        t_min = 0
+        t_max = self.get_duration() * 1e6
         for idx_e, e in enumerate(self.list_events()):
             if e.t_duration_s > 1e-9:
                 if isinstance(e, events.ADC):
@@ -692,9 +694,29 @@ class Kernel:
                     t_rf = self.rf.t_array_s + t_offset
                     t_rf = (1e6 * t_rf).astype(int)
                     amp_rf = np.abs(self.rf.signal)
-                    phase_rf = np.angle(self.rf.signal)
-                    phase_rf /= np.pi * np.max(amp_rf)
+                    phase_rf = np.angle(self.rf.signal) + self.rf.phase_rad
+                    phase_rf *= np.max(amp_rf) / np.pi
 
+                    # annotate phase of plot
+                    color = "#228264"
+                    for idx_a, a in enumerate(["Phase -π", "Phase -π/2", "Phase π/2", "Phase π"]):
+                        pos = (-1 + 0.5 * (idx_a + int(idx_a / 2))) * np.max(amp_rf)
+                        fig.add_trace(
+                            go.Scattergl(
+                                x=[t_min, t_max],
+                                y=[pos, pos],
+                                line=dict(dash='dot', color=color), name="Max Amp | π", mode="lines",
+                                showlegend=False
+                            ),
+                            secondary_y=True
+                        )
+                        x_ax = fig.data[-1].xaxis
+                        y_ax = fig.data[-1].yaxis
+                        fig.add_annotation(
+                            x=0, y=pos, text=a, showarrow=False, opacity=0.6,
+                            xanchor="left", xref=x_ax, yanchor="top", yref=y_ax, secondary_y=True,
+                        )
+                    # plot rf
                     if np.max(np.abs(amp_rf)) > max_secondary:
                         max_secondary = np.max(np.abs(amp_rf))
                     fig.add_trace(
@@ -705,11 +727,7 @@ class Kernel:
                         go.Scattergl(x=t_rf, y=phase_rf, name="RF Phase", mode="lines"),
                         secondary_y=True
                     )
-                    fig.add_trace(
-                        go.Scattergl(x=[np.min(t_rf), np.max(t_rf)], y=[np.max(amp_rf), np.max(amp_rf)],
-                                     line=dict(dash='dash'), name="Max Amp | π", mode="lines"),
-                        secondary_y=True
-                    )
+
                 if isinstance(e, events.GRAD):
                     timing = (np.array([0, e.t_delay_s - 1e-6, *(e.t_delay_s + e.t_array_s)]) * 1e6).astype(int)
                     grad = np.zeros_like(timing)
@@ -726,7 +744,7 @@ class Kernel:
         if adc_no_rf:
             title = "ADC"
         else:
-            title = "RF Amplitude [1/max(Amp)] | RF Phase [1/π]"
+            title = "RF Amplitude | RF Phase"
         fig.update_yaxes(
             title=title, secondary_y=True, range=(-1.1*max_secondary, 1.1*max_secondary)
         )

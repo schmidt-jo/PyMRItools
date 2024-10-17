@@ -232,7 +232,7 @@ class MEGESSE(Sequence2D):
         t_exc_1ref = (self.block_excitation.get_duration() - t_start + self.block_refocus_1.rf.t_delay_s +
                       self.block_refocus_1.rf.t_duration_s / 2)
 
-        # find time between mid refocus and first and second echo
+        # find time between mid refocus to first and to second echo
         t_ref_e1 = (
             self.block_refocus_1.get_duration() - (
                 self.block_refocus_1.rf.t_delay_s + self.block_refocus_1.rf.t_duration_s / 2)
@@ -266,7 +266,7 @@ class MEGESSE(Sequence2D):
                 self.te.append(self.te[-1] + t_e2e)
         te_print = [f'{1000 * t:.2f}' for t in self.te]
         log_module.info(f"echo times: {te_print} ms")
-        # deliberately set esp weird to catch it upon processing when dealing with vespa/megesse style sequence
+        # deliberately set esp weird to catch it upon processing when dealing with megesse style sequence
         self.esp = -1
 
     def _set_fa(self, rf_idx: int, slice_idx: int):
@@ -390,19 +390,31 @@ class MEGESSE(Sequence2D):
                 idx_echo=0, no_adc=no_adc
             )
 
+            # delay if necessary
+            if self.t_delay_ref1_se1.get_duration() > 1e-7:
+                self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
+
             # successive num gre echoes per rf
             for echo_idx in np.arange(1, self.params.etl):
                 # set flip angle from param list
                 self._set_fa(rf_idx=echo_idx, slice_idx=idx_slice)
-                # looping through slices per phase encode, set phase encode for ref 1
+                # looping through slices per phase encode, set phase encode for ref
                 self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx)
                 # refocus
                 self.sequence.add_block(*self.block_refocus.list_events_to_ns())
+
+                # delay if necessary
+                if self.t_delay_ref1_se1.get_duration() > 1e-7:
+                    self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
 
                 self._add_gesse_readouts(
                     idx_pe_loop=idx_pe_n, idx_slice_loop=idx_slice,
                     idx_echo=echo_idx, no_adc=no_adc
                 )
+
+                # delay if necessary
+                if self.t_delay_ref1_se1.get_duration() > 1e-7:
+                    self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
 
             # set phase encode of final spoiling grad
             self._set_end_spoil_phase_grad()
