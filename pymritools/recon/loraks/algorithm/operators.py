@@ -2,7 +2,10 @@
 import torch
 import logging
 import pathlib as plib
+from abc import ABC, abstractmethod
+
 from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape
 
 log_module = logging.getLogger(__name__)
 
@@ -39,41 +42,81 @@ def get_neighborhood(pt_xy: torch.tensor, radius: int):
     return pt_xy + get_k_radius_grid_points(radius=radius)
 
 
-class LoraksOperator:
-    def __init__(self, k_space_dims: tuple, radius: int = 3):
+class LoraksOperator(ABC):
+    """
+    Base implementation of LORAKS operator,
+    We want to implement the operator slice wise, for k-space data [x, y, ch, t].
+    Merging of channel and time data allows for complementary sampling schemes per echo and
+    is supposed to improve performance.
+    Essentially there is only the C and S version (G was shown to behave suboptimal),
+    This is the common base class
+    """
+    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3,
+                 device: torch.device = torch.get_default_device()):
         # save params
-        self.radius: int = radius
-        self.k_space_dims: tuple = k_space_dims  # [xy, t-ch]
-        while self.k_space_dims.__len__() < 4:
-            # want the dimensions to be [x, y, ch, t]
-            self.k_space_dims = (*self.k_space_dims, 1)
+        self.radius: int = nb_radius
+        self.k_space_dims: tuple = self._expand_dims_to_x_y_ch_t(k_space_dims_x_y_ch_t)
+        self.device: torch.device = device
+
+        # calculate the shape for combined x-y and ch-t dims
         self.reduced_k_space_dims = (
-            k_space_dims[0] * k_space_dims[1],  # xy
-            k_space_dims[2] * k_space_dims[3]  # t-ch
+            k_space_dims_x_y_ch_t[0] * k_space_dims_x_y_ch_t[1],  # xy
+            k_space_dims_x_y_ch_t[2] * k_space_dims_x_y_ch_t[3]  # ch - t
         )
-        self.nb_coos_point_symmetric = self.get_point_symmetric_neighborhoods()
-        self.nb_coos_linear = self.get_lin_neighborhoods()
-        self.nb_size: int = self.nb_coos_linear.shape[-2] * self.reduced_k_space_dims[-1]
+        # need to build psp once with ones, such that we can extract it from the method
+        self.p_star_p: torch.Tensor = torch.ones(
+            (*self.k_space_dims[:2], self.reduced_k_space_dims[-1]), device=self.device
+        )
+        self.p_star_p: torch.Tensor = self._get_p_star_p()
+        self.neighborhood_indices: torch.Tensor = self._get_neighborhood_indices()
 
-    def operator(self, k_space: torch.tensor) -> torch.tensor:
-        """ k-space input in 2d, [xy, ch_t(possibly batched)]"""
-        # check for single channel data
-        if k_space.shape.__len__() == 1:
-            k_space = k_space[:, None]
-        return self._operator(k_space)
+    @staticmethod
+    def _expand_dims_to_x_y_ch_t(in_data: torch.Tensor | tuple):
+        if torch.is_tensor(in_data):
+            shape = in_data.shape
+            while shape.__len__() < 4:
+                # want the dimensions to be [x, y, ch, t], assume to be lacking time and or channel information
+                in_data = in_data.unsqueeze(-1)
+                shape = in_data.shape
+        else:
+            while in_data.__len__() < 4:
+                # want the dimensions to be [x, y, ch, t], assume to be lacking time and or channel information
+                in_data = (*in_data, 1)
+            shape = in_data
+        if shape.__len__() > 4:
+            err = f"Operator only implemented for <4D data."
+            log_module.error(err)
+            raise AttributeError(err)
+        return in_data
 
-    def _operator(self, k_space: torch.tensor) -> torch.tensor:
-        """ to be implemented for each loraks type mode"""
+    @abstractmethod
+    def _get_neighborhood_indices(self) -> torch.Tensor:
         raise NotImplementedError
+
+    @property
+    def neighborhood_size(self):
+        return self.neighborhood_indices.shape[1]
+
+    def operator(self, k_space_x_y_ch_t: torch.Tensor) -> torch.Tensor:
+        """ k-space input in 4d, [x, y, ch, t]"""
+        # check for correct data shape, expand if necessary
+        k_space_x_y_ch_t = self._expand_dims_to_x_y_ch_t(k_space_x_y_ch_t)
+        return self._operator(k_space_x_y_ch_t)
 
     def operator_adjoint(self, x_matrix: torch.tensor) -> torch.tensor:
         return torch.squeeze(self._adjoint(x_matrix=x_matrix))
 
+    @abstractmethod
+    def _operator(self, k_space: torch.tensor) -> torch.tensor:
+        """ to be implemented for each loraks type mode"""
+        raise NotImplementedError
+
+    @abstractmethod
     def _adjoint(self, x_matrix: torch.tensor) -> torch.tensor:
         raise NotImplementedError
 
-    def p_star_p(self, k_vector):
-        return self.operator_adjoint(self.operator(k_vector))
+    def _get_p_star_p(self):
+        return self.operator_adjoint(self.operator(torch.ones(self.k_space_dims, device=self.device)))
 
     def _get_k_space_pt_idxs(self, include_offset: bool = False, point_symmetric_mirror: bool = False):
         # give all points except radius
@@ -141,23 +184,25 @@ class LoraksOperator:
 
 
 class C(LoraksOperator):
-    def __init__(self, k_space_dims: tuple, radius: int = 3):
-        super().__init__(k_space_dims=k_space_dims, radius=radius)
+    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3):
+        super().__init__(k_space_dims_x_y_ch_t=k_space_dims_x_y_ch_t, nb_radius=nb_radius)
 
-    def _operator(self, k_space: torch.tensor) -> torch.tensor:
+    def _operator(self, k_space_x_y_ch_t: torch.tensor) -> torch.tensor:
         """
         operator to map k-space vector to loraks c matrix
-        :param k_space: flattened k_space vector
+        :param k_space_x_y_ch_t: k_space vector in 4d
         :return: C matrix, dims [(kx - 2R)*(ky - 2R)
         """
-        # put k_space back into 2D slice and 3rd dim is concatenated t-ch
-        k_space = torch.reshape(k_space, (self.k_space_dims[0], self.k_space_dims[1], -1))
-        # get indices for whole k-space
-        p_nb_nx_ny = self.nb_coos_linear
+        # build combined 3rd dim
+        k_space_x_y_cht = torch.reshape(k_space_x_y_ch_t, (self.k_space_dims[0], self.k_space_dims[1], -1))
         # extract from matrix
-        c_matrix = k_space[p_nb_nx_ny[:, :, 0], p_nb_nx_ny[:, :, 1]]
+        c_matrix = k_space_x_y_ch_t[
+            self.neighborhood_indices[:, :, 0],
+            self.neighborhood_indices[:, :, 1]
+        ]
         # now we want the neighborhoods of individual t-ch info to be concatenated into the neighborhood axes.
         c_matrix = torch.reshape(torch.movedim(c_matrix, -1, 1), (c_matrix.shape[0], -1))
+
         return c_matrix
 
     def _adjoint(self, x_matrix: torch.tensor) -> torch.tensor:
@@ -167,33 +212,40 @@ class C(LoraksOperator):
         :return: flattened k-space vector
         """
         # build indices
-        p_nb_nx_ny_idxs = self.nb_coos_linear
         if x_matrix.shape[0] < x_matrix.shape[1]:
             # want neighborhood dim to be in column
             x_matrix = x_matrix.T
         # store shapes
         sm, sk = x_matrix.shape
         # get dims
-        nb = p_nb_nx_ny_idxs.shape[1]
-        n_tch = int(sk / nb)
+        n_tch = int(sk / self.neighborhood_size)
         # extract sub-matrices - they are concatenated in neighborhood dimension for all t-ch images
-        t_ch_idxs = torch.arange(nb)[:, None] + torch.arange(n_tch)[None, :] * nb
+        t_ch_idxs = (torch.arange(self.neighborhood_size)[:, None] +
+                     torch.arange(n_tch)[None, :] * self.neighborhood_size)
         x_matrix = x_matrix[:, t_ch_idxs]
 
         # build k_space
         k_space_recon = torch.zeros((*self.k_space_dims[:2], n_tch), dtype=torch.complex128).to(x_matrix.device)
         # # fill k_space
         log_module.debug(f"build k-space from c-matrix")
-        for idx_nb in range(nb):
+        for idx_nb in range(self.neighborhood_size):
             k_space_recon[
-                p_nb_nx_ny_idxs[:, idx_nb, 0], p_nb_nx_ny_idxs[:, idx_nb, 1]
+                self.neighborhood_indices[:, idx_nb, 0], self.neighborhood_indices[:, idx_nb, 1]
             ] += x_matrix[:, idx_nb]
-        return torch.reshape(k_space_recon, (-1, n_tch))
+        mask = self.p_star_p > 0
+        k_space_recon[mask] /= self.p_star_p[mask]
+
+        return torch.reshape(k_space_recon, self.k_space_dims)
+
+    def _get_neighborhood_indices(self) -> torch.Tensor:
+        return get_idx_2d_circular_neighborhood_patches_in_shape(
+            shape_2d=self.k_space_dims[:2], nb_radius=self.radius, device=self.device
+        )
 
 
 class S(LoraksOperator):
-    def __init__(self, k_space_dims: tuple, radius: int = 3):
-        super().__init__(k_space_dims=k_space_dims, radius=radius)
+    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3):
+        super().__init__(k_space_dims_x_y_ch_t=k_space_dims_x_y_ch_t, nb_radius=nb_radius)
 
     def _operator(self, k_space: torch.tensor) -> torch.tensor:
         # build neighborhoods
@@ -252,13 +304,26 @@ class S(LoraksOperator):
             ] += srm[:, idx_nb] + 1j * sim[:, idx_nb]
         return torch.reshape(k_space_recon, (-1, n_tch))
 
+    def _get_neighborhood_indices(self) -> torch.Tensor:
+        # we want to index through all circular neighborhoods completely included in the shape
+        indices = get_idx_2d_circular_neighborhood_patches_in_shape(
+            shape_2d=self.k_space_dims[:2], nb_radius=self.radius, device=self.device,
+        )
+        # additionally for each of the indices we want to find the point symmetric corresponent
+        indices_point_sym = 2 * torch.floor(
+            torch.tensor(self.k_space_dims[:2], device=indices.device) / 2
+        ) - indices
+        # might give the exact point symmetries, might only need k-space shape point symmetries and
+        # then build the neighborhood. effectively this should be the same
+
+
     def get_half_space_k_dims(self):
         return self._get_half_space_k_dims()
 
 
 class G(LoraksOperator):
-    def __init__(self, k_space_dims: tuple, radius: int = 3):
-        super().__init__(k_space_dims=k_space_dims, radius=radius)
+    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3):
+        super().__init__(k_space_dims_x_y_ch_t=k_space_dims_x_y_ch_t, nb_radius=nb_radius)
 
     def _operator(self, k_space: torch.tensor) -> torch.tensor:
         # build k_space
@@ -389,7 +454,7 @@ if __name__ == '__main__':
     k_pts = torch.tensor([
         (x, y) for x in torch.arange(sl_k_space.shape[0]) for y in torch.arange(sl_k_space.shape[1])
     ])
-    operator_p_c = C(radius=r, k_space_dims=(size_x, size_y))
+    operator_p_c = C(nb_radius=r, k_space_dims_x_y_ch_t=(size_x, size_y))
     # construct c matrix
     c = C.operator(torch.flatten(sl_k_space))
 

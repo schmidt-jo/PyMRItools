@@ -47,7 +47,7 @@ def main():
     sl_image_recon_us = torch.abs(fft(sl_undersampled_k, img_to_k=False, axes=(0, 1)))
 
     # setup operator
-    loraks_operator = operators.S(k_space_dims=sl_image_recon_us.shape, radius=3)
+    loraks_operator = operators.S(k_space_dims_x_y_ch_t=sl_image_recon_us.shape, nb_radius=3)
     nb_size = loraks_operator.operator(torch.ones_like(sl_undersampled_k)).shape[-1]
     rank = 20
 
