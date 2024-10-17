@@ -1083,12 +1083,14 @@ class Sequence2D(abc.ABC):
                     rf.signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
                 )
                 if sim_grad_moments:
-                    flip_angle = 2 * np.pi * np.trapezoid(x=rf.t, y=np.abs(signal))
-                    identifier = 0
-                    if np.pi / 4 < flip_angle < 2 * np.pi / 3:
+                    if rf.use == "excitation":
                         identifier = 1
-                    if 2 * np.pi / 3 < flip_angle < 4 * np.pi / 3:
+                    if rf.use == "refocusing":
                         identifier = 2
+                    else:
+                        err = f"grad moment effect of rf ({rf.use}) not recognized or not implemented."
+                        log_module.error(err)
+                        raise ValueError(err)
                     # assumes rf effect in the center
                     append_to_lists(start + rf.shape_dur * 1e6 / 2, identifier,
                                     label="RF grad moment effect")
