@@ -62,11 +62,6 @@ def rd_to_torch(config: RD):
     # output path
     path_out = plib.Path(config.out_path).absolute()
 
-    # save as np
-    torch_save(k_space, path_out, "k_space")
-    torch_save(k_sampling_mask, path_out, "k_sampling_mask")
-    torch_save(aff, path_out, "affine")
-
     if config.visualize:
         # transform into image
         img = fft(k_space, img_to_k=False, axes=(0, 1))
@@ -78,6 +73,11 @@ def rd_to_torch(config: RD):
         # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
         nifti_save(data=k_sampling_mask.astype(float), img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
+
+    # save as torch tensor for recon
+    torch_save(k_space, path_out, "k_space")
+    torch_save(k_sampling_mask, path_out, "k_sampling_mask")
+    torch_save(aff, path_out, "affine")
 
 
 def main():
