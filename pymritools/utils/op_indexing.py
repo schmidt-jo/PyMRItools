@@ -15,6 +15,10 @@ def get_idx_2d_grid_circle_within_radius(radius: int, device: torch.device = tor
     Therefore, the torch compiler will complain, and if we really need to compile this function, we need to set:
     torch._dynamo.config.capture_dynamic_output_shape_ops = True
     I'm sure the setting can also be provided using the @torch.compile annotation but need to check.
+    -> If used with LORAKS or PCA denoising the matrix sizes explode quite quickly.
+        Thus we could compile this function for a range of radii.
+        Radius 1 - 2 are probably not needed, radius > 5 is probably not feasible,
+        i.e. resulting in three function compiles (for R= 3-5)
     :param radius: Radius of the 2d circle.
     :param device: Desired device of the returned tensor.
     :return: Tensor with shape (#pts, 2) of x-y-points within radius
@@ -55,7 +59,9 @@ def get_idx_2d_square_neighborhood_patches_in_shape(
     :return: Tensor with shape (#pts, 2) of x-y-points of the grid.
     """
     # build indices of grid for whole shape
-    shape_grid = get_idx_2d_rectangular_grid(size_x=shape_2d[0] - nb_size, size_y=shape_2d[1] - nb_size, device=device)
+    shape_grid = get_idx_2d_rectangular_grid(
+        size_x=shape_2d[0] - nb_size, size_y=shape_2d[1] - nb_size, device=device
+    )
     # get indices of grid for the neighborhood
     nb_grid = get_idx_2d_rectangular_grid(size_x=nb_size, size_y=nb_size, device=device)
     # build index grid
@@ -76,9 +82,10 @@ def get_idx_2d_circular_neighborhood_patches_in_shape(
     :param device: Desired device of the returned tensor.
     :return: Tensor with shape (#pts, 2) of x-y-points of the grid.
     """
-    half_r = int(nb_radius / 2)
     # build indices of grid for whole shape
-    shape_grid = get_idx_2d_rectangular_grid(size_x=shape_2d[0] - nb_radius, size_y=shape_2d[1] - nb_radius, device=device) + half_r
+    shape_grid = get_idx_2d_rectangular_grid(
+        size_x=shape_2d[0] - 2 * nb_radius, size_y=shape_2d[1] - 2 * nb_radius, device=device
+    ) + nb_radius
     # get indices of neighborhood grid
     nb_grid = get_idx_2d_grid_circle_within_radius(radius=nb_radius, device=device)
     # build index grid
@@ -87,7 +94,7 @@ def get_idx_2d_circular_neighborhood_patches_in_shape(
 
 
 def get_idx_2d_rectangular_neighborhood_patches_in_shape(
-        shape_2d: tuple[int],
+        shape_2d: tuple[int, int],
         nb_size_x: int,
         nb_size_y: int,
         device=torch.get_default_device()) -> torch.Tensor:
@@ -101,9 +108,10 @@ def get_idx_2d_rectangular_neighborhood_patches_in_shape(
     :return: Tensor with shape (#pts, 2) of x-y-points of the grid.
     """
     # build indices of grid for whole shape
-    shape_grid = get_idx_2d_rectangular_grid(size_x=shape_2d[0] - nb_size_y, size_y=shape_2d[1] - nb_size_y, device=device)
+    shape_grid = get_idx_2d_rectangular_grid(
+        size_x=shape_2d[0] - nb_size_x + 1, size_y=shape_2d[1] - nb_size_y + 1, device=device
+    )
     # get neighborhood grid
-    # TODO Jochen: Please check if the change I made here was correct.
     nb_grid = get_idx_2d_rectangular_grid(nb_size_x, nb_size_y, device=device)
     # build index grid
     grid = shape_grid[:, None, :] + nb_grid[None, :, :]
