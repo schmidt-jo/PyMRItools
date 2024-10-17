@@ -783,12 +783,17 @@ class DELAY(Event):
         return delay_instance
 
     def check_on_block_raster(self) -> bool:
+        # get raster in us
         us_raster = 1e6 * self.system.grad_raster_time
+        # get delay value in us
         us_value = 1e6 * self.t_duration_s
-        if us_value % us_raster < 1e-4:
-            rastered_value = us_value * 1e-6
-        else:
-            rastered_value = np.round(us_value / us_raster) * us_raster
+        # check the modulo of he value against the raster, if its below a threshold
+        # we dont need to do something about the value, otherwise raster
+        if us_value % us_raster > 1e-4:
+            # we need to put the value on the raster
+            us_value = np.round(us_value / us_raster) * us_raster
+        # cast back to seconds
+        rastered_value = 1e-6 * us_value
         if np.abs(rastered_value - self.t_duration_s) > 1e-8:
             return False
         else:
