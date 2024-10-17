@@ -6,7 +6,7 @@
   "resolution_slice_num": 30,
   "resolution_slice_gap": 200,
   "number_central_lines": 36,
-  "acceleration_factor": 3.0,
+  "acceleration_factor": 4.0,
   "excitation_rf_fa": 90.0,
   "excitation_rf_phase": 90.0,
   "excitation_rf_time_bw_prod": 2.0,
@@ -35,12 +35,12 @@
   "grad_moment_slice_spoiling_end": 2500,
   "interleaved_slice_acquisition": true,
   "esp": 8.92,
-  "etl": 5,
+  "etl": 6,
   "tr": 4500.0,
   "bandwidth": 350.0,
   "oversampling": 2,
   "sampling_pattern": "interleaved_lines",
   "acq_phase_dir": "RL",
-  "rf_adapt_z": false,
+  "rf_adapt_z": true,
   "use_navs": false
 }
