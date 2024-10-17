@@ -136,7 +136,7 @@ class Parameters2D(Serializable):
         default="RL", choices=["RL", "PA"], help="Set phase encode direction."
     )
     bandwidth: float = field(
-        default=357.55148741418765, help="Readout bandwidth [Hz/px]."
+        default=302.3705853119224, help="Readout bandwidth [Hz/px]."
     )
     oversampling: int = field(
         default=2, help="Readout oversampling factor."
@@ -253,8 +253,8 @@ class Parameters2D(Serializable):
         # adc raster here hardcoded
         adc_raster = 1e-7
         kf = 1 / (2 * self.bandwidth * adc_raster * self.resolution_n_read * self.oversampling)
-        k = int(np.floor(kf))
-        if np.abs(k - kf) > 1e-9:
+        k = int(np.floor(kf)) + 1e-8
+        if np.abs(k - kf) > 1e-7:
             bw = self.bandwidth
             self.bandwidth = 1 / (2 * k * self.resolution_n_read * self.oversampling * adc_raster)
             log_module.info(f"setting dwell time on adc raster -> small bw adoptions (set bw: {bw:.3f}; new bw: {self.bandwidth:.3f})")

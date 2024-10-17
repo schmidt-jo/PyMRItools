@@ -292,7 +292,7 @@ def main():
     mese = MESE(config=config, specs=specs, params=params)
     # run prog
     try:
-        build(config=config, sequence=mese)
+        build(config=config, sequence=mese, name="mese")
     except Exception as e:
         parser.print_help()
         log_module.exception(e)

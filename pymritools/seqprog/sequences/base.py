@@ -55,6 +55,8 @@ class Sequence2D(abc.ABC):
 
         # get system specs
         self.specs: PulseqSystemSpecs = specs
+        # ToDo: introduce a relax factor to relax gradient stress and pns in parameters
+        # easy implementation is to just lower the max slew rate, this way we affect all gradients
         self.system: Opts = self._set_system_specs()
 
         # set pypulseq sequence as var -> thats actually whats been build throughout the code and
