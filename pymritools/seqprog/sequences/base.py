@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 import tqdm
 
-from pymritools.seqprog.core import kernels, events
+from pymritools.seqprog.core import Kernel, GRAD, ADC, DELAY
 from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D, Sampling
 from pymritools.config import setup_program_logging, setup_parser
 from pypulseq import Opts, Sequence
@@ -84,18 +84,52 @@ class Sequence2D(abc.ABC):
              ),
             dtype=int
         )
-        # set exciation and refocusing at least to be present
-        self.block_excitation: kernels.Kernel = NotImplemented
-        self.block_refocus: kernels.Kernel = NotImplemented
+        # set basic kernels
+        # acquisition
+        self.block_acquisition: Kernel = Kernel.acquisition_fs(
+            params=self.params,
+            system=self.system
+        )
+        # refocusing - after first
+        self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
+            params=self.params,
+            system=self.system,
+            pulse_num=1,
+            return_pe_time=True,
+            read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+            pulse_file=self.config.pulse_file
+        )
+        # refocusing first
+        self.block_refocus_1 = Kernel.refocus_slice_sel_spoil(
+            params=self.params,
+            system=self.system,
+            pulse_num=0,
+            return_pe_time=False,
+            read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+            pulse_file=self.config.pulse_file
+        )
+        # excitation
+        # via kernels we can build slice selective blocks of excitation and refocusing
+        # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
+        # gradient slice refocus gradient. For this we need to now the ramp area of the
+        # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
+        # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
+        # accounting for ramp area
+        ramp_area = float(self.block_refocus_1.grad_slice.area[0])
+        # excitation pulse
+        self.block_excitation = Kernel.excitation_slice_sel(
+            params=self.params, system=self.system,
+            adjust_ramp_area=ramp_area,
+            pulse_file=self.config.pulse_file
+        )
+
         # set up spoling at end of echo train
-        self.block_spoil_end: kernels.Kernel = kernels.Kernel.spoil_all_grads(
+        self.block_spoil_end: Kernel = Kernel.spoil_all_grads(
             params=self.params, system=self.system
         )
+
         # register all pulses that need slice select
         self.kernel_pulses_slice_select: list = []
-
-        self._sampling_pattern_constr: list = []
-        self.block_excitation: kernels.Kernel = kernels.Kernel()
 
         # use random state for reproducibility of eg sampling patterns
         # (for that matter any random or semi random sampling used)
@@ -104,7 +138,6 @@ class Sequence2D(abc.ABC):
         # to check interface set
         self.sampling_pattern_set: bool = False
         self.k_trajectory_set: bool = False
-        self.recon_params: bool = False
 
         # count adcs to track adcs for recon
         self.scan_idx: int = 0
@@ -372,15 +405,15 @@ class Sequence2D(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def _loop_lines(self):
+    def _loop_slices(self, idx_pe_n: int, no_adc: bool = False):
         # to be implemented for each variant, looping through the phase encodes
         pass
 
     def _noise_pre_scan(self):
         # make delay
-        post_delay = events.DELAY.make_delay(delay_s=0.1, system=self.system)
+        post_delay = DELAY.make_delay(delay_s=0.1, system=self.system)
         # build adc block
-        acq = events.ADC.make_adc(system=self.system, num_samples=1000, dwell=self.params.dwell)
+        acq = ADC.make_adc(system=self.system, num_samples=1000, dwell=self.params.dwell)
         # use 2 noise scans
         for k in range(2):
             # add to sequence
@@ -390,7 +423,85 @@ class Sequence2D(abc.ABC):
                 slice_num=0, pe_num=0, echo_num=k, echo_type="noise_scan", acq_type="noise_scan"
             )
             self.sequence.add_block(post_delay.to_simple_ns())
+    
 
+    def _set_fa(self, rf_idx: int, slice_idx: int, excitation: bool = False):
+        if excitation:
+            sbb = self.block_excitation
+            fa_rad = self.params.excitation_rf_rad_fa
+            phase_rad = self.params.excitation_rf_rad_phase
+        else:
+            if rf_idx == 0:
+                sbb = self.block_refocus_1
+            else:
+                sbb = self.block_refocus
+            # take flip angle in radiant from options
+            fa_rad = self.params.refocusing_rf_rad_fa[rf_idx]
+            # take phase as given in options
+            phase_rad = self.params.refocusing_rf_rad_phase[rf_idx]
+            # slice dep rf scaling
+        flip = sbb.rf.t_duration_s / sbb.rf.signal.shape[0] * np.sum(np.abs(sbb.rf.signal)) * 2 * np.pi
+        # slice adaptive fa scaling - we need true slice position here!
+        sbb.rf.signal *= fa_rad / flip * self.rf_slice_adaptive_scaling[self.trueSliceNum[slice_idx]]
+        sbb.rf.phase_rad = phase_rad
+
+    def _set_phase_grad(self, echo_idx: int, phase_idx: int):
+        # caution we assume trapezoidal phase encode gradients
+        area_factors = np.array([0.5, 1.0, 0.5])
+        # we get the actual line index from the sampling pattern, dependent on echo number and phase index in the loop
+        idx_phase = self.k_pe_indexes[echo_idx, phase_idx]
+        # additionally we need the last blocks phase encode for rephasing
+        if echo_idx > 0:
+            # if we are not on the first readout:
+            # we need the last phase encode value to reset before refocusing
+            last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
+            block = self.block_refocus
+            # we set the re-phase phase encode gradient
+            phase_enc_time_pre_pulse = np.sum(np.diff(block.grad_phase.t_array_s[:4]) * area_factors)
+            block.grad_phase.amplitude[1:3] = self.phase_areas[last_idx_phase] / phase_enc_time_pre_pulse
+        else:
+            block = self.block_refocus_1
+
+        # we set the post pulse phase encode gradient that sets up the next readout
+        if np.abs(self.phase_areas[idx_phase]) > 1:
+            # we get the time of the phase encode after pulse for every event
+            phase_enc_time_post_pulse = np.sum(np.diff(block.grad_phase.t_array_s[-4:]) * area_factors)
+            block.grad_phase.amplitude[-3:-1] = - self.phase_areas[idx_phase] / phase_enc_time_post_pulse
+        else:
+            block.grad_phase.amplitude = np.zeros_like(block.grad_phase.amplitude)
+
+    def _set_end_spoil_phase_grad(self):
+        factor = np.array([0.5, 1.0, 0.5])
+
+        # get phase moment of last phase encode
+        pe_last_area = np.trapezoid(
+            x=self.block_refocus.grad_phase.t_array_s[-4:],
+            y=self.block_refocus.grad_phase.amplitude[-4:]
+        )
+        # adopt last grad to inverse area
+        pe_end_times = self.block_spoil_end.grad_phase.t_array_s[-4:]
+        delta_end_times = np.diff(pe_end_times)
+        pe_end_amp = pe_last_area / np.sum(factor * delta_end_times)
+        if np.abs(pe_end_amp) > self.system.max_grad:
+            err = f"amplitude violation upon last pe grad setting"
+            log_module.error(err)
+            raise AttributeError(err)
+        self.block_spoil_end.grad_phase.amplitude[1:3] = - pe_end_amp
+
+    def _loop_lines(self):
+        # through phase encodes
+        line_bar = tqdm.trange(
+            self.params.number_central_lines + self.params.number_outer_lines, desc="phase encodes"
+        )
+        # one slice loop for introduction
+        self._loop_slices(idx_pe_n=0, no_adc=True)
+        # counter for number of scan
+        for idx_n in line_bar:  # We have N phase encodes for all ETL contrasts
+            self._loop_slices(idx_pe_n=idx_n)
+            if self.navs_on:
+                self._loop_navs()
+
+        log_module.info(f"sequence built!")
     # caution: this is closely tied to the pypsi module and changes in either might affect the other!
     # def _check_interface_set(self):
     #     if any([not state for state in [self.k_trajectory_set, self.recon_params_set, self.sampling_pattern_set]]):
@@ -636,7 +747,7 @@ class Sequence2D(abc.ABC):
         self.nav_slice_thickness = self.params.resolution_slice_thickness * self.nav_resolution_factor
 
         # create blocks
-        self.block_nav_excitation: kernels.Kernel = self._set_nav_excitation()
+        self.block_nav_excitation: Kernel = self._set_nav_excitation()
         self.block_list_nav_acq: list = self._set_nav_acquisition()
         self.id_acq_nav = "nav_acq"
 
@@ -694,9 +805,9 @@ class Sequence2D(abc.ABC):
         )
         log_module.info(f"\t\t-total fid-nav time (2 navs + 1 delay of 10ms): {self.nav_t_total * 1e3:.2f} ms")
 
-    def _set_nav_excitation(self) -> kernels.Kernel:
+    def _set_nav_excitation(self) -> Kernel:
         # use excitation kernel without spoiling - only rephasing
-        k_ex = kernels.Kernel.excitation_slice_sel(
+        k_ex = Kernel.excitation_slice_sel(
             params=self.params,
             system=self.system,
             use_slice_spoiling=False
@@ -708,13 +819,13 @@ class Sequence2D(abc.ABC):
         # get area - delta k stays equal since FOV doesnt change
         num_samples_per_read = int(self.params.resolution_n_read / self.nav_resolution_factor)
 
-        grad_read_area = events.GRAD.make_trapezoid(
+        grad_read_area = GRAD.make_trapezoid(
             channel=self.params.read_dir, system=self.system,
             flat_area=num_samples_per_read * self.params.delta_k_read,
             flat_time=self.params.dwell * num_samples_per_read * self.params.oversampling
         ).area
         # need half of this area (includes ramps etc) to preaphse (negative)
-        grad_read_pre = events.GRAD.make_trapezoid(
+        grad_read_pre = GRAD.make_trapezoid(
             channel=self.params.read_dir, system=self.system, area=-grad_read_area / 2,
             duration_s=float(t_spoiling), delay_s=t_spoiling_start
         )
@@ -731,7 +842,7 @@ class Sequence2D(abc.ABC):
         )
         pe_increments *= np.power(-1, np.arange(pe_increments.shape[0]))
         # in general only nth of resolution
-        block_fid_nav = [kernels.Kernel.acquisition_fid_nav(
+        block_fid_nav = [Kernel.acquisition_fid_nav(
             params=self.params,
             system=self.system,
             line_num=k,
@@ -740,7 +851,7 @@ class Sequence2D(abc.ABC):
         # add spoiling
         block_fid_nav.append(self.block_spoil_end)
         # add delay
-        block_fid_nav.append(kernels.Kernel(system=self.system, delay=events.DELAY.make_delay(delay_s=10e-3)))
+        block_fid_nav.append(Kernel(system=self.system, delay=DELAY.make_delay(delay_s=10e-3)))
         return block_fid_nav
 
     def _nav_apply_slice_offset(self, idx_nav: int):
@@ -825,7 +936,7 @@ class Sequence2D(abc.ABC):
             # we want to add a delay additionally after nav block
             num_delays += 1
 
-        self.delay_slice = events.DELAY.make_delay(
+        self.delay_slice = DELAY.make_delay(
             (tr_eff - self.params.resolution_slice_num * t_total_etl) / num_delays,
             system=self.system
         )

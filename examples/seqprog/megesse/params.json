@@ -18,11 +18,9 @@
     140.0,
     140.0,
     140.0,
-    140.0,
     140.0
   ],
   "refocusing_rf_phase": [
-    0.0,
     0.0,
     0.0,
     0.0,
@@ -33,18 +31,16 @@
   "refocusing_duration": 2500,
   "refocusing_grad_slice_scale": 1.5,
   "read_grad_spoiling_factor": 0.5,
-  "grad_moment_slice_spoiling": 1600.0,
+  "grad_moment_slice_spoiling": 1800.0,
   "grad_moment_slice_spoiling_end": 2500,
-  "interleaved_acquisition": true,
-  "ext_rf_exc": "/data/pt_np-jschmidt/data/ds_mese_cbs_js/97_pulseq/sequence/gauss120_b375_pypsi.pkl",
-  "ext_rf_ref": "/data/pt_np-jschmidt/data/ds_mese_cbs_js/97_pulseq/sequence/gauss120_b375_pypsi.pkl",
+  "interleaved_slice_acquisition": true,
   "esp": 8.92,
-  "etl": 6,
+  "etl": 5,
   "tr": 4500.0,
   "bandwidth": 350.0,
   "oversampling": 2,
   "sampling_pattern": "interleaved_lines",
   "acq_phase_dir": "RL",
   "rf_adapt_z": false,
-  "use_nav": false
+  "use_navs": false
 }
