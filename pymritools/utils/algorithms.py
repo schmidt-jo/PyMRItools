@@ -9,6 +9,17 @@ log_module = logging.getLogger(__name__)
 def cgd(
         func_operator, x:torch.Tensor, b: torch.Tensor,
         iter_bar: tqdm.tqdm = None, max_num_iter: int = None, conv_tol: float = 1e-3):
+    """
+    The following Python program implements a Conjugate Gradient Descent (CGD)
+    algorithm to solve a linear system of the form (Ax = b)
+    :param func_operator: Function operator that applies the linear system operator A to a tensor x.
+    :param x: Input tensor representing the initial guess for the solution.
+    :param b: Tensor representing the right-hand side of the linear system Ax = b.
+    :param iter_bar: Optional tqdm progress bar for tracking iterations.
+    :param max_num_iter: Maximum number of iterations for the conjugate gradient descent algorithm.
+    :param conv_tol: Convergence tolerance for the residual norm.
+    :return: A tuple containing the solution tensor, residuals vector, and a dictionary with minimum residual norm and iteration number.
+    """
     if iter_bar is not None:
         if max_num_iter is not None:
             iter_dict = collections.OrderedDict([("iter", "_".rjust(max_num_iter, "_"))])
@@ -110,3 +121,61 @@ def chambolle_pock_tv(data: np.ndarray, lam, n_it=100):
     # constrain to >= 0
     x = np.clip(x, 0, np.max(x))
     return x
+
+
+def randomized_svd(
+        matrix: torch.Tensor, sampling_size: int,
+        power_projections: int = 0, oversampling_factor: int = 0):
+    """
+    Function calculates a randomized Singular Value Decomposition (SVD) for a given matrix.
+    The algorithm uses random projections and, if necessary, power iterations to improve the accuracy of the approximation
+    :param matrix: Input tensor containing the data matrix to be decomposed. The tensor may have additional batch dimensions.
+    :param sampling_size: Number of singular values and vectors to compute.
+    :param power_projections: Number of power iterations to perform to improve the approximation quality.
+    :param oversampling_factor: Additional random vectors to sample to improve the robustness of the decomposition.
+    :return: A tuple containing the left singular vectors (U), singular values (S), and right singular vectors (VH) of the input matrix.
+    """
+    # get matrix shape - ignore batch dims
+    m, n = matrix.shape[-2:]
+    # get batch dims
+    num_batch_dims = len(matrix.shape) - 2
+
+    # want short side to be at front to sample across long side
+    if m > n:
+        matrix = torch.movedim(matrix, -2, -1)
+        transpose = True
+        m, n = n, m
+    else:
+        transpose = False
+
+    # Generate a random Gaussian matrix
+    sample_projection = torch.randn(
+        (n, sampling_size + oversampling_factor),
+        dtype=matrix.dtype, device=matrix.device
+    )
+
+    # Form the random projection, dim: [n, sampling size]
+    sample_matrix = torch.matmul(matrix, sample_projection)
+
+    for _ in range(power_projections):
+        sample_matrix = torch.matmul(matrix, torch.matmul(matrix.T, sample_matrix))
+
+    # Orthonormalize basis using QR decomposition
+    q, _ = torch.linalg.qr(sample_matrix)
+
+    # Obtain the low-rank approximation of the original matrix - project original matrix onto that orthonormal basis
+    lr = torch.matmul(q.T, matrix)
+
+    # Perform SVD on the low-rank approximation
+    u, s, vh = torch.linalg.svd(lr, full_matrices=False)
+
+    # s, vh should be approximately the matrix s, vh of the svd from random matrix theory
+    # we can get the left singular values by back projection
+    u_matrix = torch.matmul(q, u)
+
+    if transpose:
+        v_temp = vh
+        vh = torch.movedim(u_matrix, -1, -2)
+        u_matrix = torch.movedim(v_temp, -1, -2)
+
+    return u_matrix, s, vh

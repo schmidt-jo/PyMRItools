@@ -3,99 +3,14 @@ import pathlib as plib
 import tqdm
 
 import torch
-from torch import nn
-from torch import optim as TorchOptim
 import plotly.graph_objects as go
 import plotly.subplots as psub
 
-from pymritools.recon.loraks.recon import recon
 from pymritools.utils.phantom import SheppLogan
-from pymritools.utils import fft, root_sum_of_squares
+from pymritools.utils import fft, root_sum_of_squares, randomized_svd
 from pymritools.recon.loraks.algorithm import operators
 
 log_module = logging.getLogger(__name__)
-
-
-def nystrom_method(matrix: torch.Tensor, rank: int, num_samples: int = None, sample_axis: int = 0):
-    # matrix is the input matrix (symmetric, positive semidefinite)
-    # we take this to be 2D with the dims [k-space, neighborhoods / concats]
-    # num_samples is the number of rows to sample, if None we sample a quadratic matrix, aka as many as the shorter axis
-    # rank is the target rank for the approximation
-
-    nk, ns = matrix.shape
-    if nk < ns:
-        err = f"implemented for the shorter axis to be in 2nd dim but found dims {matrix.shape}"
-    if num_samples is None:
-        num_samples = ns
-
-    # Step 1: Randomly sample m rows from matrix
-    idx = torch.randperm(nk)[:num_samples]
-    C = matrix[idx]
-    W = matrix[:, idx][idx]
-
-    # Step 2: Compute low-rank approximation of W
-    U, S, V = torch.svd(W)
-    S_k = torch.diag(S[:rank])  # Keep top k singular values
-    U_k = U[:, :rank]
-
-    # Step 3: Compute pseudo-inverse of W_k
-    W_k_inv = U_k @ torch.diag(1 / S[:rank]) @ U_k.t()
-
-    # Step 4: Compute the Nyström approximation
-    G_approx = C @ W_k_inv @ C.t()
-
-    return G_approx
-
-
-def boosting_nystrom(G, p, m, k):
-    # G is the input matrix
-    # p is the number of boosting iterations
-    # m is the number of columns for each Nyström approximation
-    # k is the target rank
-
-    n = G.size(0)
-    G_approx = torch.zeros_like(G)
-
-    for i in range(p):
-        # Compute weak Nyström approximation
-        G_nys = nystrom_method(G, m, k)
-
-        # Combine approximations (uniform weighting for simplicity)
-        G_approx += G_nys / p
-
-    return G_approx
-
-
-def randomized_svd(matrix: torch.Tensor, sampling_size: int, power_projections: int = 1, oversampling_factor: int = 5):
-    # take matrix size to be dim [k-space, neighborhoods / concats]
-    # But want to sample across k-space dims, hence transpose matrix
-    matrix = torch.movedim(matrix, 0, 1)
-
-    nnb, nk = matrix.shape
-
-    # Generate a random Gaussian matrix
-    sample_projection = torch.randn((nk, sampling_size), dtype=matrix.dtype, device=matrix.device)
-
-    # Form the random projection, dim: [nnb, sampling size]
-    sample_matrix = torch.matmul(matrix, sample_projection)
-
-    for _ in range(power_projections):
-        sample_matrix = torch.matmul(matrix, torch.matmul(matrix.T, sample_matrix))
-
-    # Orthonormalize basis using QR decomposition
-    q, _ = torch.linalg.qr(sample_matrix)
-
-    # Obtain the low-rank approximation of the original matrix - project original matrix onto that orthonormal basis
-    lr = torch.matmul(q.T, matrix)
-
-    # Perform SVD on the low-rank approximation
-    u, s, vh = torch.linalg.svd(lr, full_matrices=False)
-
-    # s, vh should be approximately the matrix s, vh of the svd from random matrix theory
-    # we can get the left singular values by back projection
-    u_matrix = torch.matmul(q, u)
-
-    return u_matrix, s, vh
 
 
 def main():
