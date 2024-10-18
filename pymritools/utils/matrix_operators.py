@@ -1,4 +1,5 @@
 import logging
+from abc import ABC, abstractmethod
 
 import torch
 
@@ -116,3 +117,93 @@ def get_idx_2d_rectangular_neighborhood_patches_in_shape(
     # build index grid
     grid = shape_grid[:, None, :] + nb_grid[None, :, :]
     return grid
+
+
+class MatrixOperatorLowRank2D(ABC):
+    """
+    Base implementation of matrix operator,
+    We want to implement an operator for data [x, y, ch, t], that operates on 2d shapes.
+    ToDo: check batching of z-dims and most logic implementation for usecases (LORAKS and PCA Denoise)
+    Merging of channel and time data allows for complementary sampling schemes per echo and
+    is supposed to improve performance.
+    This is the common base class
+    """
+    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3,
+                 device: torch.device = torch.get_default_device()):
+        # save params
+        self.radius: int = nb_radius
+        self.k_space_dims: tuple = self._expand_dims_to_x_y_ch_t(k_space_dims_x_y_ch_t)
+        self.device: torch.device = device
+
+        # calculate the shape for combined x-y and ch-t dims
+        self.reduced_k_space_dims = (
+            k_space_dims_x_y_ch_t[0] * k_space_dims_x_y_ch_t[1],  # xy
+            k_space_dims_x_y_ch_t[2] * k_space_dims_x_y_ch_t[3]  # ch - t
+        )
+        # need to build psp once with ones, such that we can extract it from the method
+        self.p_star_p: torch.Tensor = torch.ones(
+            (*self.k_space_dims[:2], self.reduced_k_space_dims[-1]), device=self.device, dtype=torch.int
+        )
+        self.neighborhood_indices: torch.Tensor = self._get_neighborhood_indices()
+        self.neighborhood_indices_pt_sym: torch.Tensor = self._get_neighborhood_indices_point_sym()
+        # update p_star_p, want this to be 2d + reduced last dim
+        self.p_star_p = torch.reshape(
+            torch.abs(self._get_p_star_p()), (*self.k_space_dims[:2], self.reduced_k_space_dims[-1])
+        )
+
+    @staticmethod
+    def _expand_dims_to_x_y_ch_t(in_data: torch.Tensor | tuple):
+        if torch.is_tensor(in_data):
+            shape = in_data.shape
+            while shape.__len__() < 4:
+                # want the dimensions to be [x, y, ch, t], assume to be lacking time and or channel information
+                in_data = in_data.unsqueeze(-1)
+                shape = in_data.shape
+        else:
+            while in_data.__len__() < 4:
+                # want the dimensions to be [x, y, ch, t], assume to be lacking time and or channel information
+                in_data = (*in_data, 1)
+            shape = in_data
+        if shape.__len__() > 4:
+            err = f"Operator only implemented for <4D data."
+            log_module.error(err)
+            raise AttributeError(err)
+        return in_data
+
+    @abstractmethod
+    def _get_neighborhood_indices(self) -> torch.Tensor:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_neighborhood_indices_point_sym(self) -> torch.Tensor:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def neighborhood_size(self):
+        return NotImplementedError
+
+    def operator(self, k_space_x_y_ch_t: torch.Tensor) -> torch.Tensor:
+        """ k-space input in 4d, [x, y, ch, t]"""
+        # check for correct data shape, expand if necessary
+        k_space_x_y_ch_t = self._expand_dims_to_x_y_ch_t(k_space_x_y_ch_t)
+        return self._operator(k_space_x_y_ch_t)
+
+    def operator_adjoint(self, x_matrix: torch.tensor) -> torch.tensor:
+        return torch.squeeze(self._adjoint(x_matrix=x_matrix))
+
+    @abstractmethod
+    def _operator(self, k_space: torch.tensor) -> torch.tensor:
+        """ to be implemented for each loraks type mode"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _adjoint(self, x_matrix: torch.tensor) -> torch.tensor:
+        raise NotImplementedError
+
+    def _get_p_star_p(self):
+        return self.operator_adjoint(
+            self.operator(
+                torch.ones(self.k_space_dims, device=self.device, dtype=torch.complex128)
+            )
+        )

@@ -1,5 +1,5 @@
 from .utils import do_performance_test
-import pymritools.utils.op_indexing as op_indexing
+import pymritools.utils.matrix_operators as op_indexing
 import pymritools.recon.loraks.algorithm.opt_operators as loraks_operators
 
 
