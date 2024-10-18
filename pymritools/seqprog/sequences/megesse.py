@@ -271,11 +271,11 @@ class MEGESSE(Sequence2D):
 
     def _loop_slices(self, idx_pe_n: int, no_adc: bool = False):
         for idx_slice in range(self.params.resolution_slice_num):
-            self._set_fa(rf_idx=0, slice_idx=idx_slice, excitation=True)
+            # caution we need to set the fa before applying slice offset.
+            # otherwise the phase parameter might not be correct for phase offset update
+            self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice, excitation=True)
             # looping through slices per phase encode
             self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0)
-            # apply slice offset for all kernels
-            self._apply_slice_offset(idx_slice=idx_slice)
 
             # -- excitation --
             # add block
@@ -287,7 +287,8 @@ class MEGESSE(Sequence2D):
 
             # -- first refocus --
             # set flip angle from param list
-            self._set_fa(rf_idx=0, slice_idx=idx_slice)
+            self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice)
+
             # looping through slices per phase encode, set phase encode for ref 1
             self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0)
             # add block
@@ -310,7 +311,7 @@ class MEGESSE(Sequence2D):
             # successive num gre echoes per rf
             for echo_idx in np.arange(1, self.params.etl):
                 # set flip angle from param list
-                self._set_fa(rf_idx=echo_idx, slice_idx=idx_slice)
+                self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=idx_slice)
                 # looping through slices per phase encode, set phase encode for ref
                 self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx)
                 # refocus

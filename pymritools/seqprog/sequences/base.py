@@ -425,7 +425,7 @@ class Sequence2D(abc.ABC):
             self.sequence.add_block(post_delay.to_simple_ns())
     
 
-    def _set_fa(self, rf_idx: int, slice_idx: int, excitation: bool = False):
+    def _set_fa_and_update_slice_offset(self, rf_idx: int, slice_idx: int, excitation: bool = False):
         if excitation:
             sbb = self.block_excitation
             fa_rad = self.params.excitation_rf_rad_fa
@@ -439,11 +439,21 @@ class Sequence2D(abc.ABC):
             fa_rad = self.params.refocusing_rf_rad_fa[rf_idx]
             # take phase as given in options
             phase_rad = self.params.refocusing_rf_rad_phase[rf_idx]
-            # slice dep rf scaling
+        # calculate the flip angle provided by rf shape
         flip = sbb.rf.t_duration_s / sbb.rf.signal.shape[0] * np.sum(np.abs(sbb.rf.signal)) * 2 * np.pi
-        # slice adaptive fa scaling - we need true slice position here!
+        # set rf to produce actually wanted fa.
+        # additionally we can multiply with slice adaptive fa scaling - we need true slice position here!
         sbb.rf.signal *= fa_rad / flip * self.rf_slice_adaptive_scaling[self.trueSliceNum[slice_idx]]
+        # set phase (the slice dependent phase is set in another method)
         sbb.rf.phase_rad = phase_rad
+        self._apply_slice_offset(sbb=sbb, idx_slice=slice_idx)
+    
+    def _apply_slice_offset(self, sbb: Kernel, idx_slice: int):
+        grad_slice_amplitude_hz = sbb.grad_slice.amplitude[sbb.grad_slice.t_array_s >= sbb.rf.t_delay_s][0]
+        sbb.rf.freq_offset_hz = grad_slice_amplitude_hz * self.z[idx_slice]
+        # we are setting the phase of a pulse here into its phase offset var.
+        # To merge both: given phase parameter and any complex signal array data
+        sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
 
     def _set_phase_grad(self, echo_idx: int, phase_idx: int):
         # caution we assume trapezoidal phase encode gradients
@@ -944,15 +954,6 @@ class Sequence2D(abc.ABC):
         if not self.delay_slice.check_on_block_raster():
             self.delay_slice.set_on_block_raster()
             log_module.info(f"\t\t-adjusting TR delay to raster time: {self.delay_slice.get_duration() * 1e3:.2f} ms")
-
-    def _apply_slice_offset(self, idx_slice: int):
-        # set phase and freq offset for all slice select pulse gradient kernels
-        for sbb in self.kernel_pulses_slice_select:
-            grad_slice_amplitude_hz = sbb.grad_slice.amplitude[sbb.grad_slice.t_array_s >= sbb.rf.t_delay_s][0]
-            sbb.rf.freq_offset_hz = grad_slice_amplitude_hz * self.z[idx_slice]
-            # we are setting the phase of a pulse here into its phase offset var.
-            # To merge both: given phase parameter and any complex signal array data
-            sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
 
     def _set_grad_for_emc(self, grad):
         return 1e3 / self.specs.gamma * grad

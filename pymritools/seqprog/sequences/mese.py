@@ -109,11 +109,9 @@ class MESE(Sequence2D):
         else:
             aq_block = self.block_acquisition
         for idx_slice in np.arange(0, self.params.resolution_slice_num):
-            self._set_fa(rf_idx=0, slice_idx=idx_slice, excitation=True)
+            self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice, excitation=True)
             # looping through slices per phase encode
             self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0)
-            # apply slice offset
-            self._apply_slice_offset(idx_slice=idx_slice)
 
             # excitation
             # add block
@@ -124,7 +122,7 @@ class MESE(Sequence2D):
                 self.sequence.add_block(self.delay_exci_ref1.to_simple_ns())
 
             # first refocus
-            self._set_fa(rf_idx=0, slice_idx=idx_slice)
+            self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice)
             # add block
             self.sequence.add_block(*self.block_refocus_1.list_events_to_ns())
 
@@ -149,7 +147,7 @@ class MESE(Sequence2D):
             # loop
             for echo_idx in np.arange(1, self.params.etl):
                 # set fa
-                self._set_fa(rf_idx=echo_idx, slice_idx=idx_slice)
+                self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=idx_slice)
                 # set phase
                 self._set_phase_grad(echo_idx=echo_idx, phase_idx=idx_pe_n)
                 # add block
