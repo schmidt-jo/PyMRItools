@@ -368,22 +368,25 @@ if __name__ == '__main__':
     size_x, size_y = (256, 256)
     sl_phantom = SheppLogan(size_xy=(size_x, size_y))
     sl_k_space = fft(sl_phantom, axes=(0, 1), img_to_k=True)
+    # artifically "skip lines"in phase direction
+    sl_k_space[:, torch.randint(low=0, high=size_y, size=(50,))] = 0.0
+
     num_samples = 1000
     r = 4
 
-    op = S(nb_radius=r, k_space_dims_x_y_ch_t=(size_x, size_y, 1, 1))
+    op = C(nb_radius=r, k_space_dims_x_y_ch_t=(size_x, size_y, 1, 1))
     # construct c matrix
     m = op.operator(sl_k_space)
 
-    target_rank = 60
-    logging.info(f"matrix size: {m.shape}, target rank: {target_rank}")
+    target_rank = 25
+    logging.info(f"C: matrix size: {m.shape}, target rank: {target_rank}")
 
     # do svd
     u, s, v = torch.linalg.svd(m, full_matrices=False)
     s[target_rank:] = 0.0
 
     # recon
-    s_lr_approx = torch.matmul(
+    s_lr_approx_c = torch.matmul(
         torch.matmul(
             u, torch.diag(s).to(dtype=u.dtype)
         ),
@@ -391,17 +394,46 @@ if __name__ == '__main__':
     )
 
     # get back to k - space
-    k_recon = op.operator_adjoint(s_lr_approx)
-    img_recon = fft(k_recon, axes=(0, 1), img_to_k=False)
+    k_recon = op.operator_adjoint(s_lr_approx_c)
+    img_recon_c = fft(k_recon, axes=(0, 1), img_to_k=False)
+    psp_c = op.p_star_p
 
-    plots = [sl_phantom, img_recon, op.p_star_p]
+    op = S(nb_radius=r, k_space_dims_x_y_ch_t=(size_x, size_y, 1, 1))
+    # construct c matrix
+    m = op.operator(sl_k_space)
+
+    target_rank = 40
+    logging.info(f"S: matrix size: {m.shape}, target rank: {target_rank}")
+
+    # do svd
+    u, s, v = torch.linalg.svd(m, full_matrices=False)
+    s[target_rank:] = 0.0
+
+    # recon
+    s_lr_approx_s = torch.matmul(
+        torch.matmul(
+            u, torch.diag(s).to(dtype=u.dtype)
+        ),
+        v
+    )
+
+    # get back to k - space
+    k_recon = op.operator_adjoint(s_lr_approx_s)
+    img_recon_s = fft(k_recon, axes=(0, 1), img_to_k=False)
+
+    sl_us_phantom = fft(sl_k_space, axes=(0, 1), img_to_k=False)
+
+    plots = [sl_phantom,  img_recon_c, psp_c, sl_us_phantom, img_recon_s, op.p_star_p]
+
     fig = psub.make_subplots(
-        rows=1, cols=len(plots)
+        rows=2, cols=len(plots)
     )
     for idx_i, i in enumerate(plots):
+        r = 1 + int(idx_i / int(len(plots) / 2))
+        c = int(idx_i % int(len(plots) / 2)) + 1
         fig.add_trace(
             go.Heatmap(z=torch.squeeze(torch.abs(i)).numpy(), colorscale='Magma', showscale=False),
-            row=1, col=idx_i + 1
+            row=r, col=c
         )
 
     fig_path = plib.Path("./examples/recon/loraks/phantom_recon").absolute().with_suffix(".html")
