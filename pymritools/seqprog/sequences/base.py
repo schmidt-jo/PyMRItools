@@ -158,7 +158,8 @@ class Sequence2D(abc.ABC):
             self.rf_slice_adaptive_scaling = 1 / slice_intensity_profile
 
         # navigators
-        self.navs_on: bool = self.params.use_navs
+        # self.navs_on: bool = self.params.use_navs
+        self.navs_on: bool = False      # no navigator implementation for now
         self.nav_num: int = 0
         self.nav_t_total: float = 0.0
         # for now we fix the navigator resolution at 5 times coarser than the chosen resolution
@@ -511,7 +512,6 @@ class Sequence2D(abc.ABC):
                 self._loop_navs()
 
         log_module.info(f"sequence built!")
-
     # caution: this is closely tied to the pypsi module and changes in either might affect the other!
     # def _check_interface_set(self):
     #     if any([not state for state in [self.k_trajectory_set, self.recon_params_set, self.sampling_pattern_set]]):
@@ -1259,7 +1259,6 @@ class Sequence2D(abc.ABC):
 
     def plot_sampling(self):
         pass
-
 
 # def _plot_grad_moments(self, grad_moments: np.ndarray, dt_in_us: int):
 #     ids = ["gx"] * grad_moments.shape[1] + ["gy"] * grad_moments.shape[1] + ["gz"] * grad_moments.shape[1] + \
