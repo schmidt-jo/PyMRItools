@@ -17,7 +17,8 @@ class MEGESSE(Sequence2D):
         log_module.info(f"Init MEGESSE Sequence")
         # set number of GRE echoes beside SE
         self.num_gre: int = 2
-        self.num_e_per_rf: int = 1 + self.num_gre
+        # number of readouts per refocusing (symmetrically placed)
+        self.num_e_per_rf: int = 1 + 2 * self.num_gre
 
         # timing
         self.t_delay_exc_ref1: DELAY = DELAY()
@@ -61,17 +62,24 @@ class MEGESSE(Sequence2D):
         # First refocusing doesnt need to rewind anything
         self._check_and_mod_echo_read_with_last_gre_readout_polarity(self.block_refocus)
 
+        # we need to modify the excitation kernel
+        # -> symmetric echoes means we want readouts on fid after excitation = full rephasing
+        self.block_excitation = Kernel.excitation_slice_sel(
+            params=self.params, system=self.system, pulse_file=self.config.pulse_file,
+            use_slice_spoiling=False, adjust_ramp_area=0.0
+        )
+
         # plot files for visualization
         if self.config.visualize:
             self.block_excitation.plot(path=self.path_figs, name="excitation")
-            self.block_refocus_1.plot(path=self.path_figs, name="refocus-1")
+            # self.block_refocus_1.plot(path=self.path_figs, name="refocus-1")
             self.block_refocus.plot(path=self.path_figs, name="refocus")
             # self.block_pf_acquisition.plot(path=self.path_figs, name="partial-fourier-acqusisition")
             self.block_acquisition.plot(path=self.path_figs, name="bu-acquisition")
             self.block_acquisition_neg_polarity.plot(path=self.path_figs, name="bd-acquisition")
 
         # register all slice select kernel pulse gradients
-        self.kernel_pulses_slice_select = [self.block_excitation, self.block_refocus_1, self.block_refocus]
+        self.kernel_pulses_slice_select = [self.block_excitation, self.block_refocus]
 
         # ToDo:
         # as is now all gesse readouts sample the same phase encode lines as the spin echoes.
@@ -166,7 +174,6 @@ class MEGESSE(Sequence2D):
             # area_read = np.sum(block_acq.grad_read.area)
             # area_rewind = - 0.5 * area_read
 
-
     def _build_variant(self):
         log_module.info(f"build -- calculate minimum ESP")
         self._calculate_echo_timings()
@@ -186,50 +193,58 @@ class MEGESSE(Sequence2D):
         self._set_slice_delay(t_total_etl=t_total_etl)
 
     def _calculate_echo_timings(self):
-        # have 2 * etl echoes
+        # have num_gre + (2 * num_gre + 1) * etl echoes
         # find midpoint of rf
         t_start = self.block_excitation.rf.t_delay_s + self.block_excitation.rf.t_duration_s / 2
-        # find time between exc and mid first refocus (not symmetrical)
-        t_exc_1ref = (self.block_excitation.get_duration() - t_start + self.block_refocus_1.rf.t_delay_s +
-                      self.block_refocus_1.rf.t_duration_s / 2)
+        # find time from excitation mid to mid of first acquisition
+        t_exc_gre1 = (self.block_acquisition.get_duration() - t_start +
+                      self.block_acquisition_neg_polarity.get_duration() / 2)
+        # find time between readouts
+        t_e2e = self.block_acquisition.get_duration() / 2 + self.block_acquisition.get_duration() / 2
+        # quick sanity check, they should be equally long
+        assert np.allclose(self.block_acquisition.get_duration(), self.block_acquisition_neg_polarity.get_duration())
 
-        # find time between mid refocus to first and to second echo
-        t_ref_e1 = (
-                self.block_refocus_1.get_duration() - (
-                self.block_refocus_1.rf.t_delay_s + self.block_refocus_1.rf.t_duration_s / 2)
-                + self.block_acquisition.get_duration() / 2)
-        t_e2e = self.block_acquisition.get_duration() / 2 + self.block_acquisition_neg_polarity.get_duration() / 2
-        # we need to add the e2e time for each additional GRE readout
-        # echo time of first se is twice the bigger time of 1) between excitation and first ref
-        # 2) between first ref and se
-        esp_1 = 2 * np.max([t_exc_1ref, t_ref_e1])
+        # find midpoint of rf refocus block to echo readout
+        t_e_ref = (self.block_acquisition.get_duration() / 2 + self.block_refocus.rf.t_delay_s +
+                   self.block_refocus.rf.t_duration_s / 2)
+        # quick sanity check if rf sits in the middle
+        assert np.allclose(
+            self.block_refocus.get_duration() / 2,
+            self.block_refocus.rf.t_delay_s + self.block_refocus.rf.t_duration_s / 2
+        )
+
+        # now we want to calculate minimum echo spacing
+        # time from excitation to refocus (including num_gre readouts)
+        t_exci_2_ref = t_exc_gre1 + (self.num_gre - 1) * t_e2e + t_e_ref
+        t_ref_se = self.block_refocus.get_duration() / 2 + (self.num_gre + 0.5) * self.block_acquisition.get_duration()
+
+        esp = 2 * np.max([t_exci_2_ref, t_ref_se])
 
         # time to either side between excitation - ref - se needs to be equal, calculate appropriate delays
-        if t_exc_1ref < esp_1 / 2:
+        if t_exci_2_ref < esp / 2:
             delay_ref_e = 0.0
-            self.t_delay_exc_ref1 = DELAY.make_delay(esp_1 / 2 - t_exc_1ref, system=self.system)
+            self.t_delay_exc_ref1 = DELAY.make_delay(esp / 2 - t_exci_2_ref, system=self.system)
         else:
-            delay_ref_e = esp_1 / 2 - t_ref_e1
+            delay_ref_e = esp / 2 - t_ref_se
             self.t_delay_ref1_se1 = DELAY.make_delay(delay_ref_e, system=self.system)
 
-        # write echo times to array
-        self.te.append(esp_1)
-        for _ in range(self.num_gre):
+        # write echo times to array, take the first echo readouts
+        self.te = [t_exc_gre1]
+        for _ in range(self.num_gre - 1):
             self.te.append(self.te[-1] + t_e2e)
+
         # after this a rf pulse is played out and we can iteratively add the rest of the echoes
-        for k in np.arange(self.num_e_per_rf, self.params.etl * self.num_e_per_rf, self.num_e_per_rf):
-            # take last echo time (gre sampling after se) need to add time from gre to rf and from rf to gre (equal)
+        for k in range(self.params.etl):
             # if we would need to add an delay (if ref to e is quicker than from excitation to ref),
-            # we would do it before the echoes and after the echoes to symmetrize
-            self.te.append(self.te[k - 1] + 2 * (t_ref_e1 + delay_ref_e))
-            # take this time and add time between gre and se / readout to readout
-            for _ in range(self.num_gre):
+            # we would do it before the echoes and after the echoes to symmetrize,
+            # hence after the last echo we add the time from echo to refocus twice and any delay twice
+            self.te.append(self.te[-1] + 2 * (t_e_ref + delay_ref_e))
+            # add gre readouts - then se, then gre
+            for _ in range(2 * self.num_gre):
                 self.te.append(self.te[-1] + t_e2e)
+
         te_print = [f'{1000 * t:.2f}' for t in self.te]
         log_module.info(f"echo times: {te_print} ms")
-        # deliberately set esp weird to catch it upon processing when dealing with megesse style sequence
-        self.esp = -1
-
 
     def _add_gesse_readouts(self, idx_pe_loop: int, idx_slice_loop: int, idx_echo: int, no_adc: bool = False):
         if no_adc:
@@ -244,11 +259,8 @@ class MEGESSE(Sequence2D):
             aq_block_bd = self.block_acquisition_neg_polarity
         # phase encodes are set up to be equal per echo
         # set echo type list
-        e_types = ["gre"] * self.num_gre
-        if int(idx_echo % 2) == 0:
-            e_types.insert(0, "se")
-        else:
-            e_types.append("se")
+        e_types = ["gre"] * self.num_e_per_rf
+        e_types[self.num_gre] = "se"
 
         for num_readout in range(self.num_e_per_rf):
             if int(num_readout % 2) == 0:
@@ -281,35 +293,41 @@ class MEGESSE(Sequence2D):
             # add block
             self.sequence.add_block(*self.block_excitation.list_events_to_ns())
 
+            # add gradient echo readouts
+            if no_adc:
+                # bu readout
+                aq_block_bu = self.block_acquisition.copy()
+                aq_block_bu.adc = ADC()
+                # bd readout
+                aq_block_bd = self.block_acquisition_neg_polarity.copy()
+                aq_block_bd.adc = ADC()
+            else:
+                aq_block_bu = self.block_acquisition
+                aq_block_bd = self.block_acquisition_neg_polarity
+            for num_readout in range(self.num_gre):
+                if int(num_readout % 2) == 0:
+                    # add bu sampling
+                    self.sequence.add_block(*aq_block_bu.list_events_to_ns())
+                    id_acq = self.id_bu_acq
+                else:
+                    # add bd sampling
+                    self.sequence.add_block(*aq_block_bd.list_events_to_ns())
+                    id_acq = self.id_bd_acq
+                if not no_adc:
+                    # write sampling pattern
+                    _ = self._write_sampling_pattern_entry(
+                        slice_num=self.trueSliceNum[idx_slice],
+                        pe_num=int(self.k_pe_indexes[0, idx_pe_n]),
+                        echo_num=num_readout,
+                        acq_type=id_acq, echo_type="gre"
+                    )
+
             # delay if necessary
             if self.t_delay_exc_ref1.get_duration() > 1e-7:
                 self.sequence.add_block(self.t_delay_exc_ref1.to_simple_ns())
 
-            # -- first refocus --
-            # set flip angle from param list
-            self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice)
-
-            # looping through slices per phase encode, set phase encode for ref 1
-            self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0)
-            # add block
-            self.sequence.add_block(*self.block_refocus_1.list_events_to_ns())
-
-            # delay if necessary
-            if self.t_delay_ref1_se1.get_duration() > 1e-7:
-                self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
-
-            # add bu and bd samplings
-            self._add_gesse_readouts(
-                idx_pe_loop=idx_pe_n, idx_slice_loop=idx_slice,
-                idx_echo=0, no_adc=no_adc
-            )
-
-            # delay if necessary
-            if self.t_delay_ref1_se1.get_duration() > 1e-7:
-                self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
-
             # successive num gre echoes per rf
-            for echo_idx in np.arange(1, self.params.etl):
+            for echo_idx in np.arange(self.params.etl):
                 # set flip angle from param list
                 self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=idx_slice)
                 # looping through slices per phase encode, set phase encode for ref
