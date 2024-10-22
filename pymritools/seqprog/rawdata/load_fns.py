@@ -204,7 +204,7 @@ def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarr
         corr = np.correlate(hist, p, mode="same")
         # compute weighting
         # scale correlation function to 1
-        corr_w = corr / np.max(corr)
+        corr_w = np.divide(corr, np.max(corr), where=np.max(corr) > 1e-10, out=np.zeros_like(corr))
         weight = 1 - corr_w
         # interpolate function at singular values
         weight_at_s = np.interp(x=eigv, xp=bin_mid, fp=weight)
@@ -214,8 +214,14 @@ def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarr
         signal_filt = np.matmul(
             np.matmul(u[idx_b], np.diag(s_w)), v[idx_b]
         )
-        # normalize to previous signal levels
-        signal_filt /= np.max(np.abs(signal_filt)) / np.max(np.abs(k_space_lines[idx_b]))
+        # normalize to previous signal levels - taking maximum of absolute value across channels
+        max_norm_k_lines = np.max(np.abs(k_space_lines[idx_b]))
+        max_norm_signal_filt = np.max(np.abs(signal_filt))
+        signal_filt = np.divide(
+            signal_filt * max_norm_k_lines,
+            max_norm_signal_filt,
+            where=max_norm_signal_filt >1e-10, out=np.zeros_like(signal_filt)
+        )
         k_space_filt[idx_b] = signal_filt
     # reshape
     k_space_filt = np.reshape(k_space_filt, shape)
