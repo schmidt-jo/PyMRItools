@@ -69,21 +69,21 @@ class Base:
         # store k-space in fhd vector - this would create us data from fs input data provided a mask
         # dims fhf [x, ŷ, ch, t], k-space-in [x, y, ch, t]
         # we assume here: sampling equal in channels, and readout dir = dim 0
-        self.fhd: torch.Tensor = torch.reshape(
-            self.k_space_input[
-                self.sampling_mask[:, :, None, :].expand(-1, -1, self.dim_channels, -1)
-            ], (self.k_space_dims[0], -1, self.dim_channels, self.dim_echoes)
-        )
+        self.fhd: torch.Tensor = self.k_space_input * self.fhf
 
         # set iterate - if we would initialize k space with 0 -> loraks terms would give all 0s,
         # and first iterations would just regress to fhd, hence we can init fhd from the get go
-        # self.k_iter_current: torch.tensor = self.fhd.clone().detach()
+        self.k_iter_current: torch.Tensor = self.fhd.clone().detach()
         self.iter_residuals: torch.Tensor = torch.zeros((self.dim_slice, self.max_num_iter))
         # get a dict with residuals and iteration
         self.stats: dict = {}
         # get operator
-        self.op_s: operators.S = operators.S(k_space_dims_x_y_ch_t=self.k_space_dims, nb_radius=self.radius)
-        self.op_c: operators.C = operators.C(k_space_dims_x_y_ch_t=self.k_space_dims, nb_radius=self.radius)
+        self.op_s: operators.S = operators.S(
+            k_space_dims_x_y_ch_t=self.k_space_dims, nb_radius=self.radius, device=self.device
+        )
+        self.op_c: operators.C = operators.C(
+            k_space_dims_x_y_ch_t=self.k_space_dims, nb_radius=self.radius, device=self.device
+        )
         # p*p is the same matrix irrespective of channel / time sampling information,
         # we can compute it for single slice, single channel, single echo data
         self.visualize: bool = visualize
