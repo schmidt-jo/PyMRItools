@@ -4,6 +4,7 @@ import torch
 from scipy.spatial.transform import Rotation
 import numpy as np
 import polars as pl
+import tqdm
 
 from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
@@ -152,6 +153,77 @@ def get_affine(
     return aff_matrix
 
 
+def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarray, hist_depth: int = 100):
+    log_module.info(f"pca denoising matched filter")
+    # get noise mp distribution from noise lines - we combine all noise scans into channel dims,
+    # as we possibly have more samples than channels
+    noise_data = np.reshape(noise_data, (-1, noise_data.shape[-1]))
+    # calculate singular values of noise distribution across all channels / scans
+    noise_mp_s = np.linalg.svdvals(noise_data)
+    # get eigenvalues
+    s_lam = noise_mp_s ** 2 / noise_mp_s.shape[0]
+
+    # histogramm
+    bins = np.linspace(0, 1.2 * np.max(s_lam), hist_depth)
+    hist, bins = np.histogram(s_lam, bins=bins, density=True)
+    hist /= np.sum(hist)
+    bin_mid = bins[:-1] + np.diff(bins) / 2
+    # get expectation value - calculate sigma
+    exp_mp = np.sum(hist * bin_mid)
+    sigma = np.sqrt(exp_mp)
+    # calculate boundaries from known shape parameters
+    lam_p = sigma ** 2 * (1 + np.sqrt(noise_data.shape[0] / noise_data.shape[-1])) ** 2
+    lam_m = sigma ** 2 * (1 - np.sqrt(noise_data.shape[0] / noise_data.shape[-1])) ** 2
+    # mask nonzero values
+    mask = (lam_m < bin_mid) & (bin_mid < lam_p)
+    # build distribution
+    p = np.zeros_like(bin_mid)
+    p[mask] = np.sqrt((lam_p - bin_mid[mask]) * (bin_mid[mask] - lam_m) / (2 * np.pi * bin_mid[mask] * sigma ** 2))
+
+    # possibly can skip 0 lines in processing to save compute
+    # we want a svd across the matrix spanned by readout line and channel dims [batches, num_channels, num_samples]
+    # could be after oversampling removal (shouldnt make a difference, saves compute)
+    # shuffle both to end, read dir is first dimension, channels is second to last, we can swap time and read
+    k_space_lines = np.swapaxes(k_space_lines, 0, -1)
+    shape = k_space_lines.shape
+    # flatten batch dims
+    k_space_lines = np.reshape(k_space_lines, (-1, *shape[-2:]))
+    k_space_filt = np.zeros_like(k_space_lines)
+
+    # do svd
+    u, s, v = np.linalg.svd(k_space_lines, full_matrices=False)
+    # we want a histogram of each of those singular value decompositions
+    for idx_b, b_s in enumerate(tqdm.tqdm(s)):
+        # get eigenvalue
+        eigv = b_s**2 / s.shape[-1]
+        # histogram of eigenvalues
+        bins = np.linspace(0, 1.2 * np.max(eigv), hist_depth)
+        hist, bins = np.histogram(eigv, bins=bins, density=True)
+        bin_mid = bins[:-1] + np.diff(bins) / 2
+        # match filter noise component
+        corr = np.correlate(hist, p, mode="same")
+        # compute weighting
+        # scale correlation function to 1
+        corr_w = corr / np.max(corr)
+        weight = 1 - corr_w
+        # interpolate function at singular values
+        weight_at_s = np.interp(x=eigv, xp=bin_mid, fp=weight)
+        # weight original singular values
+        s_w = b_s * weight_at_s
+        # reconstruct signal without filtered noise
+        signal_filt = np.matmul(
+            np.matmul(u[idx_b], np.diag(s_w)), v[idx_b]
+        )
+        # normalize to previous signal levels
+        signal_filt /= np.max(np.abs(signal_filt)) / np.max(np.abs(k_space_lines[idx_b]))
+        k_space_filt[idx_b] = signal_filt
+    # reshape
+    k_space_filt = np.reshape(k_space_filt, shape)
+    # move dims back
+    k_space_filt = np.swapaxes(k_space_filt, -1, 0)
+    return k_space_filt
+
+
 def load_pulseq_rd(
         pulseq_config: PulseqParameters2D, sampling_config: Sampling,
         data_mdbs: list[Mdb], geometry: Geometry, hdr: dict,
@@ -253,6 +325,21 @@ def load_pulseq_rd(
         k_sampling_mask[sampling_idxs[:, None], sampled_mask_pe[None, :], sampled_mask_echoes[None, :]] = True
 
     log_module.info(f"Finished extracting all acquisitions!")
+    #
+    # # remove oversampling, use gpu if set
+    # k_space = remove_oversampling(
+    #     data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+    # )
+    #
+    # # fft bandpass filter for oversampling removal not consistent
+    # # with undersampled in the 0 filled regions data, remove artifacts
+    # k_space *= k_sampling_mask[:, :, None, None, :]
+
+    # decorrelate channels
+    if noise_scans is not None:
+        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
+        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv, optimize=True)
+        noise_scans = np.einsum("imn, lm -> iln", noise_scans, psi_l_inv, optimize=True)
 
     # remove oversampling, use gpu if set
     k_space = remove_oversampling(
@@ -263,13 +350,11 @@ def load_pulseq_rd(
     # with undersampled in the 0 filled regions data, remove artifacts
     k_space *= k_sampling_mask[:, :, None, None, :]
 
-    # decorrelate channels
-    if noise_scans is not None:
-        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv)
+    k_space_filt = matched_filter_noise_removal(noise_data=noise_scans, k_space_lines=k_space)
 
     # correct gradient directions - at the moment we have reversed z dir
     k_space = np.flip(k_space, axis=2)
+    k_space_filt = np.flip(k_space_filt, axis=2)
 
     # # scale values
     # ks_max = np.max(np.abs(k_space))
@@ -291,6 +376,7 @@ def load_pulseq_rd(
     # swap dims if phase dir RL
     if transpose_xy:
         k_space = np.swapaxes(k_space, 0, 1)
+        k_space_filt = np.swapaxes(k_space_filt, 0, 1)
         k_sampling_mask = np.swapaxes(k_sampling_mask, 0, 1)
         voxel_dims = voxel_dims[[1, 0, 2]]
         fov = fov[[1, 0, 2]]
@@ -303,7 +389,7 @@ def load_pulseq_rd(
         slice_gap_mm=gap
     )
 
-    return k_space, k_sampling_mask, aff
+    return k_space, k_sampling_mask, aff, k_space_filt
 
 
 def load_siemens_rd():

@@ -52,7 +52,7 @@ def rd_to_torch(config: RD):
     data_mdbs = twix["mdb"]
     hdr = twix["hdr"]
     log_module.info("Loading RD")
-    k_space, k_sampling_mask, aff = load_pulseq_rd(
+    k_space, k_sampling_mask, aff, k_space_filt = load_pulseq_rd(
         pulseq_config=pulseq, sampling_config=sampling,
         data_mdbs=data_mdbs, geometry=geometry, hdr=hdr,
         device=device
@@ -65,13 +65,18 @@ def rd_to_torch(config: RD):
     if config.visualize:
         # transform into image
         img = fft(k_space, img_to_k=False, axes=(0, 1))
+        img_fil = fft(k_space_filt, img_to_k=False, axes=(0, 1))
         for i in np.random.randint(low=0, high=img.shape[3], size=(3,)):
             nifti_save(data=np.abs(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"naive_recon_mag_ch-{i}")
             nifti_save(data=np.angle(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"naive_recon_phase_ch-{i}")
+            nifti_save(data=np.abs(img_fil[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"filt_naive_recon_mag_ch-{i}")
+            nifti_save(data=np.angle(img_fil[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"filt_naive_recon_phase_ch-{i}")
         # do rSoS
         img = root_sum_of_squares(img, dim_channel=-2)
+        img_fil = root_sum_of_squares(img_fil, dim_channel=-2)
         # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
+        nifti_save(data=img_fil, img_aff=aff, path_to_dir=path_out, file_name="filt_naive_rsos_recon")
         nifti_save(data=k_sampling_mask.astype(float), img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
 
     # save as torch tensor for recon
