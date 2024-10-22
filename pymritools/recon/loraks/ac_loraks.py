@@ -31,47 +31,45 @@ class ACLoraks(Base):
         log_module.debug(f"Setup AC LORAKS specifics")
         self.fft_algorithm: bool = fft_algorithm
         # compute aha - stretch along batched channels dim
-        fhf = self.fhf[:, None, :].expand((-1, self.ch_batch_size, -1))
+        # fhf = self.fhf[:, None, :].expand((-1, self.ch_batch_size, -1))
         self.aha = torch.flatten(
-            fhf + self.lambda_c * self.op_c.p_star_p[:, None, None] + self.lambda_s * self.op_s.p_star_p[:, None, None]
+            self.fhf + self.lambda_c * torch.reshape(self.op_c.p_star_p, self.k_space_dims) +
+            self.lambda_s * torch.reshape(self.op_s.p_star_p, self.k_space_dims)
         ).to(self.device)
         # recon takes place per slice for combined echo and channel dimensions.
         # we can thus find the AC region and save it to not redo the computation each slice
         # we save the indices of mapped vectors to op matrix after finding which neighborhoods are
         # completely mapped into the operator matrix
-        self.idxs_ac_s: torch.tensor = self._find_ac_indices(mode="s")
-        self.idxs_ac_c: torch.tensor = self._find_ac_indices(mode="c")
+        self.idxs_ac_s: torch.Tensor = self._find_ac_indices(mode="s")
+        self.idxs_ac_c: torch.Tensor = self._find_ac_indices(mode="c")
         log_module.info(f"neighborhood/concat channel-time sizes: "
                         f"S - {self.dim_t_ch * self.op_s.neighborhood_size} ... rank S - {self.rank_s}; "
                         f"C - {self.dim_t_ch * self.op_c.neighborhood_size} ... rank C - {self.rank_c}")
 
     def _find_ac_indices(self, mode: str = "s"):
         # we can use the sampling mask, rebuild it in 2d, sampling pattern equal per coil but different per echo
-        mask = torch.reshape(self.fhf, (self.dim_read, self.dim_phase, self.dim_echoes))
         # momentarily the implementation is aiming at joint echo recon. we use all echoes,
         # but might need to batch the channel dimensions. in the nullspace approx we use all data
 
-        # get indices for centered origin k-space
         if mode in ["s", "S"]:
-            p_nb_nx_ny_idxs, m_nb_nx_ny_idxs = self.op_s.nb_coos_point_symmetric
+            # get indices for centered origin k-space
+            p_nb_nx_ny_idxs = self.op_s.neighborhood_indices
             # we want to find indices for which the whole neighborhood of point symmetric coordinates is contained
-            a = mask[m_nb_nx_ny_idxs[:, :, 0], m_nb_nx_ny_idxs[:, :, 1]]
-            b = mask[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
+            a = self.fhf[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
+            m_nb_nx_ny_idxs = self.op_s.neighborhood_indices_pt_sym
+            b = self.fhf[m_nb_nx_ny_idxs[:, :, 0], m_nb_nx_ny_idxs[:, :, 1]]
             # lets look for the ACS which is constant across the joint dimension and the neighborhood
             # we check the mask for it, irrespective of the combined dimension, its usually sampled different
             # for different echoes, but equally for the different channels. We can deduce the dimensions from the mask.
             c = torch.sum(a, dim=(1, 2)) + torch.sum(b, dim=(1, 2))
             idxs_ac = torch.tile((c == a.shape[1] * a.shape[2] * 2), dims=(2,))
-            op_x = self.op_s
-            df = 2
         elif mode in ["c", "C"]:
-            p_nb_nx_ny_idxs = self.op_c.get_lin_neighborhoods()
-            # we want to find indices for which the whole neighborhood of coordinates is contained
-            a = mask[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
+            # get indices for centered origin k-space
+            p_nb_nx_ny_idxs = self.op_c.neighborhood_indices
+            # we want to find indices for which the whole neighborhood of point symmetric coordinates is contained
+            a = self.fhf[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
             c = torch.sum(a, dim=(1, 2))
             idxs_ac = (c == a.shape[1] * a.shape[2])
-            op_x = self.op_c
-            df = 1
         else:
             err = f"mode {mode} not implemented for AC region search."
             log_module.error(err)
@@ -93,21 +91,18 @@ class ACLoraks(Base):
                 We need to find the ACS data first and then evaluate the nullspace subspace.
                 """
         # we use data from current slice
-        k_space_slice = torch.reshape(
-            self.fhd[idx_slice, :, self.ch_batch_idxs[idx_batch], :],
-            (self.dim_s, self.dim_t_ch)
-        )
+        k_space_slice = self.fhd
         if mode in ["c", "C"]:
-            # want submatrix of respecitve loraks matrix with fully populated rows
+            # want sub-matrix of respective loraks matrix with fully populated rows
             # build X matrix from k-space current slice
-            c_matrix = self.op_c.operator(k_space=k_space_slice)
+            c_matrix = self.op_c.operator(k_space_x_y_ch_t=k_space_slice)
             # take only fully populated rows
             m_ac = c_matrix[self.idxs_ac_c]
             # we want to use the rank of the c mode
             rank = self.rank_c
         elif mode in ["s", "S"]:
             # now we build the s_matrix with the 0 filled data for the current slice
-            s_matrix = self.op_s.operator(k_space=k_space_slice)
+            s_matrix = self.op_s.operator(k_space_x_y_ch_t=k_space_slice)
             # and keep only the fully populated rows - we calculated which those are already for all
             # echo sampling patterns
             m_ac = s_matrix[self.idxs_ac_s]

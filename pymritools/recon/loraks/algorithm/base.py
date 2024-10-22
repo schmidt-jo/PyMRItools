@@ -58,6 +58,9 @@ class Base:
         # build fHf
         # f maps k space data of length L to us data of length S,
         # fHf is the vector with 1 at positions of undersampled points and 0 otherwise,
+        # hence our sampling mask
+        self.fhf = self.sampling_mask[:, :, None, :].expand(-1, -1, self.dim_channels, -1).to(torch.int)
+
         # basically mapping a vector of length L to us subspace S and back to L.
         # self.fhf = torch.zeros((self.dim_s, self.dim_echoes))
         # self.fhf[self.mask_indices_input[:, 0], self.mask_indices_input[:, 1]] = 1
@@ -68,15 +71,14 @@ class Base:
         # we assume here: sampling equal in channels, and readout dir = dim 0
         self.fhd: torch.Tensor = torch.reshape(
             self.k_space_input[
-                torch.tile(self.sampling_mask[:, :, None, :], (1, 1, self.dim_channels, 1))
-            ],
-            (self.k_space_dims[0], -1, self.dim_channels, self.dim_echoes)
+                self.sampling_mask[:, :, None, :].expand(-1, -1, self.dim_channels, -1)
+            ], (self.k_space_dims[0], -1, self.dim_channels, self.dim_echoes)
         )
 
         # set iterate - if we would initialize k space with 0 -> loraks terms would give all 0s,
         # and first iterations would just regress to fhd, hence we can init fhd from the get go
         # self.k_iter_current: torch.tensor = self.fhd.clone().detach()
-        self.iter_residuals: torch.tensor = torch.zeros((self.dim_slice, self.max_num_iter))
+        self.iter_residuals: torch.Tensor = torch.zeros((self.dim_slice, self.max_num_iter))
         # get a dict with residuals and iteration
         self.stats: dict = {}
         # get operator
@@ -122,7 +124,7 @@ class Base:
 
         return k_space_recon
 
-    def get_residuals(self) -> (torch.tensor, dict):
+    def get_residuals(self) -> (torch.Tensor, dict):
         return self.iter_residuals, self.stats
 
     @abc.abstractmethod
