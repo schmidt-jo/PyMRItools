@@ -142,7 +142,7 @@ class MatrixOperatorLowRank2D(ABC):
         )
         # need to build psp once with ones, such that we can extract it from the method
         self.p_star_p: torch.Tensor = torch.ones(
-            (*self.k_space_dims[:2], self.reduced_k_space_dims[-1]), device=self.device, dtype=torch.int
+            (*self.k_space_dims[:2], self.reduced_k_space_dims[-1]), dtype=torch.int
         )
         self.neighborhood_indices: torch.Tensor = self._get_neighborhood_indices()
         self.neighborhood_indices_pt_sym: torch.Tensor = self._get_neighborhood_indices_point_sym()
@@ -204,6 +204,6 @@ class MatrixOperatorLowRank2D(ABC):
     def _get_p_star_p(self):
         return self.operator_adjoint(
             self.operator(
-                torch.ones(self.k_space_dims, device=self.device, dtype=torch.complex128)
+                torch.ones(self.k_space_dims, dtype=torch.complex128)
             )
         )

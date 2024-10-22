@@ -32,9 +32,9 @@ class ACLoraks(Base):
         self.fft_algorithm: bool = fft_algorithm
         # compute aha - stretch along batched channels dim
         # fhf = self.fhf[:, None, :].expand((-1, self.ch_batch_size, -1))
-        self.aha = torch.flatten(
-            self.fhf + self.lambda_c * torch.reshape(self.op_c.p_star_p, self.k_space_dims) +
-            self.lambda_s * torch.reshape(self.op_s.p_star_p, self.k_space_dims)
+        self.aha = (
+                self.fhf + self.lambda_c * torch.reshape(self.op_c.p_star_p, self.k_space_dims) +
+                self.lambda_s * torch.reshape(self.op_s.p_star_p, self.k_space_dims)
         ).to(self.device)
         # recon takes place per slice for combined echo and channel dimensions.
         # we can thus find the AC region and save it to not redo the computation each slice
@@ -50,14 +50,15 @@ class ACLoraks(Base):
         # we can use the sampling mask, rebuild it in 2d, sampling pattern equal per coil but different per echo
         # momentarily the implementation is aiming at joint echo recon. we use all echoes,
         # but might need to batch the channel dimensions. in the nullspace approx we use all data
-
+        # to check included neighborhoods we dont need to check the channel data, just pick first
+        fhf = self.fhf[:, :, 0]
         if mode in ["s", "S"]:
             # get indices for centered origin k-space
             p_nb_nx_ny_idxs = self.op_s.neighborhood_indices
             # we want to find indices for which the whole neighborhood of point symmetric coordinates is contained
-            a = self.fhf[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
+            a = fhf[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
             m_nb_nx_ny_idxs = self.op_s.neighborhood_indices_pt_sym
-            b = self.fhf[m_nb_nx_ny_idxs[:, :, 0], m_nb_nx_ny_idxs[:, :, 1]]
+            b = fhf[m_nb_nx_ny_idxs[:, :, 0], m_nb_nx_ny_idxs[:, :, 1]]
             # lets look for the ACS which is constant across the joint dimension and the neighborhood
             # we check the mask for it, irrespective of the combined dimension, its usually sampled different
             # for different echoes, but equally for the different channels. We can deduce the dimensions from the mask.
@@ -67,7 +68,7 @@ class ACLoraks(Base):
             # get indices for centered origin k-space
             p_nb_nx_ny_idxs = self.op_c.neighborhood_indices
             # we want to find indices for which the whole neighborhood of point symmetric coordinates is contained
-            a = self.fhf[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
+            a = fhf[p_nb_nx_ny_idxs[:, :, 0], p_nb_nx_ny_idxs[:, :, 1]]
             c = torch.sum(a, dim=(1, 2))
             idxs_ac = (c == a.shape[1] * a.shape[2])
         else:
@@ -151,23 +152,19 @@ class ACLoraks(Base):
             return torch.zeros_like(f)
         m1_fhf = self.aha * f
         if self.lambda_c > 1e-6:
-            m1_v_c = torch.flatten(
-                self.op_c.operator_adjoint(
-                    torch.matmul(
-                        self.op_c.operator(torch.reshape(f, (self.dim_s, -1))),
-                        v_c
-                    )
+            m1_v_c = self.op_c.operator_adjoint(
+                torch.matmul(
+                    self.op_c.operator(f),
+                    v_c
                 )
             )
         else:
             m1_v_c = 0.0
         if self.lambda_s > 1e-6:
-            m1_v_s = torch.flatten(
-                self.op_s.operator_adjoint(
-                    torch.matmul(
-                        self.op_s.operator(torch.reshape(f, (self.dim_s, -1))),
-                        v_s
-                    )
+            m1_v_s = self.op_s.operator_adjoint(
+                torch.matmul(
+                    self.op_s.operator(f),
+                    v_s
                 )
             )
         else:
@@ -287,7 +284,7 @@ class ACLoraks(Base):
                 log_module.debug("start pcg solve")
 
                 # dim fhd [z, xy, ch, t]
-                in_fhd = torch.flatten(self.fhd[idx_slice, :, self.ch_batch_idxs[idx_batch], :]).to(self.device)
+                in_fhd = self.fhd.to(self.device)
 
                 f_slice, residual_abs_sum, stats = self._cgd(b=in_fhd, v_s=vvs, v_c=vvc, iter_bar=iter_bar)
                 self.k_iter_current[idx_slice, :, self.ch_batch_idxs[idx_batch], :] = torch.reshape(

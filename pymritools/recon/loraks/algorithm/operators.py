@@ -24,10 +24,10 @@ def shift_read_dir(data: torch.tensor, read_dir: int, forward: bool = True):
         return torch.movedim(data, 0, read_dir)
 
 
-
 class C(MatrixOperatorLowRank2D):
-    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3):
-        super().__init__(k_space_dims_x_y_ch_t=k_space_dims_x_y_ch_t, nb_radius=nb_radius)
+    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3,
+                 device: torch.device = torch.get_default_device()):
+        super().__init__(k_space_dims_x_y_ch_t=k_space_dims_x_y_ch_t, nb_radius=nb_radius, device=device)
 
     def _operator(self, k_space_x_y_ch_t: torch.tensor) -> torch.tensor:
         """
@@ -74,14 +74,14 @@ class C(MatrixOperatorLowRank2D):
             k_space_recon[
                 self.neighborhood_indices[:, idx_nb, 0], self.neighborhood_indices[:, idx_nb, 1]
             ] += x_matrix[:, idx_nb]
-        mask = self.p_star_p > 0
-        k_space_recon[mask] /= self.p_star_p[mask]
+        # mask = self.p_star_p > 0
+        # k_space_recon[mask] /= self.p_star_p[mask]
 
         return torch.reshape(k_space_recon, self.k_space_dims)
 
     def _get_neighborhood_indices(self) -> torch.Tensor:
         return get_idx_2d_circular_neighborhood_patches_in_shape(
-            shape_2d=self.k_space_dims[:2], nb_radius=self.radius, device=self.device
+            shape_2d=self.k_space_dims[:2], nb_radius=self.radius
         )
 
     def _get_neighborhood_indices_point_sym(self) -> torch.Tensor:
@@ -93,8 +93,9 @@ class C(MatrixOperatorLowRank2D):
 
 
 class S(MatrixOperatorLowRank2D):
-    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3):
-        super().__init__(k_space_dims_x_y_ch_t=k_space_dims_x_y_ch_t, nb_radius=nb_radius)
+    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3,
+                 device: torch.device = torch.get_default_device()):
+        super().__init__(k_space_dims_x_y_ch_t=k_space_dims_x_y_ch_t, nb_radius=nb_radius, device=device)
 
     def _operator(self, k_space: torch.tensor) -> torch.tensor:
         # need shape into 2D if not given like this
@@ -146,15 +147,15 @@ class S(MatrixOperatorLowRank2D):
                 self.neighborhood_indices_pt_sym[:, idx_nb, 0], self.neighborhood_indices_pt_sym[:, idx_nb, 1]
             ] += srm[:, idx_nb] + 1j * sim[:, idx_nb]
 
-        mask = self.p_star_p > 0
-        k_space_recon[mask] /= self.p_star_p[mask]
+        # mask = self.p_star_p > 0
+        # k_space_recon[mask] /= self.p_star_p[mask]
 
         return torch.reshape(k_space_recon, self.k_space_dims)
 
     def _get_neighborhood_indices(self) -> (torch.Tensor, torch.Tensor):
         # we want to index through all circular neighborhoods completely included in the shape,
         indices = get_idx_2d_circular_neighborhood_patches_in_shape(
-            shape_2d=self.k_space_dims[:2], nb_radius=self.radius, device=self.device,
+            shape_2d=self.k_space_dims[:2], nb_radius=self.radius,
         )
         return indices
 
@@ -162,15 +163,14 @@ class S(MatrixOperatorLowRank2D):
         # additionally for each of the indices we want to find the corresponding point symmetric position
         # for this we find all grid points
         shape_grid = get_idx_2d_rectangular_grid(
-            size_x=self.k_space_dims[0] - 2 * self.radius, size_y=self.k_space_dims[1] - 2 * self.radius,
-            device=self.device
+            size_x=self.k_space_dims[0] - 2 * self.radius, size_y=self.k_space_dims[1] - 2 * self.radius
         ) + self.radius
         # need their corresponding point symmetrical position
         indices_point_sym = 2 * torch.floor(
-            torch.tensor(self.k_space_dims[:2], device=self.device) / 2
+            torch.tensor(self.k_space_dims[:2]) / 2
         ) - shape_grid - 1
         # and for those find all neighborhoods
-        nb_grid = get_idx_2d_grid_circle_within_radius(radius=self.radius, device=self.device)
+        nb_grid = get_idx_2d_grid_circle_within_radius(radius=self.radius)
         # and combine
         indices_point_sym = indices_point_sym[:, None] + nb_grid[None, :]
         return indices_point_sym.to(torch.int)
