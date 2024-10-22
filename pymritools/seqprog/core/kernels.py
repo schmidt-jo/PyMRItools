@@ -136,7 +136,6 @@ class Kernel:
                 system=system
             )
         # build slice selective gradient
-
         grad_slice, grad_slice_delay, _ = events.GRAD.make_slice_selective(
             pulse_bandwidth_hz=-rf.bandwidth_hz,
             slice_thickness_m=params.resolution_slice_thickness * 1e-3,

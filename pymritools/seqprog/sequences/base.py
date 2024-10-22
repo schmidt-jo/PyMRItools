@@ -424,13 +424,15 @@ class Sequence2D(abc.ABC):
             )
             self.sequence.add_block(post_delay.to_simple_ns())
 
-    def _set_fa_and_update_slice_offset(self, rf_idx: int, slice_idx: int, excitation: bool = False):
+    def _set_fa_and_update_slice_offset(
+            self, rf_idx: int, slice_idx: int, excitation: bool = False, no_ref_1: bool = False
+    ):
         if excitation:
             sbb = self.block_excitation
             fa_rad = self.params.excitation_rf_rad_fa
             phase_rad = self.params.excitation_rf_rad_phase
         else:
-            if rf_idx == 0:
+            if rf_idx == 0 and not no_ref_1:
                 sbb = self.block_refocus_1
             else:
                 sbb = self.block_refocus
@@ -454,7 +456,7 @@ class Sequence2D(abc.ABC):
         # To merge both: given phase parameter and any complex signal array data
         sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
 
-    def _set_phase_grad(self, echo_idx: int, phase_idx: int):
+    def _set_phase_grad(self, echo_idx: int, phase_idx: int, no_ref_1: bool = False):
         # caution we assume trapezoidal phase encode gradients
         area_factors = np.array([0.5, 1.0, 0.5])
         # we get the actual line index from the sampling pattern, dependent on echo number and phase index in the loop
@@ -469,7 +471,10 @@ class Sequence2D(abc.ABC):
             phase_enc_time_pre_pulse = np.sum(np.diff(block.grad_phase.t_array_s[:4]) * area_factors)
             block.grad_phase.amplitude[1:3] = self.phase_areas[last_idx_phase] / phase_enc_time_pre_pulse
         else:
-            block = self.block_refocus_1
+            if no_ref_1:
+                block = self.block_excitation
+            else:
+                block = self.block_refocus_1
 
         # we set the post pulse phase encode gradient that sets up the next readout
         if np.abs(self.phase_areas[idx_phase]) > 1:
@@ -1087,7 +1092,7 @@ class Sequence2D(abc.ABC):
                 if sim_grad_moments:
                     if rf.use == "excitation":
                         identifier = 1
-                    if rf.use == "refocusing":
+                    elif rf.use == "refocusing":
                         identifier = 2
                     else:
                         err = f"grad moment effect of rf ({rf.use}) not recognized or not implemented."

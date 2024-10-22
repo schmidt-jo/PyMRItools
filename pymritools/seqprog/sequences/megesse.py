@@ -3,7 +3,7 @@ import logging
 import tqdm
 
 from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D
-from pymritools.seqprog.core import Kernel, DELAY, ADC
+from pymritools.seqprog.core import Kernel, DELAY, ADC, GRAD
 from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli, build
 
 log_module = logging.getLogger(__name__)
@@ -68,6 +68,22 @@ class MEGESSE(Sequence2D):
             params=self.params, system=self.system, pulse_file=self.config.pulse_file,
             use_slice_spoiling=False, adjust_ramp_area=0.0
         )
+        # need to set up a phase gradient for excitation
+        phase_grad_area = self.block_refocus.grad_phase.area[0]
+        # timing
+        start_time = self.block_excitation.rf.get_duration()
+        rephase_time = self.block_excitation.get_duration() - start_time
+        # set up longest phase encode
+        max_phase_grad_area = self.params.resolution_n_phase / 2 * self.params.delta_k_phase
+        # build longest phase gradient
+        grad_phase = GRAD.make_trapezoid(
+            channel=params.phase_dir,
+            area=max_phase_grad_area,
+            system=self.system,
+            delay_s=start_time,
+            duration_s=rephase_time
+        )
+        self.block_excitation.grad_phase = grad_phase
 
         # plot files for visualization
         if self.config.visualize:
@@ -262,6 +278,7 @@ class MEGESSE(Sequence2D):
         e_types = ["gre"] * self.num_e_per_rf
         e_types[self.num_gre] = "se"
 
+        # we always have an odd number of echoes, hence always starting and ending with bu
         for num_readout in range(self.num_e_per_rf):
             if int(num_readout % 2) == 0:
                 # add bu sampling
@@ -287,7 +304,7 @@ class MEGESSE(Sequence2D):
             # otherwise the phase parameter might not be correct for phase offset update
             self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice, excitation=True)
             # looping through slices per phase encode
-            self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0)
+            self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0, no_ref_1=True)
 
             # -- excitation --
             # add block
@@ -304,8 +321,11 @@ class MEGESSE(Sequence2D):
             else:
                 aq_block_bu = self.block_acquisition
                 aq_block_bd = self.block_acquisition_neg_polarity
+            # we always have odd number of samplings in between refocusing pulses.
+            # to just use one refocus kernel, we just make sure that we end with a blip up gre before first refocus
+            bu = False if int(self.num_gre % 2) == 0 else True
             for num_readout in range(self.num_gre):
-                if int(num_readout % 2) == 0:
+                if bu:
                     # add bu sampling
                     self.sequence.add_block(*aq_block_bu.list_events_to_ns())
                     id_acq = self.id_bu_acq
@@ -313,6 +333,8 @@ class MEGESSE(Sequence2D):
                     # add bd sampling
                     self.sequence.add_block(*aq_block_bd.list_events_to_ns())
                     id_acq = self.id_bd_acq
+                # toggle after adding
+                bu = not bu
                 if not no_adc:
                     # write sampling pattern
                     _ = self._write_sampling_pattern_entry(
@@ -331,7 +353,7 @@ class MEGESSE(Sequence2D):
                 # set flip angle from param list
                 self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=idx_slice)
                 # looping through slices per phase encode, set phase encode for ref
-                self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx)
+                self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx, no_ref_1=True)
                 # refocus
                 self.sequence.add_block(*self.block_refocus.list_events_to_ns())
 
