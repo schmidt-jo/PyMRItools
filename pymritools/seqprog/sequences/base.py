@@ -153,12 +153,12 @@ class Sequence2D(abc.ABC):
             # the overall decrease roughly follows a characteristic resembled by part of a sin function
             slice_intensity_profile = np.sin(
                 np.linspace(0.9 * np.pi / 4, np.pi / 2, self.params.resolution_slice_num)
-                )
+            )
             # since we want to make up for this intensity decrease towards lower slices we invert this profile
             self.rf_slice_adaptive_scaling = 1 / slice_intensity_profile
 
         # navigators
-        self.navs_on: bool =self.params.use_navs
+        self.navs_on: bool = self.params.use_navs
         self.nav_num: int = 0
         self.nav_t_total: float = 0.0
         # for now we fix the navigator resolution at 5 times coarser than the chosen resolution
@@ -423,7 +423,6 @@ class Sequence2D(abc.ABC):
                 slice_num=0, pe_num=0, echo_num=k, echo_type="noise_scan", acq_type="noise_scan"
             )
             self.sequence.add_block(post_delay.to_simple_ns())
-    
 
     def _set_fa_and_update_slice_offset(self, rf_idx: int, slice_idx: int, excitation: bool = False):
         if excitation:
@@ -512,6 +511,7 @@ class Sequence2D(abc.ABC):
                 self._loop_navs()
 
         log_module.info(f"sequence built!")
+
     # caution: this is closely tied to the pypsi module and changes in either might affect the other!
     # def _check_interface_set(self):
     #     if any([not state for state in [self.k_trajectory_set, self.recon_params_set, self.sampling_pattern_set]]):
@@ -598,6 +598,7 @@ class Sequence2D(abc.ABC):
     # emc
     def _set_emc_parameters(self):
         pass
+
     #     log_module.debug(f"set pypsi emc")
     #     # spawn emc obj with relevant information - to make use of postinit
     #     self.interface.emc = pypsi.parameters.EmcParameters(
@@ -1259,15 +1260,16 @@ class Sequence2D(abc.ABC):
     def plot_sampling(self):
         pass
 
+
 # def _plot_grad_moments(self, grad_moments: np.ndarray, dt_in_us: int):
-    #     ids = ["gx"] * grad_moments.shape[1] + ["gy"] * grad_moments.shape[1] + ["gz"] * grad_moments.shape[1] + \
-    #           ["adc"] * grad_moments.shape[1]
-    #     ax_time = np.tile(np.arange(grad_moments.shape[1]) * dt_in_us, 4)
-    #     df = pd.DataFrame({
-    #         "moments": grad_moments.flatten(), "id": ids,
-    #         "time": ax_time
-    #     })
-    #     plotting.plot_grad_moments(mom_df=df, out_path=self.interface.config.output_path, name="sim_moments")
+#     ids = ["gx"] * grad_moments.shape[1] + ["gy"] * grad_moments.shape[1] + ["gz"] * grad_moments.shape[1] + \
+#           ["adc"] * grad_moments.shape[1]
+#     ax_time = np.tile(np.arange(grad_moments.shape[1]) * dt_in_us, 4)
+#     df = pd.DataFrame({
+#         "moments": grad_moments.flatten(), "id": ids,
+#         "time": ax_time
+#     })
+#     plotting.plot_grad_moments(mom_df=df, out_path=self.interface.config.output_path, name="sim_moments")
 
 def simulate_grad_moments(df_rf_grads: pl.DataFrame):
     log_module.info(f"simulate gradient moments")
@@ -1396,7 +1398,6 @@ def setup_sequence_cli(name: str):
     return parser, config, specs, params
 
 
-
 def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     """
     Function to build the sequence and perform all necessary writing steps
@@ -1431,4 +1432,3 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
         sequence.plot_sequence(t_start_s=4, t_end_s=6, sim_grad_moments=True)
         sequence.plot_sequence(t_start_s=0, t_end_s=2, sim_grad_moments=True)
         sequence.plot_sampling()
-

@@ -340,8 +340,8 @@ class GRAD(Event):
 
     @classmethod
     def make_slice_selective(cls, pulse_bandwidth_hz: float, slice_thickness_m: float, duration_s: float,
-            system: pp.Opts, pre_moment: float = 0.0, re_spoil_moment: float = 0.0,
-            rephase: float = 0.0, t_minimum_re_grad: float = 0.0, adjust_ramp_area: float = 0.0):
+                             system: pp.Opts, pre_moment: float = 0.0, re_spoil_moment: float = 0.0,
+                             rephase: float = 0.0, t_minimum_re_grad: float = 0.0, adjust_ramp_area: float = 0.0):
         """
         create slice selective gradient with merged pre and re moments (optional)
         - one can set the minimum time for those symmetrical moments with t_minimum_re_grad to match other grad timings
@@ -397,9 +397,9 @@ class GRAD(Event):
                 # stretch to minimum required time if we have such
                 # update amplitude
                 b = - system.max_slew * t_minimum_re_grad + amplitude
-                c = amplitude**2 + system.max_slew * pre_moment
+                c = amplitude ** 2 + system.max_slew * pre_moment
                 pre_grad_amplitude = -b / 2 + max(
-                        np.sqrt(b**2 - 4 * c), - np.sqrt(b**2 - 4 * c)
+                    np.sqrt(b ** 2 - 4 * c), - np.sqrt(b ** 2 - 4 * c)
                 ) / 2
                 t_ru = grad_instance.set_on_raster(np.abs(pre_grad_amplitude) / system.max_slew)
                 t_rd = grad_instance.set_on_raster(np.abs(pre_grad_amplitude - amplitude) / system.max_grad)
@@ -528,7 +528,6 @@ class GRAD(Event):
             raise ValueError(err)
 
         return grad_instance, delay, duration_re_grad
-
 
     def _calc_check_single_ramp_area_vs_set_area(self, area: float, amplitude: float, identifier: str = ""):
         a = amplitude ** 2 / 2 / self.system.max_slew
