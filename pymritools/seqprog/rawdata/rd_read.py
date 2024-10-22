@@ -81,6 +81,7 @@ def rd_to_torch(config: RD):
 
     # save as torch tensor for recon
     torch_save(k_space, path_out, "k_space")
+    torch_save(k_space_filt, path_out, "k_space_filt")
     torch_save(k_sampling_mask, path_out, "k_sampling_mask")
     torch_save(aff, path_out, "affine")
 
