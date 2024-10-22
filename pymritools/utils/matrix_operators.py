@@ -165,7 +165,7 @@ class MatrixOperatorLowRank2D(ABC):
                 in_data = (*in_data, 1)
             shape = in_data
         if shape.__len__() > 4:
-            err = f"Operator only implemented for <4D data."
+            err = f"Operator only implemented for <= 4D data."
             log_module.error(err)
             raise AttributeError(err)
         return in_data

@@ -13,7 +13,7 @@ log_module = logging.getLogger(__name__)
 class ACLoraks(Base):
 
     def __init__(
-            self, k_space_input: torch.tensor, mask_indices_input: torch.tensor,
+            self, k_space_input: torch.Tensor, sampling_mask: torch.Tensor,
             max_num_iter: int, conv_tol: float,
             radius: int = 3, rank_c: int = 150, lambda_c: float = 0.0, rank_s: int = 250, lambda_s: float = 0.0,
             fft_algorithm: bool = False, channel_batch_size: int = 4,
@@ -21,7 +21,7 @@ class ACLoraks(Base):
         log_module.debug(f"Setup Base class")
         # initialize base constants
         super().__init__(
-            k_space_input=k_space_input, mask_indices_input=mask_indices_input,
+            k_space_input=k_space_input, sampling_mask=sampling_mask,
             radius=radius, rank_c=rank_c, lambda_c=lambda_c,
             rank_s=rank_s, lambda_s=lambda_s,
             max_num_iter=max_num_iter, conv_tol=conv_tol,
@@ -33,7 +33,7 @@ class ACLoraks(Base):
         # compute aha - stretch along batched channels dim
         fhf = self.fhf[:, None, :].expand((-1, self.ch_batch_size, -1))
         self.aha = torch.flatten(
-            fhf + self.lambda_c * self.p_star_p_c[:, None, None] + self.lambda_s * self.p_star_p_s[:, None, None]
+            fhf + self.lambda_c * self.op_c.p_star_p[:, None, None] + self.lambda_s * self.op_s.p_star_p[:, None, None]
         ).to(self.device)
         # recon takes place per slice for combined echo and channel dimensions.
         # we can thus find the AC region and save it to not redo the computation each slice
@@ -42,8 +42,8 @@ class ACLoraks(Base):
         self.idxs_ac_s: torch.tensor = self._find_ac_indices(mode="s")
         self.idxs_ac_c: torch.tensor = self._find_ac_indices(mode="c")
         log_module.info(f"neighborhood/concat channel-time sizes: "
-                        f"S - {self.dim_t_ch * self.dim_nb * 2} ... rank S - {self.rank_s}; "
-                        f"C - {self.dim_t_ch * self.dim_nb} ... rank C - {self.rank_c}")
+                        f"S - {self.dim_t_ch * self.op_s.neighborhood_size} ... rank S - {self.rank_s}; "
+                        f"C - {self.dim_t_ch * self.op_c.neighborhood_size} ... rank C - {self.rank_c}")
 
     def _find_ac_indices(self, mode: str = "s"):
         # we can use the sampling mask, rebuild it in 2d, sampling pattern equal per coil but different per echo

@@ -54,24 +54,24 @@ def load_data(settings: PyLoraksConfig):
         k_space = k_space[..., None]
     read, phase, sli, ch, t = k_space.shape
 
-    # flatten xy dims
-    s_xy = sampling_pattern.shape[0] * sampling_pattern.shape[1]
-    if abs(s_xy - read * phase) > 1e-3:
-        err = f"sampling pattern dimensions do not match input k-space data"
-        logging.error(err)
-        raise ValueError(err)
+    # # flatten xy dims
+    # s_xy = sampling_pattern.shape[0] * sampling_pattern.shape[1]
+    # if abs(s_xy - read * phase) > 1e-3:
+    #     err = f"sampling pattern dimensions do not match input k-space data"
+    #     logging.error(err)
+    #     raise ValueError(err)
+    #
+    # logging.debug(f"Set sampling indices as matrix (fhf)")
+    # f_indexes = torch.squeeze(
+    #     torch.nonzero(
+    #         torch.reshape(
+    #             sampling_pattern.to(torch.int),
+    #             (s_xy, -1)
+    #         )
+    #     )
+    # )
 
-    logging.debug(f"Set sampling indices as matrix (fhf)")
-    f_indexes = torch.squeeze(
-        torch.nonzero(
-            torch.reshape(
-                sampling_pattern.to(torch.int),
-                (s_xy, -1)
-            )
-        )
-    )
-
-    return k_space, f_indexes, affine
+    return k_space, sampling_pattern, affine
 
 
 def recon(settings: PyLoraksConfig):
@@ -93,7 +93,7 @@ def recon(settings: PyLoraksConfig):
     torch.manual_seed(0)
     
     # load data
-    k_space, f_indexes, affine = load_data(settings=settings)
+    k_space, sampling_mask, affine = load_data(settings=settings)
 
     log_module.info(f"___ Loraks Reconstruction ___")
     log_module.info(f"{settings.flavour}; Radius - {settings.radius}; ")
@@ -112,7 +112,7 @@ def recon(settings: PyLoraksConfig):
 
     # recon sos and phase coil combination
     solver = ACLoraks(
-        k_space_input=k_space, mask_indices_input=f_indexes,
+        k_space_input=k_space, sampling_mask=sampling_mask,
         radius=settings.radius,
         rank_c=settings.c_rank, lambda_c=settings.c_lambda,
         rank_s=settings.s_rank, lambda_s=settings.s_lambda,
