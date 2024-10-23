@@ -9,7 +9,7 @@ dependencies:
   - pip
   - pytorch=2.4.1
   - polars=1.8.2
-  - kaleido-core=0.2.1
+  - python-kaleido=0.1.0
   - scipy=1.14.1
   - numpy=2.0.0
   - plotly=5.16.1

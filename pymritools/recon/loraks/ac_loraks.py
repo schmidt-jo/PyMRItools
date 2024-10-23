@@ -11,7 +11,6 @@ log_module = logging.getLogger(__name__)
 
 
 class ACLoraks(Base):
-
     def __init__(
             self, k_space_input: torch.Tensor, sampling_mask: torch.Tensor,
             max_num_iter: int, conv_tol: float,

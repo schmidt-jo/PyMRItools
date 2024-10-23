@@ -10,7 +10,6 @@ dependencies:
   - pytorch=2.4.1
   - pytorch-cuda=12.4
   - polars=1.8.2
-  - kaleido-core=0.1.0
   - python-kaleido=0.1.0
   - scipy=1.14.1
   - numpy=2.0.0
