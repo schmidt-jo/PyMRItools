@@ -29,8 +29,8 @@ def main():
     # set program logging
     setup_program_logging(name="MPPCA Denoising DEV", level=logging.INFO)
     # set up path to rd file
-    path_to_file = plib.Path("./examples/raw_data/rd_file/meas_MID00030_FID05554_mese_acc_4_spoil_1800_rf_ad_z.dat")
-    path_to_figs = plib.Path("./examples/raw_data/rd_file/figs")
+    path_to_file = plib.Path("./examples/raw_data/rd_file/meas_MID00030_FID05554_mese_acc_4_spoil_1800_rf_ad_z.dat").absolute()
+    path_to_figs = plib.Path("./examples/raw_data/rd_file/figs").absolute()
     log_module.info(f"setup figure path: {path_to_figs.as_posix()}")
     path_to_figs.mkdir(exist_ok=True, parents=True)
 
@@ -105,10 +105,11 @@ def main():
         sigma = (sigma + sigma_2) / 2
 
         p_noise[idx_c] = dist_mp(x=bin_mid_noise_est, sigma=sigma, gamma=gamma)
+        p_corr = p_noise[idx_c][bin_mid_noise_est < 1.1 * sigma**2 * (1 + np.sqrt(gamma))**2]
 
         # first do a matched filtering on original noise data histogram
-        corr = np.correlate(hist, p_noise[idx_c], mode="same")
-
+        corr = np.correlate(hist, p_corr, mode="full")
+        corr_ax = np.concatenate((-np.flip(bin_mid_noise_est[1:corr.shape[0]-bin_mid_noise_est.shape[0]+1]), bin_mid_noise_est))
         # plot
         # row = idx_c // 4 + 1
         # col = idx_c % 4 + 1
@@ -133,7 +134,7 @@ def main():
             )
             fig.add_trace(
                 # go.Scattergl(x=bin_mid_noise_est, y=optim_func(bin_mid_noise_est, p_opt), name="s_vals")
-                go.Scattergl(x=bin_mid_noise_est, y=corr, name="hist correlated with p", mode="lines", marker=dict(color=colors[2])),
+                go.Scattergl(x=corr_ax, y=corr, name="hist correlated with p", mode="lines", marker=dict(color=colors[2])),
                 # row=row, col=col
             )
 
@@ -144,10 +145,12 @@ def main():
     # p is now our filter shape - the shape we are looking for in our data eigenvalues to match and identify noise
     # except with the matched filter usually one wants to detect the signal, we are interested in matching the noise
     # part of the eigenvalue spectrum
+    # we want to build a weighting and down-weight singular values that we take to be belonging to above mp-distribution
+    p_weight = 1 - p_noise / np.max(p_noise, axis=1, keepdims=True)
+    p_weight_ax = bin_mid_noise_est
 
     # for each of the lines we want to do the same thing, first dim is batch
     # lets "square" the line, i.e. build a matrix with itself, dims [batch, channel, samples]
-
     a = int(np.ceil(np.sqrt(data.shape[-1])))
     for i in range(a):
         if data.shape[-1] % a == 0:
@@ -155,84 +158,95 @@ def main():
         else:
             a += 1
     shape = data.shape
-    data = np.reshape(data, (np.prod(shape[:2]), a, -1))
+    data = np.reshape(data, (*shape[:2], a, -1))
     n = np.max(data.shape[-2:])
     # do svd
     u, s, v = np.linalg.svd(data, full_matrices=False)
     # get eigenvalues
     s_lam = s ** 2 / n
 
+    # we dont actually need the histogram, we have a weighting factor p_weight based on
+    # the value of the singular values (p_weight ax)
+    # after computing the singular values all we need to do is to downweight them
+    # based on the interpolated value of p_weight at their "position"
+
     # plot spectrum
     rows = int(np.min([10, s_lam.shape[0]]))
     fig = psub.make_subplots(rows=rows, cols=4)
     for idx, s_vals in enumerate(s_lam):
-        # histogramm
-        bins = np.linspace(0, 1.2 * np.max(s_vals), 100)
-        hist, bins = np.histogram(s_vals, bins=bins, density=True)
-        hist /= np.sum(hist)
-        bin_mid = bins[:-1] + np.diff(bins) / 2
-
-        # transfer p
-        p = np.interp(x=bin_mid[bin_mid<2*cs_max], xp=bin_mid_noise_est, fp=p_noise)
-        corr = np.correlate(hist, p, mode="same")
-        if idx < rows:
-            showlegend = True if idx == 0 else False
-            fig.add_trace(
-                go.Bar(x=bin_mid, y=hist, name="s_vals", marker=dict(color=colors[0]), showlegend=showlegend),
-                row=idx+1, col=1
+        # pick the specific line
+        for idx_c, s_vals_c in enumerate(s_vals):
+            if idx_c == 0 and idx == 0:
+                showlegend = True
+            else:
+                showlegend = False
+            # pick the channel
+            # transfer p
+            weight_at_s = np.interp(x=s_vals_c, xp=p_weight_ax, fp=p_weight[idx_c])
+            if idx < rows:
+                # histogramm for visualization
+                bins = np.linspace(0, 1.2 * np.max(s_vals_c), 100)
+                hist, bins = np.histogram(s_vals_c, bins=bins, density=True)
+                hist /= np.sum(hist)
+                bin_mid = bins[:-1] + np.diff(bins) / 2
+                if idx_c == 0:
+                    hist /= np.max(hist)
+                    fig.add_trace(
+                        go.Bar(x=bin_mid, y=hist, name="s_vals", marker=dict(color=colors[0]), showlegend=showlegend),
+                        row=idx+1, col=1
+                    )
+                fig.add_trace(
+                    go.Scattergl(x=s_vals_c, y=weight_at_s, name="weighting function",
+                                 mode="lines", showlegend=showlegend),
+                    row=idx + 1, col=1
+                )
+                # do correlation
+                # fig.add_trace(
+                #     go.Scattergl(x=bin_mid, y=corr, name="correlate",
+                #                  mode="lines", marker=dict(color=colors[2]), showlegend=showlegend),
+                #     row=idx + 1, col=1
+                # )
+            # compute weighting
+            # scale correlation function to 1
+            # corr_w = corr / np.max(corr)
+            # weight = 1 - corr_w
+            # # interpolate function at singular values
+            # weight_at_s = np.interp(x=s_vals, xp=bin_mid, fp=weight)
+            # weight singular vals
+            s_w = s[idx, idx_c] * weight_at_s
+            # reconstruct signal without filtered noise
+            signal_filt = np.matmul(
+                np.matmul(u[idx, idx_c], np.diag(s_w)), v[idx, idx_c]
             )
-            fig.add_trace(
-                go.Scattergl(x=bin_mid, y=p, name="noise_distribution",
-                             mode="lines", marker=dict(color=colors[1]), showlegend=showlegend),
-                row=idx + 1, col=1
-            )
-            # do correlation
-            fig.add_trace(
-                go.Scattergl(x=bin_mid, y=corr, name="correlate",
-                             mode="lines", marker=dict(color=colors[2]), showlegend=showlegend),
-                row=idx + 1, col=1
-            )
-        # compute weighting
-        # scale correlation function to 1
-        corr_w = corr / np.max(corr)
-        weight = 1 - corr_w
-        # interpolate function at singular values
-        weight_at_s = np.interp(x=s_vals, xp=bin_mid, fp=weight)
-        # weight singular vals
-        s_w = s.shape[-1] * np.sqrt(s_vals) * weight_at_s
-        # reconstruct signal without filtered noise
-        signal_filt = np.matmul(
-            np.matmul(u[idx], np.diag(s_w)), v[idx]
-        )
-        # normalize to previous signal levels
-        signal_filt /= np.max(np.abs(signal_filt)) / np.max(np.abs(data[idx]))
-        # plot signals
-        if idx < rows:
-            for idx_c, c in enumerate(signal_filt):
-                if idx_c > 0:
-                    showlegend = False
+            # reshape to single line
+            signal_filt = np.reshape(signal_filt, -1)
+            # normalize to previous signal levels
+            signal_filt /= np.max(np.abs(signal_filt)) / np.max(np.abs(data[idx, idx_c]))
+            plot_data = data[idx, idx_c].flatten()
+            # plot signals
+            if idx < rows:
                 if idx_c > 2:
                     break
                 fig.add_trace(
-                    go.Scattergl(y=np.abs(data[idx, idx_c]), name="noisy signal mag",
+                    go.Scattergl(y=np.abs(plot_data), name="noisy signal mag",
                                  mode="lines", marker=dict(color=colors[3]),
                                  showlegend=showlegend, legendgroup=0),
                     row=idx + 1, col=2 + idx_c
                 )
                 fig.add_trace(
-                    go.Scattergl(y=np.angle(data[idx, idx_c]), name="noisy signal phase",
+                    go.Scattergl(y=np.angle(plot_data), name="noisy signal phase",
                                  mode="lines", marker=dict(color=colors[4]),
                                  showlegend=showlegend, legendgroup=1),
                     row=idx + 1, col=2 + idx_c
                 )
                 fig.add_trace(
-                    go.Scattergl(y=np.abs(c), name="filtered signal mag",
+                    go.Scattergl(y=np.abs(signal_filt), name="filtered signal mag",
                                  mode="lines", marker=dict(color=colors[5]),
                                  showlegend=showlegend, legendgroup=2),
                     row=idx + 1, col=2 + idx_c
                 )
                 fig.add_trace(
-                    go.Scattergl(y=np.angle(c), name="filtered signal phase",
+                    go.Scattergl(y=np.angle(signal_filt), name="filtered signal phase",
                                  mode="lines", marker=dict(color=colors[4]),
                                  showlegend=showlegend , legendgroup=3),
                     row=idx + 1, col=2 + idx_c
