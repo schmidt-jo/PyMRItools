@@ -416,7 +416,7 @@ class Sequence2D(abc.ABC):
         # build adc block
         acq = ADC.make_adc(system=self.system, num_samples=1000, dwell=self.params.dwell)
         # use 2 noise scans
-        for k in range(2):
+        for k in range(self.params.number_noise_scans):
             # add to sequence
             self.sequence.add_block(acq.to_simple_ns())
             # write as sampling entry

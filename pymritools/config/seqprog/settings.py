@@ -141,6 +141,9 @@ class Parameters2D(Serializable):
     oversampling: int = field(
         default=2, help="Readout oversampling factor."
     )
+    number_noise_scans: int = field(
+        default=10, help="Set number of pre-scan ADCs used for noise estimation and pre-whitening of data."
+    )
 
     # timing
     esp: float = field(
