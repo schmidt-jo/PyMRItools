@@ -5,6 +5,7 @@ from scipy.spatial.transform import Rotation
 import numpy as np
 import polars as pl
 import tqdm
+import plotly.graph_objects as go
 
 from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
@@ -153,7 +154,7 @@ def get_affine(
     return aff_matrix
 
 
-def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarray, hist_depth: int = 100):
+def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarray, hist_depth: int = 500):
     log_module.info(f"pca denoising matched filter")
     # get noise mp distribution from noise lines - we combine all noise scans into channel dims,
     # as we possibly have more samples than channels
@@ -161,53 +162,70 @@ def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarr
     # calculate singular values of noise distribution across all channels / scans
     noise_mp_s = np.linalg.svdvals(noise_data)
     # get eigenvalues
-    s_lam = noise_mp_s ** 2 / noise_mp_s.shape[0]
+    s_lam = noise_mp_s ** 2 / noise_mp_s.shape[-1]
 
     # histogramm
-    bins = np.linspace(0, 1.2 * np.max(s_lam), hist_depth)
+    s_noise_max = 1.2 * np.max(s_lam)
+    bins = np.linspace(0, s_noise_max, 100)
     hist, bins = np.histogram(s_lam, bins=bins, density=True)
     hist /= np.sum(hist)
-    bin_mid = bins[:-1] + np.diff(bins) / 2
+    bin_mid_noise_est = bins[:-1] + np.diff(bins) / 2
     # get expectation value - calculate sigma
-    exp_mp = np.sum(hist * bin_mid)
+    exp_mp = np.sum(hist * bin_mid_noise_est)
     sigma = np.sqrt(exp_mp)
     # calculate boundaries from known shape parameters
-    lam_p = sigma ** 2 * (1 + np.sqrt(noise_data.shape[0] / noise_data.shape[-1])) ** 2
-    lam_m = sigma ** 2 * (1 - np.sqrt(noise_data.shape[0] / noise_data.shape[-1])) ** 2
+    lam_p = sigma ** 2 * (1 + np.sqrt(np.min(noise_data.shape) / np.max(noise_data.shape))) ** 2
+    lam_m = sigma ** 2 * (1 - np.sqrt(np.min(noise_data.shape) / np.max(noise_data.shape))) ** 2
     # mask nonzero values
-    mask = (lam_m < bin_mid) & (bin_mid < lam_p)
+    mask = (lam_m < bin_mid_noise_est) & (bin_mid_noise_est < lam_p)
     # build distribution
-    p = np.zeros_like(bin_mid)
-    p[mask] = np.sqrt((lam_p - bin_mid[mask]) * (bin_mid[mask] - lam_m) / (2 * np.pi * bin_mid[mask] * sigma ** 2))
-
+    p_noise = np.zeros_like(bin_mid_noise_est)
+    p_noise[mask] = np.sqrt((lam_p - bin_mid_noise_est[mask]) * (bin_mid_noise_est[mask] - lam_m) / (2 * np.pi * bin_mid_noise_est[mask] * sigma ** 2))
+    # invert distribution
+    p_noise_inv = 1 - p_noise / np.max(p_noise)
     # possibly can skip 0 lines in processing to save compute
-    # we want a svd across the matrix spanned by readout line and channel dims [batches, num_channels, num_samples]
+    # we want a svd across the 2d matrix spanned by readout line and all phase encodes [batches, num_pes, num_samples]
     # could be after oversampling removal (shouldnt make a difference, saves compute)
     # shuffle both to end, read dir is first dimension, channels is second to last, we can swap time and read
-    k_space_lines = np.swapaxes(k_space_lines, 0, -1)
+    k_space_lines = np.moveaxis(k_space_lines, (0, 1), (-2, -1))
     shape = k_space_lines.shape
     # flatten batch dims
     k_space_lines = np.reshape(k_space_lines, (-1, *shape[-2:]))
     k_space_filt = np.zeros_like(k_space_lines)
 
-    # do svd
-    u, s, v = np.linalg.svd(k_space_lines, full_matrices=False)
+    # batch svd
+    batch_size = 1000
+    num_batches = int(np.ceil(k_space_lines.shape[0] / batch_size))
+    for idx_b in tqdm.trange(num_batches, desc="filter svd"):
+    # for idx_b in tqdm.trange(5, desc="filter svd"):
+        start = idx_b * batch_size
+        end = min((idx_b + 1) * batch_size, k_space_lines.shape[0])
+        u_temp, s_temp, v_temp = np.linalg.svd(k_space_lines[start:end], full_matrices=False)
+        if idx_b == 0:
+            u, s, v = u_temp, s_temp, v_temp
+        else:
+            u = np.concatenate((u, u_temp), axis=0)
+            s = np.concatenate((s, s_temp), axis=0)
+            v = np.concatenate((v, v_temp), axis=0)
+
+    # u, s, v = np.linalg.svd(k_space_lines, full_matrices=False)
     # we want a histogram of each of those singular value decompositions
-    for idx_b, b_s in enumerate(tqdm.tqdm(s)):
+    for idx_b, b_s in enumerate(tqdm.tqdm(s, desc="process filtering")):
         # get eigenvalue
         eigv = b_s**2 / s.shape[-1]
-        # histogram of eigenvalues
+
         bins = np.linspace(0, 1.2 * np.max(eigv), hist_depth)
-        hist, bins = np.histogram(eigv, bins=bins, density=True)
         bin_mid = bins[:-1] + np.diff(bins) / 2
-        # match filter noise component
-        corr = np.correlate(hist, p, mode="same")
-        # compute weighting
-        # scale correlation function to 1
-        corr_w = np.divide(corr, np.max(corr), where=np.max(corr) > 1e-10, out=np.zeros_like(corr))
-        weight = 1 - corr_w
+        # # match filter noise component
+        # # want to adopt ps shape to current axis
+        p = np.interp(bin_mid[bin_mid < 2 * s_noise_max], xp=bin_mid_noise_est, fp=p_noise)
+        # corr = np.correlate(hist, p, mode="same")
+        # # compute weighting
+        # # scale correlation function to 1
+        # corr_w = np.divide(corr, np.max(corr), where=np.max(corr) > 1e-10, out=np.zeros_like(corr))
+        # weight = 1 - corr_w
         # interpolate function at singular values
-        weight_at_s = np.interp(x=eigv, xp=bin_mid, fp=weight)
+        weight_at_s = np.interp(x=eigv, xp=bin_mid_noise_est, fp=p_noise_inv)
         # weight original singular values
         s_w = b_s * weight_at_s
         # reconstruct signal without filtered noise
@@ -223,10 +241,30 @@ def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarr
             where=max_norm_signal_filt >1e-10, out=np.zeros_like(signal_filt)
         )
         k_space_filt[idx_b] = signal_filt
+        if idx_b in [0, 4]:
+            # histogram of eigenvalues
+            hist, _ = np.histogram(eigv, bins=bins, density=True)
+            hist /= np.sum(hist)
+
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(x=bin_mid, y=hist, name="s_vals", showlegend=True)
+            )
+            fig.add_trace(
+                go.Scattergl(x=bin_mid, y=p, name="noise_distribution",
+                             mode="lines", showlegend=True)
+            )
+            # do correlation
+            pinv_plot = np.interp(x=bin_mid, xp=bin_mid_noise_est, fp=p_noise_inv)
+            fig.add_trace(
+                go.Scattergl(x=bin_mid, y=pinv_plot, name="correlate",
+                             mode="lines", showlegend=True)
+            )
+            fig.write_html(f"/LOCAL/jschmidt/PyMRItools/examples/raw_data/rd_file/figs/rd_noise_filter_{idx_b}.html")
     # reshape
     k_space_filt = np.reshape(k_space_filt, shape)
     # move dims back
-    k_space_filt = np.swapaxes(k_space_filt, -1, 0)
+    k_space_filt = np.moveaxis(k_space_filt, (-2, -1), (0, 1))
     return k_space_filt
 
 
@@ -354,9 +392,17 @@ def load_pulseq_rd(
 
     # fft bandpass filter for oversampling removal not consistent
     # with undersampled in the 0 filled regions data, remove artifacts
+    # extend mask to full dims
     k_space *= k_sampling_mask[:, :, None, None, :]
+    ext_k_sampling_mask = np.tile(k_sampling_mask[:, :, None, None, :], (1, 1, *k_space.shape[2:4], 1))
 
-    k_space_filt = matched_filter_noise_removal(noise_data=noise_scans, k_space_lines=k_space)
+    filter_input = np.reshape(
+        k_space[ext_k_sampling_mask],
+        (k_space.shape[0], -1, *k_space.shape[2:])
+    )
+    k_space_filt = np.zeros_like(k_space)
+    filtered_input = matched_filter_noise_removal(noise_data=noise_scans, k_space_lines=filter_input)
+    k_space_filt[ext_k_sampling_mask] = filtered_input.flatten()
 
     # correct gradient directions - at the moment we have reversed z dir
     k_space = np.flip(k_space, axis=2)
