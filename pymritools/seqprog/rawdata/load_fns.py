@@ -196,28 +196,22 @@ def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Te
     Returns:
     torch.Tensor: Interpolated values with shape [batch, a, b]
     """
-    # Ensure x is a 2D tensor with dimensions [batch, a*b]
-    batch_size, a, b = x.shape
-    x_flat = x.view(batch_size, -1)
+    batch, a, b = x.shape
+    interpolated_values = torch.zeros_like(x, dtype=fp.dtype)
+    for idx_a in range(a):
+        indices = torch.searchsorted(xp, x[:, idx_a, :])
+        indices = torch.clamp(indices, 1, xp.shape[0] - 1)
+        # find adjacent left and right points on originally sampeld axes xp
+        x0 = xp[indices - 1]
+        x1 = xp[indices]
+        # find values of originally sampled function considering its differing for each idx_a
+        y0 = fp[idx_a, indices - 1]
+        y1 = fp[idx_a, indices]
+        # get the slope for this idx_a
+        slope = (y1 - y0) / (x1 - x0)
+        interpolated_values[:, idx_a, :] = slope * (x[:, idx_a, :] - x0) + y0
 
-    # Perform searchsorted and clamping in the last dimension of xp
-    indices = torch.searchsorted(xp, x_flat)
-    indices = torch.clamp(indices, 1, xp.shape[0] - 1)
-
-    # Gather the corresponding xp and fp values
-    x0 = xp[indices - 1]
-    x1 = xp[indices]
-    # fp needs to be reshaped to match dimensions, we use gather
-    fp_flat = fp.unsqueeze(0).expand(batch_size, -1, -1)
-
-    y0 = torch.gather(fp_flat, 2, (indices - 1).unsqueeze(1).expand(-1, a, -1))
-    y1 = torch.gather(fp_flat, 2, indices.unsqueeze(1).expand(-1, a, -1))
-
-    slope = (y1 - y0) / (x1 - x0)
-    interpolated_values = slope * (x_flat - x0) + y0
-
-    # Reshape the output to [batch, a, b]
-    return interpolated_values.view(batch_size, a, b)
+    return interpolated_values
 
 
 def matched_filter_noise_removal(
