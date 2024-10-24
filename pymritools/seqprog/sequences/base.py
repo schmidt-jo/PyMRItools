@@ -1087,7 +1087,7 @@ class Sequence2D(abc.ABC):
                 if sim_grad_moments:
                     if rf.use == "excitation":
                         identifier = 1
-                    if rf.use == "refocusing":
+                    elif rf.use == "refocusing":
                         identifier = 2
                     else:
                         err = f"grad moment effect of rf ({rf.use}) not recognized or not implemented."
