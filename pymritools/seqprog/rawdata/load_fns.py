@@ -15,6 +15,16 @@ from pymritools.seqprog.rawdata.utils import remove_oversampling
 log_module = logging.getLogger(__name__)
 
 
+def distribution_mp(x, sigma, gamma):
+    lam_p = sigma**2 * (1 + np.sqrt(gamma))**2
+    lam_m = sigma**2 * (1 - np.sqrt(gamma))**2
+    result = np.zeros_like(x)
+    mask = (lam_m < x) & (x < lam_p)
+    result[mask] =  np.sqrt((lam_p - x[mask]) * (x[mask] - lam_m)) / (2 * np.pi * gamma * x[mask] * sigma**2)
+    result /= np.sum(result)
+    return result
+
+
 def get_k_space_indices_from_trajectory_grid(trajectory: np.ndarray, n_read: int, os_factor: int):
     """
     Calculate the closest points on grid from a trajectory array (ranging from -0.5, to 0.5).
@@ -75,7 +85,8 @@ def get_whitening_matrix(noise_data_n_samples_channel):
     bcov = np.einsum(
         'ijk, ijl -> ikl',
         noise_data_n_samples_channel,
-        noise_data_n_samples_channel.conj()
+        noise_data_n_samples_channel.conj(),
+        optimize=True
     ) / noise_data_n_samples_channel.shape[1]
 
     # we average over the number of scans
@@ -154,59 +165,88 @@ def get_affine(
     return aff_matrix
 
 
-def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarray, hist_depth: int = 500):
+def matched_filter_noise_removal(
+        noise_data: np.ndarray, k_space_lines: np.ndarray, hist_depth: int = 500,
+        noise_hist_depth: int = 100):
     log_module.info(f"pca denoising matched filter")
-    # get noise mp distribution from noise lines - we combine all noise scans into channel dims,
-    # as we possibly have more samples than channels
-    noise_data = np.reshape(noise_data, (-1, noise_data.shape[-1]))
-    # calculate singular values of noise distribution across all channels / scans
-    noise_mp_s = np.linalg.svdvals(noise_data)
+    # we got noise data, assumed dims [num_noise_scans, num_channels, num_samples]
+    # want to use this to calculate a np distribution of noise singular values per channel
+    # start rearranging, channels to front, combine num scans
+    noise_data = np.moveaxis(noise_data, 0, -1)
+    noise_data = np.reshape(noise_data, (noise_data.shape[0], -1))
+    shape = noise_data.shape
+
+    # want to make the sampled lines as square as possible
+    a = find_approx_squared_form(shape)
+
+    # reshape again
+    noise_data = np.reshape(noise_data, (shape[0], a, -1))
+    n = a
+    m = noise_data.shape[-1]
+
+    # calculate singular values of noise distribution across all channels
+    noise_s = np.linalg.svdvals(noise_data)
     # get eigenvalues
-    s_lam = noise_mp_s ** 2 / noise_mp_s.shape[-1]
+    s_lam = noise_s ** 2 / n
+    noise_s_max = 1.2 * np.max(s_lam)
 
     # histogramm
-    s_noise_max = 1.2 * np.max(s_lam)
-    bins = np.linspace(0, s_noise_max, 100)
-    hist, bins = np.histogram(s_lam, bins=bins, density=True)
-    hist /= np.sum(hist)
-    bin_mid_noise_est = bins[:-1] + np.diff(bins) / 2
-    # get expectation value - calculate sigma
-    exp_mp = np.sum(hist * bin_mid_noise_est)
-    sigma = np.sqrt(exp_mp)
-    # calculate boundaries from known shape parameters
-    lam_p = sigma ** 2 * (1 + np.sqrt(np.min(noise_data.shape) / np.max(noise_data.shape))) ** 2
-    lam_m = sigma ** 2 * (1 - np.sqrt(np.min(noise_data.shape) / np.max(noise_data.shape))) ** 2
-    # mask nonzero values
-    mask = (lam_m < bin_mid_noise_est) & (bin_mid_noise_est < lam_p)
-    # build distribution
-    p_noise = np.zeros_like(bin_mid_noise_est)
-    p_noise[mask] = np.sqrt((lam_p - bin_mid_noise_est[mask]) * (bin_mid_noise_est[mask] - lam_m) / (2 * np.pi * bin_mid_noise_est[mask] * sigma ** 2))
-    # invert distribution
-    p_noise_inv = 1 - p_noise / np.max(p_noise)
+    # bins = np.linspace(0, noise_s_max, 100)
+    # hist, bins = np.histogram(s_lam, bins=bins, density=True)
+    # hist /= np.sum(hist)
+    # bin_mid_noise_est = bins[:-1] + np.diff(bins) / 2
+    # # get expectation value - calculate sigma
+    # exp_mp = np.sum(hist * bin_mid_noise_est)
+    # sigma = np.sqrt(exp_mp)
+
+    noise_ax = np.linspace(0, noise_s_max, noise_hist_depth)
+
+    gamma = m / n
+    # get biggest and lowest s
+    sigma = np.sqrt((np.max(s_lam) - np.min(s_lam)) / 4 / np.sqrt(gamma))
+
+    # get mp distribution of noise values for all channels
+    p_noise = distribution_mp(noise_ax, sigma, gamma)
+
+    # invert distribution to create weighting
+    p_weight = 1 - p_noise / np.max(p_noise, axis=1, keepdims=True)
+    p_weight_ax = noise_ax
+
     # possibly can skip 0 lines in processing to save compute
-    # we want a svd across the 2d matrix spanned by readout line and all phase encodes [batches, num_pes, num_samples]
+    # we want a svd across a 2d matrix spanned by readout line
     # could be after oversampling removal (shouldnt make a difference, saves compute)
-    # shuffle both to end, read dir is first dimension, channels is second to last, we can swap time and read
-    k_space_lines = np.moveaxis(k_space_lines, (0, 1), (-2, -1))
+    # shuffle read to end, read dir is first dimension, channels is second to last, want this to remain
+    k_space_lines = np.swapaxes(k_space_lines, 0, -1)
     shape = k_space_lines.shape
     # flatten batch dims
     k_space_lines = np.reshape(k_space_lines, (-1, *shape[-2:]))
+    # find once again a close to square form
+    a = find_approx_squared_form(shape)
+
+    k_space_lines = np.reshape(k_space_lines, (k_space_lines.shape[:2], a, -1))
+
     k_space_filt = np.zeros_like(k_space_lines)
 
     # batch svd
     batch_size = 1000
     num_batches = int(np.ceil(k_space_lines.shape[0] / batch_size))
+    # using gpu
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     for idx_b in tqdm.trange(num_batches, desc="filter svd"):
     # for idx_b in tqdm.trange(5, desc="filter svd"):
         start = idx_b * batch_size
         end = min((idx_b + 1) * batch_size, k_space_lines.shape[0])
-        u_temp, s_temp, v_temp = np.linalg.svd(k_space_lines[start:end], full_matrices=False)
+        batch = torch.from_numpy(k_space_lines[start:end]).to(device)
+        u_temp, s_temp, v_temp = torch.linalg.svd(
+            k_space_lines[start:end],
+            full_matrices=False
+        )
         if idx_b == 0:
-            u, s, v = u_temp, s_temp, v_temp
+            u, s, v = u_temp.cpu(), s_temp.cpu(), v_temp.cpu()
         else:
-            u = np.concatenate((u, u_temp), axis=0)
-            s = np.concatenate((s, s_temp), axis=0)
-            v = np.concatenate((v, v_temp), axis=0)
+            u = torch.concatenate((u, u_temp.cpu()), dim=0)
+            s = torch.concatenate((s, s_temp.cpu()), dim=0)
+            v = torch.concatenate((v, v_temp.cpu()), dim=0)
 
     # u, s, v = np.linalg.svd(k_space_lines, full_matrices=False)
     # we want a histogram of each of those singular value decompositions
@@ -266,6 +306,15 @@ def matched_filter_noise_removal(noise_data: np.ndarray, k_space_lines: np.ndarr
     # move dims back
     k_space_filt = np.moveaxis(k_space_filt, (-2, -1), (0, 1))
     return k_space_filt
+
+
+def find_approx_squared_form(shape_1d: tuple):
+    a = int(np.ceil(np.sqrt(shape_1d[-1])))
+    for i in range(a):
+        if shape_1d[-1] % a == 0:
+            break
+        a -= 1
+    return a
 
 
 def load_pulseq_rd(
