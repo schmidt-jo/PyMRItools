@@ -5,7 +5,6 @@ import numpy as np
 import plotly.colors as plc
 import plotly.graph_objects as go
 import plotly.subplots as psub
-from scipy.linalg import eigvals
 
 from twixtools import read_twix
 from pymritools.config import setup_program_logging
@@ -15,7 +14,10 @@ from pymritools.seqprog.rawdata.load_fns import get_whitening_matrix
 log_module = logging.getLogger(__name__)
 
 
-def dist_mp(x, sigma, gamma):
+def distribution_mp(x, sigma, gamma):
+    """
+    Marchenko–Pastur distribution
+    """
     lam_p = sigma**2 * (1 + np.sqrt(gamma))**2
     lam_m = sigma**2 * (1 - np.sqrt(gamma))**2
     result = np.zeros_like(x)
@@ -60,7 +62,6 @@ def main():
 
     # want a per channel estimation, move channels to front and make rest as square as possible
     data_noise = np.moveaxis(data_noise, 1, 0)
-    # take same amount of samples as later
     data_noise = np.reshape(data_noise, (data_noise.shape[0], -1))
     # data_noise = data_noise[:, :data.shape[-1]]
     target = data_noise.shape[-1]
@@ -104,7 +105,7 @@ def main():
         # can take avg
         sigma = (sigma + sigma_2) / 2
 
-        p_noise[idx_c] = dist_mp(x=bin_mid_noise_est, sigma=sigma, gamma=gamma)
+        p_noise[idx_c] = distribution_mp(x=bin_mid_noise_est, sigma=sigma, gamma=gamma)
         p_corr = p_noise[idx_c][bin_mid_noise_est < 1.1 * sigma**2 * (1 + np.sqrt(gamma))**2]
 
         # first do a matched filtering on original noise data histogram

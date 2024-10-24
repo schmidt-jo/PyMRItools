@@ -16,13 +16,32 @@ log_module = logging.getLogger(__name__)
 
 
 def distribution_mp(x, sigma, gamma):
+    # allocate output
+    shape_sig = sigma.shape
+    shape_x = x.shape
+    shape = (*shape_sig, *shape_x)
+    result = np.zeros(shape)
+    # cast to shape of sigma and x
+
+    sigma = np.tile(
+        np.expand_dims(sigma, (-np.arange(1, len(shape_x) + 1)).tolist()),
+        (*np.ones(len(shape_sig), dtype=int).tolist(), *shape_x)
+    )
+    # if we have more than one sigma dimension, we want to mask the axis x for each of the sigmas
+    x = np.tile(
+        np.expand_dims(x, np.arange(len(shape_sig)).tolist()),
+        (*shape_sig, *np.ones(len(shape_x), dtype=int).tolist())
+    )
+    # calculate lambda boundaries
     lam_p = sigma**2 * (1 + np.sqrt(gamma))**2
     lam_m = sigma**2 * (1 - np.sqrt(gamma))**2
-    result = np.zeros_like(x)
+
+    # build mask
     mask = (lam_m < x) & (x < lam_p)
-    result[mask] =  np.sqrt((lam_p - x[mask]) * (x[mask] - lam_m)) / (2 * np.pi * gamma * x[mask] * sigma**2)
+    # fill probabilities
+    result[mask] =  (np.sqrt((lam_p - x) * (x - lam_m)) / (2 * np.pi * gamma * x * sigma**2))[mask]
     result /= np.sum(result)
-    return result
+    return np.squeeze(result)
 
 
 def get_k_space_indices_from_trajectory_grid(trajectory: np.ndarray, n_read: int, os_factor: int):
@@ -165,8 +184,30 @@ def get_affine(
     return aff_matrix
 
 
+def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Tensor:
+    """
+    interpolate 1D function fp given at 1D points xp at 1D (possibly batched) points x
+    """
+    # find indices right of whatever point x corresponds next to xp
+    indices = torch.searchsorted(xp, x)
+    # make sure we hit at most the rightmost point
+    indices = torch.clamp(indices, 1, xp.shape[0] - 1)
+
+    # find previous point
+    x0 = xp[indices - 1]
+    # find next point
+    x1 = xp[indices]
+    # calculate function value at those points
+    # here we might have some batching
+    y0 = fp[indices - 1]
+    y1 = fp[indices]
+
+    slope = (y1 - y0) / (x1 - x0)
+    return slope * (x - x0) + y0
+
+
 def matched_filter_noise_removal(
-        noise_data: np.ndarray, k_space_lines: np.ndarray, hist_depth: int = 500,
+        noise_data: np.ndarray, k_space_lines: np.ndarray, hist_depth: int = 20,
         noise_hist_depth: int = 100):
     log_module.info(f"pca denoising matched filter")
     # we got noise data, assumed dims [num_noise_scans, num_channels, num_samples]
@@ -181,8 +222,8 @@ def matched_filter_noise_removal(
 
     # reshape again
     noise_data = np.reshape(noise_data, (shape[0], a, -1))
-    n = a
-    m = noise_data.shape[-1]
+    m = a
+    n = noise_data.shape[-1]
 
     # calculate singular values of noise distribution across all channels
     noise_s = np.linalg.svdvals(noise_data)
@@ -203,14 +244,16 @@ def matched_filter_noise_removal(
 
     gamma = m / n
     # get biggest and lowest s
-    sigma = np.sqrt((np.max(s_lam) - np.min(s_lam)) / 4 / np.sqrt(gamma))
+    sigma = np.sqrt((np.max(s_lam, axis=1) - np.min(s_lam, axis=1)) / 4 / np.sqrt(gamma))
 
     # get mp distribution of noise values for all channels
     p_noise = distribution_mp(noise_ax, sigma, gamma)
+    p_noise /= np.sum(p_noise, axis=len(sigma.shape), keepdims=True)
+    p_noise = torch.from_numpy(p_noise)
 
     # invert distribution to create weighting
-    p_weight = 1 - p_noise / np.max(p_noise, axis=1, keepdims=True)
-    p_weight_ax = noise_ax
+    p_weight = 1 - p_noise / torch.max(p_noise, dim=len(sigma.shape), keepdim=True).values
+    p_weight_ax = torch.from_numpy(noise_ax)
 
     # possibly can skip 0 lines in processing to save compute
     # we want a svd across a 2d matrix spanned by readout line
@@ -223,84 +266,67 @@ def matched_filter_noise_removal(
     # find once again a close to square form
     a = find_approx_squared_form(shape)
 
-    k_space_lines = np.reshape(k_space_lines, (k_space_lines.shape[:2], a, -1))
+    k_space_lines = np.reshape(k_space_lines, (*k_space_lines.shape[:2], a, -1))
+    m, n = k_space_lines.shape[-2:]
 
     k_space_filt = np.zeros_like(k_space_lines)
 
     # batch svd
-    batch_size = 1000
+    batch_size = 200
     num_batches = int(np.ceil(k_space_lines.shape[0] / batch_size))
     # using gpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    for idx_b in tqdm.trange(num_batches, desc="filter svd"):
-    # for idx_b in tqdm.trange(5, desc="filter svd"):
+    # for idx_b in tqdm.trange(num_batches, desc="filter svd"):
+    for idx_b in tqdm.trange(5, desc="filter svd"):
         start = idx_b * batch_size
         end = min((idx_b + 1) * batch_size, k_space_lines.shape[0])
         batch = torch.from_numpy(k_space_lines[start:end]).to(device)
-        u_temp, s_temp, v_temp = torch.linalg.svd(
-            k_space_lines[start:end],
+        # svd batch
+        u, s, v = torch.linalg.svd(
+            batch,
             full_matrices=False
         )
-        if idx_b == 0:
-            u, s, v = u_temp.cpu(), s_temp.cpu(), v_temp.cpu()
-        else:
-            u = torch.concatenate((u, u_temp.cpu()), dim=0)
-            s = torch.concatenate((s, s_temp.cpu()), dim=0)
-            v = torch.concatenate((v, v_temp.cpu()), dim=0)
+        # process batch (can do straight away with tensor on device)
+        # get eigenvalue from singval
+        bs_eigv = s**2 / n
 
-    # u, s, v = np.linalg.svd(k_space_lines, full_matrices=False)
-    # we want a histogram of each of those singular value decompositions
-    for idx_b, b_s in enumerate(tqdm.tqdm(s, desc="process filtering")):
-        # get eigenvalue
-        eigv = b_s**2 / s.shape[-1]
+        weighting = interpolate(bs_eigv, xp=p_weight_ax, fp=p_weight)
 
-        bins = np.linspace(0, 1.2 * np.max(eigv), hist_depth)
-        bin_mid = bins[:-1] + np.diff(bins) / 2
-        # # match filter noise component
-        # # want to adopt ps shape to current axis
-        p = np.interp(bin_mid[bin_mid < 2 * s_noise_max], xp=bin_mid_noise_est, fp=p_noise)
-        # corr = np.correlate(hist, p, mode="same")
-        # # compute weighting
-        # # scale correlation function to 1
-        # corr_w = np.divide(corr, np.max(corr), where=np.max(corr) > 1e-10, out=np.zeros_like(corr))
-        # weight = 1 - corr_w
-        # interpolate function at singular values
-        weight_at_s = np.interp(x=eigv, xp=bin_mid_noise_est, fp=p_noise_inv)
-        # weight original singular values
-        s_w = b_s * weight_at_s
+        # weight original singular values (not eigenvalues)
+        s_w = s * weighting
         # reconstruct signal without filtered noise
-        signal_filt = np.matmul(
-            np.matmul(u[idx_b], np.diag(s_w)), v[idx_b]
-        )
+        signal_filt = torch.matmul(torch.einsum("iklm, km -> iklm", b_u, s_w.to(b_u.dtype)), b_v)
         # normalize to previous signal levels - taking maximum of absolute value across channels
-        max_norm_k_lines = np.max(np.abs(k_space_lines[idx_b]))
+        max_norm_k_lines = np.max(np.abs(k_space_lines[idx_b, idx_c]))
         max_norm_signal_filt = np.max(np.abs(signal_filt))
         signal_filt = np.divide(
             signal_filt * max_norm_k_lines,
             max_norm_signal_filt,
             where=max_norm_signal_filt >1e-10, out=np.zeros_like(signal_filt)
         )
-        k_space_filt[idx_b] = signal_filt
-        if idx_b in [0, 4]:
-            # histogram of eigenvalues
-            hist, _ = np.histogram(eigv, bins=bins, density=True)
-            hist /= np.sum(hist)
-
-            fig = go.Figure()
-            fig.add_trace(
-                go.Bar(x=bin_mid, y=hist, name="s_vals", showlegend=True)
-            )
-            fig.add_trace(
-                go.Scattergl(x=bin_mid, y=p, name="noise_distribution",
-                             mode="lines", showlegend=True)
-            )
-            # do correlation
-            pinv_plot = np.interp(x=bin_mid, xp=bin_mid_noise_est, fp=p_noise_inv)
-            fig.add_trace(
-                go.Scattergl(x=bin_mid, y=pinv_plot, name="correlate",
-                             mode="lines", showlegend=True)
-            )
-            fig.write_html(f"/LOCAL/jschmidt/PyMRItools/examples/raw_data/rd_file/figs/rd_noise_filter_{idx_b}.html")
+        k_space_filt[idx_b, idx_c] = signal_filt
+            # if idx_c == 0 and idx_b in [0, 4]:
+            #     # histogram of eigenvalues
+            #     hist, _ = np.histogram(bs_c_eigv, bins=bins, density=True)
+            #     hist /= np.sum(hist)
+            #
+            #     fig = go.Figure()
+            #     fig.add_trace(
+            #         go.Bar(x=bin_mid, y=hist, name="s_vals", showlegend=True)
+            #     )
+            #     # # want to adopt ps shape to current axis
+            #     p = np.interp(x=bin_mid[bin_mid < 2 * noise_s_max], xp=p_weight_ax, fp=p_noise[idx_c])
+            #     fig.add_trace(
+            #         go.Scattergl(x=bin_mid[bin_mid < 2 * noise_s_max], y=p, name="noise_distribution",
+            #                      mode="lines", showlegend=True)
+            #     )
+            #     # do correlation
+            #     pinv_plot = np.interp(x=bin_mid, xp=p_weight_ax, fp=p_weight[idx_c])
+            #     fig.add_trace(
+            #         go.Scattergl(x=bin_mid, y=pinv_plot, name="weighting fn",
+            #                      mode="lines", showlegend=True)
+            #     )
+            #     fig.write_html(f"/LOCAL/jschmidt/PyMRItools/examples/raw_data/rd_file/figs/rd_noise_filter_{idx_b}_ch-1.html")
     # reshape
     k_space_filt = np.reshape(k_space_filt, shape)
     # move dims back
