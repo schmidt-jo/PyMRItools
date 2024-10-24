@@ -186,24 +186,38 @@ def get_affine(
 
 def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Tensor:
     """
-    interpolate 1D function fp given at 1D points xp at 1D (possibly batched) points x
+    Interpolate a function fp at points xp in a multidimensional context
+
+    Parameters:
+    x (torch.Tensor): Tensor of the new sampling points with shape [batch, a, b]
+    xp (torch.Tensor): 1D Tensor of original sample points with shape [c]
+    fp (torch.Tensor): 2D Tensor of function values at xp with shape [a, c]
+
+    Returns:
+    torch.Tensor: Interpolated values with shape [batch, a, b]
     """
-    # find indices right of whatever point x corresponds next to xp
-    indices = torch.searchsorted(xp, x)
-    # make sure we hit at most the rightmost point
+    # Ensure x is a 2D tensor with dimensions [batch, a*b]
+    batch_size, a, b = x.shape
+    x_flat = x.view(batch_size, -1)
+
+    # Perform searchsorted and clamping in the last dimension of xp
+    indices = torch.searchsorted(xp, x_flat)
     indices = torch.clamp(indices, 1, xp.shape[0] - 1)
 
-    # find previous point
+    # Gather the corresponding xp and fp values
     x0 = xp[indices - 1]
-    # find next point
     x1 = xp[indices]
-    # calculate function value at those points
-    # here we might have some batching
-    y0 = fp[indices - 1]
-    y1 = fp[indices]
+    # fp needs to be reshaped to match dimensions, we use gather
+    fp_flat = fp.unsqueeze(0).expand(batch_size, -1, -1)
+
+    y0 = torch.gather(fp_flat, 2, (indices - 1).unsqueeze(1).expand(-1, a, -1))
+    y1 = torch.gather(fp_flat, 2, indices.unsqueeze(1).expand(-1, a, -1))
 
     slope = (y1 - y0) / (x1 - x0)
-    return slope * (x - x0) + y0
+    interpolated_values = slope * (x_flat - x0) + y0
+
+    # Reshape the output to [batch, a, b]
+    return interpolated_values.view(batch_size, a, b)
 
 
 def matched_filter_noise_removal(

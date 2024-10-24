@@ -2,9 +2,12 @@ import logging
 import pathlib as plib
 
 import numpy as np
+import torch
+
 import plotly.colors as plc
 import plotly.graph_objects as go
 import plotly.subplots as psub
+from scipy.linalg import eigvals
 
 from twixtools import read_twix
 from pymritools.config import setup_program_logging
@@ -62,6 +65,7 @@ def main():
 
     # want a per channel estimation, move channels to front and make rest as square as possible
     data_noise = np.moveaxis(data_noise, 1, 0)
+    # take same amount of samples as later
     data_noise = np.reshape(data_noise, (data_noise.shape[0], -1))
     # data_noise = data_noise[:, :data.shape[-1]]
     target = data_noise.shape[-1]
