@@ -12,7 +12,7 @@ log_module = logging.getLogger(__name__)
 class MEGESSE(Sequence2D):
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
         # init Base class
-        super().__init__(config=config, specs=specs, params=params)
+        super().__init__(config=config, specs=specs, params=params, create_excitation_kernel=False)
 
         log_module.info(f"Init MEGESSE Sequence")
         # set number of GRE echoes beside SE
@@ -22,7 +22,7 @@ class MEGESSE(Sequence2D):
 
         # timing
         self.t_delay_exc_ref1: DELAY = DELAY()
-        self.t_delay_ref1_se1: DELAY = DELAY()
+        self.t_delay_ref_se: DELAY = DELAY()
 
         # its possible to redo the sampling scheme with adjusted etl
         # that is change sampling per readout, we would need pe blips between the gesse samplings,
@@ -68,22 +68,9 @@ class MEGESSE(Sequence2D):
             params=self.params, system=self.system, pulse_file=self.config.pulse_file,
             use_slice_spoiling=False, adjust_ramp_area=0.0
         )
-        # need to set up a phase gradient for excitation
-        phase_grad_area = self.block_refocus.grad_phase.area[0]
-        # timing
-        start_time = self.block_excitation.rf.get_duration()
-        rephase_time = self.block_excitation.get_duration() - start_time
-        # set up longest phase encode
-        max_phase_grad_area = self.params.resolution_n_phase / 2 * self.params.delta_k_phase
-        # build longest phase gradient
-        grad_phase = GRAD.make_trapezoid(
-            channel=params.phase_dir,
-            area=max_phase_grad_area,
-            system=self.system,
-            delay_s=start_time,
-            duration_s=rephase_time
-        )
-        self.block_excitation.grad_phase = grad_phase
+        # we need to modify the excitation kernel -> add phase and read gradients to prep for readouts between
+        # excitation and first refocus
+        self._mod_excitation()
 
         # plot files for visualization
         if self.config.visualize:
@@ -102,6 +89,54 @@ class MEGESSE(Sequence2D):
         # this would allow joint recon of t2 and t2* contrasts independently
         # but we could also benefit even more from joint recon of all echoes and
         # hence switch up the phase encode scheme even further also in between gesse samplings
+
+    def _mod_excitation(self):
+        # need to set up a phase gradient for excitation
+        phase_grad_area = self.block_refocus.grad_phase.area[0]
+        # timing - rf ringdown time can fall into grad
+        start_time = self.block_excitation.rf.t_duration_s + self.block_excitation.rf.t_delay_s
+        rephase_time = self.block_excitation.get_duration() - start_time
+        # set up longest phase encode
+        max_phase_grad_area = self.params.resolution_n_phase / 2 * self.params.delta_k_phase
+        # build longest phase gradient
+        grad_phase = GRAD.make_trapezoid(
+            channel=self.params.phase_dir,
+            area=max_phase_grad_area,
+            system=self.system,
+            delay_s=start_time,
+            duration_s=rephase_time
+        )
+        # need to prephase first gradient echo readout, does not need to be updated. only need half readout grad area
+        # we always end with a blip up gradient before first refocus, hence need to figure out with what we do start:
+        bu = False if int(self.num_gre % 2) == 0 else True
+        block_read = self.block_acquisition if bu else self.block_acquisition_neg_polarity
+        # get whole readout area
+        grad_area_readout = np.sum(block_read.grad_read.area)
+        grad_read_pre = GRAD.make_trapezoid(
+            channel=self.params.read_dir,
+            area=- 0.5 * grad_area_readout,
+            system=self.system,
+            delay_s=start_time,
+            duration_s=rephase_time
+        )
+        # get times
+        # duration_phase_grad = self.set_on_grad_raster_time(time=grad_phase.get_duration() - grad_phase.t_delay_s)
+        # duration_pre_read = self.set_on_grad_raster_time(time=grad_read_pre.get_duration() - grad_read_pre.t_delay_s)
+        # duration_re_slice = self.block_excitation.get_duration() - (
+        #     self.block_excitation.rf.t_duration_s + self.block_excitation.rf.t_delay_s
+        # )
+        #
+        # # calculate minimum needed time to play out all grads - this should be just a sanity check,
+        # # as above grads were already set on the rephase time
+        # duration_min = np.max([duration_phase_grad, duration_pre_read, duration_re_slice])
+        # if duration_min > duration_re_slice:
+        #     msg = ("Excitation Kernel: readout and / or phase gradient take longer than slice spoiling and rephasing. "
+        #            "Adopting not yet implemented. Try to use different slice spoiling settings!")
+        #     log_module.error(msg)
+        #     raise AttributeError(msg)
+        # set gradients
+        self.block_excitation.grad_read = grad_read_pre
+        self.block_excitation.grad_phase = grad_phase
 
     # __ pypsi __
     # sampling + k-traj
@@ -209,30 +244,38 @@ class MEGESSE(Sequence2D):
         self._set_slice_delay(t_total_etl=t_total_etl)
 
     def _calculate_echo_timings(self):
+        # quick sanity check, acquisitions should be equally long
+        if not np.allclose(self.block_acquisition.get_duration(), self.block_acquisition_neg_polarity.get_duration()):
+            msg = ("acquisition for different readout directions differ in duration. "
+                   "Something went wrong. Check creation of acquisition kernels!")
+            log_module.error(msg)
+            raise AssertionError(msg)
+        # quick sanity check rf for being symmetric
+        if not np.allclose(
+                self.block_refocus.rf.t_delay_s + self.block_refocus.rf.t_duration_s / 2,
+                self.block_refocus.get_duration() / 2
+        ):
+            msg = ("midpoint of refocusing pulse not in the middle of refocusing kernel. "
+                   "Kernel seems to be assymetric. Something went wrong. Check creation of refocusing kernel!")
+            log_module.error(msg)
+            raise AssertionError(msg)
+
         # have num_gre + (2 * num_gre + 1) * etl echoes
-        # find midpoint of rf
+        # find midpoint of excitation rf
         t_start = self.block_excitation.rf.t_delay_s + self.block_excitation.rf.t_duration_s / 2
         # find time from excitation mid to mid of first acquisition
-        t_exc_gre1 = (self.block_acquisition.get_duration() - t_start +
-                      self.block_acquisition_neg_polarity.get_duration() / 2)
-        # find time between readouts
-        t_e2e = self.block_acquisition.get_duration() / 2 + self.block_acquisition.get_duration() / 2
-        # quick sanity check, they should be equally long
-        assert np.allclose(self.block_acquisition.get_duration(), self.block_acquisition_neg_polarity.get_duration())
+        t_exc_gre1 = self.block_excitation.get_duration() - t_start + self.block_acquisition.get_duration() / 2
+        # find time between readouts - readouts are equal in length -> twice half a readout duration
+        t_e2e = self.block_acquisition.get_duration()
 
-        # find midpoint of rf refocus block to echo readout
-        t_e_ref = (self.block_acquisition.get_duration() / 2 + self.block_refocus.rf.t_delay_s +
-                   self.block_refocus.rf.t_duration_s / 2)
-        # quick sanity check if rf sits in the middle
-        assert np.allclose(
-            self.block_refocus.get_duration() / 2,
-            self.block_refocus.rf.t_delay_s + self.block_refocus.rf.t_duration_s / 2
-        )
+        # find time between midpoint of rf refocus block and echo readout (both are symmetric,
+        # hence this is time before or after refocusing needed to readout midpoint)
+        t_e_ref = self.block_acquisition.get_duration() / 2 + self.block_refocus.get_duration() / 2
 
         # now we want to calculate minimum echo spacing
         # time from excitation to refocus (including num_gre readouts)
         t_exci_2_ref = t_exc_gre1 + (self.num_gre - 1) * t_e2e + t_e_ref
-        t_ref_se = self.block_refocus.get_duration() / 2 + (self.num_gre + 0.5) * self.block_acquisition.get_duration()
+        t_ref_se = t_e_ref + self.num_gre * t_e2e
 
         esp = 2 * np.max([t_exci_2_ref, t_ref_se])
 
@@ -241,26 +284,28 @@ class MEGESSE(Sequence2D):
             delay_ref_e = 0.0
             self.t_delay_exc_ref1 = DELAY.make_delay(esp / 2 - t_exci_2_ref, system=self.system)
         else:
-            delay_ref_e = esp / 2 - t_ref_se
-            self.t_delay_ref1_se1 = DELAY.make_delay(delay_ref_e, system=self.system)
+            self.t_delay_ref_se = DELAY.make_delay(esp / 2 - t_ref_se, system=self.system)
+            delay_ref_e = self.t_delay_ref_se.get_duration()
 
         # write echo times to array, take the first echo readouts
         self.te = [t_exc_gre1]
         for _ in range(self.num_gre - 1):
             self.te.append(self.te[-1] + t_e2e)
 
-        # after this a rf pulse is played out and we can iteratively add the rest of the echoes
-        for k in range(self.params.etl):
+        for k in range(0, self.params.etl):
             # if we would need to add an delay (if ref to e is quicker than from excitation to ref),
             # we would do it before the echoes and after the echoes to symmetrize,
             # hence after the last echo we add the time from echo to refocus twice and any delay twice
-            self.te.append(self.te[-1] + 2 * (t_e_ref + delay_ref_e))
-            # add gre readouts - then se, then gre
+            # (except for very first refocusing)
+            num_delays = 1 if k == 0 else 2
+            self.te.append(self.te[-1] + 2 * t_e_ref + delay_ref_e * num_delays)
             for _ in range(2 * self.num_gre):
                 self.te.append(self.te[-1] + t_e2e)
 
         te_print = [f'{1000 * t:.2f}' for t in self.te]
         log_module.info(f"echo times: {te_print} ms")
+        log_module.info(f"time excitation mid to refocus mid: "
+                        f"{(t_exci_2_ref+self.t_delay_exc_ref1.get_duration())*1e3} ms")
 
     def _add_gesse_readouts(self, idx_pe_loop: int, idx_slice_loop: int, idx_echo: int, no_adc: bool = False):
         if no_adc:
@@ -358,8 +403,8 @@ class MEGESSE(Sequence2D):
                 self.sequence.add_block(*self.block_refocus.list_events_to_ns())
 
                 # delay if necessary
-                if self.t_delay_ref1_se1.get_duration() > 1e-7:
-                    self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
+                if self.t_delay_ref_se.get_duration() > 1e-7:
+                    self.sequence.add_block(self.t_delay_ref_se.to_simple_ns())
 
                 self._add_gesse_readouts(
                     idx_pe_loop=idx_pe_n, idx_slice_loop=idx_slice,
@@ -367,8 +412,8 @@ class MEGESSE(Sequence2D):
                 )
 
                 # delay if necessary
-                if self.t_delay_ref1_se1.get_duration() > 1e-7:
-                    self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
+                if self.t_delay_ref_se.get_duration() > 1e-7:
+                    self.sequence.add_block(self.t_delay_ref_se.to_simple_ns())
 
             # set phase encode of final spoiling grad
             self._set_end_spoil_phase_grad()
