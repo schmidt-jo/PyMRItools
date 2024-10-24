@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 import tqdm
 import plotly.graph_objects as go
+import plotly.colors as plc
 
 from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
@@ -197,20 +198,36 @@ def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Te
     torch.Tensor: Interpolated values with shape [batch, a, b]
     """
     batch, a, b = x.shape
-    interpolated_values = torch.zeros_like(x, dtype=fp.dtype)
-    for idx_a in range(a):
-        indices = torch.searchsorted(xp, x[:, idx_a, :])
-        indices = torch.clamp(indices, 1, xp.shape[0] - 1)
-        # find adjacent left and right points on originally sampeld axes xp
-        x0 = xp[indices - 1]
-        x1 = xp[indices]
-        # find values of originally sampled function considering its differing for each idx_a
-        y0 = fp[idx_a, indices - 1]
-        y1 = fp[idx_a, indices]
-        # get the slope for this idx_a
-        slope = (y1 - y0) / (x1 - x0)
-        interpolated_values[:, idx_a, :] = slope * (x[:, idx_a, :] - x0) + y0
+    # loop based
+    # interpolated_values = torch.zeros_like(x, dtype=fp.dtype)
+    # for idx_a in range(a):
+    #     indices = torch.searchsorted(xp, x[:, idx_a, :])
+    #     indices = torch.clamp(indices, 1, xp.shape[0] - 1)
+    #     # find adjacent left and right points on originally sampled axes xp
+    #     x0 = xp[indices - 1]
+    #     x1 = xp[indices]
+    #     # find values of originally sampled function considering its differing for each idx_a
+    #     y0 = fp[idx_a, indices - 1]
+    #     y1 = fp[idx_a, indices]
+    #     # get the slope for this idx_a
+    #     slope = (y1 - y0) / (x1 - x0)
+    #     interpolated_values[:, idx_a, :] = slope * (x[:, idx_a, :] - x0) + y0
 
+    # without loop
+    indices = torch.searchsorted(xp, x.view(-1, b))
+    indices = torch.clamp(indices, 1, xp.shape[0] - 1)
+    # find adjacent left and right points on originally sampled axes xp
+    x0 = xp[indices - 1]
+    x1 = xp[indices]
+    # find values of originally sampled function considering its differing for each idx_a
+    fp_expanded = fp.unsqueeze(0).expand(batch, -1, -1)
+    y0 = fp_expanded.gather(2, indices.view(batch, a, b) - 1)
+    y1 = fp_expanded.gather(2, indices.view(batch, a, b))
+    # get the slope
+    slope = (y1 - y0) / (x1 - x0).view(batch, a, b)
+    interpolated_values = slope * (x - x0.view(batch, a, b)) + y0
+
+    # assert torch.allclose(interpolated_values, interpolated_values_vectorized)
     return interpolated_values
 
 
@@ -224,16 +241,17 @@ def matched_filter_noise_removal(
     noise_data = np.moveaxis(noise_data, 0, -1)
     noise_data = np.reshape(noise_data, (noise_data.shape[0], -1))
     shape = noise_data.shape
+    # should be dims [channels, num_samples * num_scans]
 
     # want to make the sampled lines as square as possible
     a = find_approx_squared_form(shape)
 
-    # reshape again
+    # reshape again - spread the last dim aka the line into a approx square matrix
     noise_data = np.reshape(noise_data, (shape[0], a, -1))
     m = a
     n = noise_data.shape[-1]
 
-    # calculate singular values of noise distribution across all channels
+    # calculate singular values of noise distribution across all channels - dims [channels, m]
     noise_s = np.linalg.svdvals(noise_data)
     # get eigenvalues
     s_lam = noise_s ** 2 / n
@@ -257,12 +275,35 @@ def matched_filter_noise_removal(
     # get mp distribution of noise values for all channels
     p_noise = distribution_mp(noise_ax, sigma, gamma)
     p_noise /= np.sum(p_noise, axis=len(sigma.shape), keepdims=True)
-    p_noise = torch.from_numpy(p_noise)
+    # do some adjustments to convert to weighting
+    p_noise_w = np.clip(p_noise / np.max(p_noise, axis=len(sigma.shape), keepdims=True), 0, 0.5)
+    p_noise_w /= np.max(p_noise_w, axis=len(sigma.shape), keepdims=True)
+    p_noise_w[:, :5] = 1
+    p_noise_w = torch.from_numpy(p_noise_w)
 
     # invert distribution to create weighting
-    p_weight = 1 - p_noise / torch.max(p_noise, dim=len(sigma.shape), keepdim=True).values
+    p_weight = 1 - p_noise_w / torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True).values
     p_weight_ax = torch.from_numpy(noise_ax)
 
+    colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, p_weight.shape[0]))
+    # quick testing visuals
+    fig = go.Figure()
+    for idx_c, p in enumerate(p_weight):
+        fig.add_trace(
+            go.Scattergl(
+                x=noise_ax, y=p_noise[idx_c],
+                marker=dict(color=colors[idx_c]), name=f"channel-{idx_c}",
+                showlegend=True
+            )
+        )
+        fig.add_trace(
+            go.Scattergl(
+                x=noise_ax, y=p.numpy(),
+                marker=dict(color=colors[idx_c]),
+                name=f"weighting function, ch-{idx_c}", showlegend=False
+            )
+        )
+    fig.write_html("/LOCAL/jschmidt/PyMRItools/examples/raw_data/rd_file/figs/noise_dist_weighting_per_channel.html")
     # possibly can skip 0 lines in processing to save compute
     # we want a svd across a 2d matrix spanned by readout line
     # could be after oversampling removal (shouldnt make a difference, saves compute)
@@ -284,8 +325,8 @@ def matched_filter_noise_removal(
     num_batches = int(np.ceil(k_space_lines.shape[0] / batch_size))
     # using gpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # for idx_b in tqdm.trange(num_batches, desc="filter svd"):
-    for idx_b in tqdm.trange(5, desc="filter svd"):
+    for idx_b in tqdm.trange(num_batches, desc="filter svd"):
+    # for idx_b in tqdm.trange(5, desc="filter svd"):
         start = idx_b * batch_size
         end = min((idx_b + 1) * batch_size, k_space_lines.shape[0])
         batch = torch.from_numpy(k_space_lines[start:end]).to(device)
@@ -295,24 +336,48 @@ def matched_filter_noise_removal(
             full_matrices=False
         )
         # process batch (can do straight away with tensor on device)
-        # get eigenvalue from singval
+        # get eigenvalue from singular values
         bs_eigv = s**2 / n
 
         weighting = interpolate(bs_eigv, xp=p_weight_ax, fp=p_weight)
 
         # weight original singular values (not eigenvalues)
         s_w = s * weighting
-        # reconstruct signal without filtered noise
-        signal_filt = torch.matmul(torch.einsum("iklm, km -> iklm", b_u, s_w.to(b_u.dtype)), b_v)
+        # reconstruct signal without filtered noise, dims [batch, channel, m]
+        signal_filt = torch.matmul(torch.einsum("iklm, ikm -> iklm", u, s_w.to(u.dtype)), v)
         # normalize to previous signal levels - taking maximum of absolute value across channels
-        max_norm_k_lines = np.max(np.abs(k_space_lines[idx_b, idx_c]))
-        max_norm_signal_filt = np.max(np.abs(signal_filt))
-        signal_filt = np.divide(
-            signal_filt * max_norm_k_lines,
-            max_norm_signal_filt,
-            where=max_norm_signal_filt >1e-10, out=np.zeros_like(signal_filt)
-        )
-        k_space_filt[idx_b, idx_c] = signal_filt
+        # max_norm_k_lines = torch.max(torch.abs(batch.reshape((*batch.shape[:2], -1))), dim=-1).values
+        # max_norm_signal_filt = torch.max(torch.abs(signal_filt.reshape(*signal_filt.shape[:2], -1)), dim=-1).values
+        # signal_filt = torch.nan_to_num(
+        #     torch.divide(
+        #         signal_filt * max_norm_k_lines[..., None, None],
+        #         max_norm_signal_filt[..., None, None],
+        #     ),
+        #     nan=0.0, posinf=0.0, neginf=0.0
+        # )
+        k_space_filt[start:end] = signal_filt.cpu().numpy()
+
+        if idx_b % 10 == 0:
+            # quick visuals for reference
+            noisy_line = batch[0].reshape((batch.shape[1], -1)).cpu().numpy()
+            noisy_line_filt = k_space_filt[start].reshape((batch.shape[1], -1))
+            fig = go.Figure()
+            for idx_c in [5, 15]:
+                fig.add_trace(
+                    go.Scattergl(y=np.abs(noisy_line[idx_c]), name=f"ch-{idx_c}, noisy line mag")
+                )
+                fig.add_trace(
+                    go.Scattergl(y=np.abs(noisy_line_filt[idx_c]), name=f"ch-{idx_c}, noisy line mag filtered")
+                )
+            fig.write_html(f"/LOCAL/jschmidt/PyMRItools/examples/raw_data/rd_file/figs/line_batch-{idx_b}_noise_filtering.html")
+
+            fig = go.Figure()
+            for idx_c in [5, 15]:
+                fig.add_trace(
+                    go.Scattergl(y=weighting[0, idx_c], name=f"ch-{idx_c}, noisy line mag")
+                )
+            fig.write_html(f"/LOCAL/jschmidt/PyMRItools/examples/raw_data/rd_file/figs/weighting_batch-{idx_b}_noise_filtering.html")
+
             # if idx_c == 0 and idx_b in [0, 4]:
             #     # histogram of eigenvalues
             #     hist, _ = np.histogram(bs_c_eigv, bins=bins, density=True)
@@ -335,10 +400,11 @@ def matched_filter_noise_removal(
             #                      mode="lines", showlegend=True)
             #     )
             #     fig.write_html(f"/LOCAL/jschmidt/PyMRItools/examples/raw_data/rd_file/figs/rd_noise_filter_{idx_b}_ch-1.html")
-    # reshape
+    # reshape - make matrizised line back to the actual line
+    k_space_filt = np.reshape(k_space_filt, (*k_space_filt.shape[:-2], -1))
     k_space_filt = np.reshape(k_space_filt, shape)
     # move dims back
-    k_space_filt = np.moveaxis(k_space_filt, (-2, -1), (0, 1))
+    k_space_filt = np.swapaxes(k_space_filt, -1, 0)
     return k_space_filt
 
 
