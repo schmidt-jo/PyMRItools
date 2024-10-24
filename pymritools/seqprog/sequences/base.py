@@ -30,7 +30,9 @@ class Sequence2D(abc.ABC):
         of slices to measure, they are epi style readouts with lower resolution and can be switched on here)
 
     """
-    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
+    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D,
+                 create_excitation_kernel: bool = True, create_refocus_1_kernel: bool = True,
+                 create_refocus_kernel: bool = True):
 
         self.config: PulseqConfig = config
         self.visualize: bool = config.visualize
@@ -91,37 +93,46 @@ class Sequence2D(abc.ABC):
             system=self.system
         )
         # refocusing - after first
-        self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
-            params=self.params,
-            system=self.system,
-            pulse_num=1,
-            return_pe_time=True,
-            read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
-            pulse_file=self.config.pulse_file
-        )
-        # refocusing first
-        self.block_refocus_1 = Kernel.refocus_slice_sel_spoil(
-            params=self.params,
-            system=self.system,
-            pulse_num=0,
-            return_pe_time=False,
-            read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
-            pulse_file=self.config.pulse_file
-        )
-        # excitation
-        # via kernels we can build slice selective blocks of excitation and refocusing
-        # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
-        # gradient slice refocus gradient. For this we need to now the ramp area of the
-        # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
-        # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
-        # accounting for ramp area
-        ramp_area = float(self.block_refocus_1.grad_slice.area[0])
-        # excitation pulse
-        self.block_excitation = Kernel.excitation_slice_sel(
-            params=self.params, system=self.system,
-            adjust_ramp_area=ramp_area,
-            pulse_file=self.config.pulse_file
-        )
+        if create_refocus_kernel:
+            self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
+                params=self.params,
+                system=self.system,
+                pulse_num=1,
+                return_pe_time=True,
+                read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                pulse_file=self.config.pulse_file
+            )
+        else:
+            self.block_refocus: Kernel = NotImplemented
+        if create_refocus_1_kernel:
+            # refocusing first
+            self.block_refocus_1 = Kernel.refocus_slice_sel_spoil(
+                params=self.params,
+                system=self.system,
+                pulse_num=0,
+                return_pe_time=False,
+                read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                pulse_file=self.config.pulse_file
+            )
+        else:
+            self.block_refocus_1: Kernel = NotImplemented
+        if create_excitation_kernel:
+            # excitation
+            # via kernels we can build slice selective blocks of excitation and refocusing
+            # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
+            # gradient slice refocus gradient. For this we need to now the ramp area of the
+            # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
+            # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
+            # accounting for ramp area
+            ramp_area = float(self.block_refocus_1.grad_slice.area[0])
+            # excitation pulse
+            self.block_excitation = Kernel.excitation_slice_sel(
+                params=self.params, system=self.system,
+                adjust_ramp_area=ramp_area,
+                pulse_file=self.config.pulse_file
+            )
+        else:
+            self.block_excitation: Kernel = NotImplemented
 
         # set up spoling at end of echo train
         self.block_spoil_end: Kernel = Kernel.spoil_all_grads(
@@ -158,7 +169,8 @@ class Sequence2D(abc.ABC):
             self.rf_slice_adaptive_scaling = 1 / slice_intensity_profile
 
         # navigators
-        self.navs_on: bool = self.params.use_navs
+        # self.navs_on: bool = self.params.use_navs
+        self.navs_on: bool = False      # not yet implemented
         self.nav_num: int = 0
         self.nav_t_total: float = 0.0
         # for now we fix the navigator resolution at 5 times coarser than the chosen resolution
@@ -167,6 +179,8 @@ class Sequence2D(abc.ABC):
         if self.navs_on:
             self._set_navigators()
 
+    def set_on_grad_raster_time(self, time: float):
+        return np.ceil(time / self.system.grad_raster_time) * self.system.grad_raster_time
     # __ public __
     # create
     # @classmethod
