@@ -303,8 +303,8 @@ class MEGESSE(Sequence2D):
                 self.te.append(self.te[-1] + t_e2e)
 
         te_print = [f'{1000 * t:.2f}' for t in self.te]
-        log_module.info(f"\t\techo times: {te_print} ms")
-        log_module.info(f"\t\trf time excitation mid to refocus mid: "
+        log_module.info(f"\t\t-echo times: {te_print} ms")
+        log_module.info(f"\t\t-rf time excitation mid to refocus mid: "
                         f"{(t_exci_2_ref+self.t_delay_exc_ref1.get_duration())*1e3:.2f} ms")
 
     def _add_gesse_readouts(self, idx_pe_loop: int, idx_slice_loop: int, idx_echo: int, no_adc: bool = False):
