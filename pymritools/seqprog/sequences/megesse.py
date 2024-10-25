@@ -396,7 +396,7 @@ class MEGESSE(Sequence2D):
             # successive num gre echoes per rf
             for echo_idx in np.arange(self.params.etl):
                 # set flip angle from param list
-                self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=idx_slice)
+                self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=idx_slice, no_ref_1=True)
                 # looping through slices per phase encode, set phase encode for ref
                 self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx, no_ref_1=True)
                 # refocus
