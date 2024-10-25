@@ -9,6 +9,17 @@ import plotly.graph_objects as go
 
 log_module = logging.getLogger(__name__)
 
+def misc():
+    ext_k_sampling_mask = np.tile(k_sampling_mask[:, :, None, None, :], (1, 1, *k_space.shape[2:4], 1))
+
+    filter_input = np.reshape(
+        k_space[ext_k_sampling_mask],
+        (k_space.shape[0], -1, *k_space.shape[2:])
+    )
+    k_space_filt = np.zeros_like(k_space)
+    filtered_input = matched_filter_noise_removal(noise_data=noise_scans, k_space_lines=filter_input)
+    k_space_filt[ext_k_sampling_mask] = filtered_input.flatten()
+
 
 def distribution_mp(
         x: int | float | torch.Tensor, sigma: int | float | torch.Tensor, gamma: int | float) -> torch.Tensor:
@@ -101,6 +112,16 @@ def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Te
 def matched_filter_noise_removal(
         noise_data_n_ch_samp: np.ndarray | torch.Tensor, k_space_lines_read_ph_sli_ch_t: np.ndarray | torch.Tensor,
         noise_histogram_depth: int = 100):
+    """
+    Function to filter noise using the PCA of readout lines / samples.
+    First this function extracts a noise MP distribution from noise scans,
+    then it looks for this distribution in sampled k-space lines after rearranging them into blocks and
+    doing a SVD. The singular values identified to lay within the noise spectrum of the noise scans are down-weighted.
+    The line is then reconstructed with adopted singular values.
+    It is coded such that it does the noise characterization per channel.
+    Channels could however be treated as approximately identical regarding noise.
+    This way even fewer noise scans can suffice to use the approach.
+    """
     log_module.info(f"pca denoising matched filter")
     # get to pytorch tensors
     if not torch.is_tensor(noise_data_n_ch_samp):
@@ -134,7 +155,9 @@ def matched_filter_noise_removal(
 
     gamma = m / n
     # get biggest and lowest s to approximate noise characteristics from
-    sigma = torch.sqrt((torch.max(s_lam, dim=1) - torch.min(s_lam, dim=1)) / 4 / np.sqrt(gamma))
+    sigma = torch.sqrt(
+        (torch.max(s_lam, dim=1).values - torch.min(s_lam, dim=1).values) / 4 / np.sqrt(gamma)
+    )
 
     # get mp distribution of noise values for all channels
     p_noise = distribution_mp(noise_ax, sigma, gamma)
@@ -149,7 +172,7 @@ def matched_filter_noise_removal(
         0, 0.25
     )
     # scale back to 1
-    p_noise_w /= torch.max(p_noise_w, axis=len(sigma.shape), keepdims=True)
+    p_noise_w /= torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True)
     # fill in ones in front
     p_noise_w[:, :int(noise_histogram_depth / 10)] = 1
 
