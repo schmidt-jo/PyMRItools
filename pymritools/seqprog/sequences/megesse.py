@@ -12,7 +12,10 @@ log_module = logging.getLogger(__name__)
 class MEGESSE(Sequence2D):
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
         # init Base class
-        super().__init__(config=config, specs=specs, params=params, create_excitation_kernel=False)
+        super().__init__(
+            config=config, specs=specs, params=params,
+            create_excitation_kernel=False, create_refocus_1_kernel=False
+        )
 
         log_module.info(f"Init MEGESSE Sequence")
         # set number of GRE echoes beside SE
@@ -59,7 +62,8 @@ class MEGESSE(Sequence2D):
         # of the rewinding gradient lobes. I.e. we prewind the readout gradient moment after the refocusing and
         # to balance the sequence we need to rewind the readout gradient moment before the next refocusing.
         # The number of readouts determines the last readout polarity.
-        # First refocusing doesnt need to rewind anything
+        # We implemented the GRE readouts between excitation and refocus to be placed such
+        # that we dont need to change the refocusing kernels, do we may counteract this here?
         self._check_and_mod_echo_read_with_last_gre_readout_polarity(self.block_refocus)
 
         # we need to modify the excitation kernel
@@ -238,7 +242,7 @@ class MEGESSE(Sequence2D):
         # time of etl
         t_etl = self.te[-1]
         # time from mid last gre til end
-        t_post_etl = self.block_acquisition_neg_polarity.get_duration() / 2 + self.block_spoil_end.get_duration()
+        t_post_etl = self.block_acquisition.get_duration() / 2 + self.block_spoil_end.get_duration()
         # total echo train length
         t_total_etl = (t_pre_etl + t_etl + t_post_etl)
         self._set_slice_delay(t_total_etl=t_total_etl)
@@ -353,7 +357,7 @@ class MEGESSE(Sequence2D):
             # otherwise the phase parameter might not be correct for phase offset update
             self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice, excitation=True)
             # looping through slices per phase encode
-            self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0, no_ref_1=True)
+            self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0, no_ref_1=True, excitation=True)
 
             # -- excitation --
             # add block

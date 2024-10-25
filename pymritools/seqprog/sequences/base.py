@@ -429,7 +429,7 @@ class Sequence2D(abc.ABC):
         # build adc block
         acq = ADC.make_adc(system=self.system, num_samples=1000, dwell=self.params.dwell)
         # use 2 noise scans
-        for k in range(2):
+        for k in range(self.params.number_noise_scans):
             # add to sequence
             self.sequence.add_block(acq.to_simple_ns())
             # write as sampling entry
@@ -1448,6 +1448,11 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     if config.visualize:
         logging.info("Plotting")
         # pyp_seq.plot(time_range=(0, 4e-3 * jstmc_seq.params.tr), time_disp='s')
-        sequence.plot_sequence(t_start_s=4, t_end_s=6, sim_grad_moments=True)
+        sequence.plot_sequence(t_start_s=2*sequence.params.tr*1e-3, t_end_s=2.5*sequence.params.tr*1e-3, sim_grad_moments=True)
+        sequence.plot_sequence(
+            t_start_s=(sequence.params.number_central_lines+2)*sequence.params.tr*1e-3,
+            t_end_s=(sequence.params.number_central_lines+4)*sequence.params.tr*1e-3,
+            sim_grad_moments=True
+        )
         sequence.plot_sequence(t_start_s=0, t_end_s=2, sim_grad_moments=True)
         sequence.plot_sampling()
