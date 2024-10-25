@@ -335,10 +335,14 @@ class MEGESSE(Sequence2D):
                 id_acq = self.id_bd_acq
             if not no_adc:
                 # write sampling pattern
+                # phase encode is set via idx echo in ETL. Hence we have the same phase encode for all readouts
+                # echo type is set above based on the set number of gre samplings adjacent to se
+                # the same number of GRE is played out between excitation and refocusing, thus we need to add those
+                # when setting the echo number for the sampling pattern!
                 _ = self._write_sampling_pattern_entry(
                     slice_num=self.trueSliceNum[idx_slice_loop],
                     pe_num=int(self.k_pe_indexes[idx_echo, idx_pe_loop]),
-                    echo_num=self.num_e_per_rf * idx_echo + num_readout,
+                    echo_num=self.num_gre + self.num_e_per_rf * idx_echo + num_readout,
                     acq_type=id_acq, echo_type=e_types[num_readout],
                     echo_type_num=idx_echo
                 )
