@@ -387,9 +387,13 @@ def load_pulseq_rd(
         device = torch.device("cpu")
     log_module.info(f"setup device")
 
+    log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
+    # remove data not needed, i.e. SYNCDATA acquisitions
+    data_mdbs = [d for d in data_mdbs if "SYNCDATA" not in d.get_active_flags()]
+
     log_module.debug(f"setup dimension info")
     # find number of coils
-    num_coils = data_mdbs[-1].block_len
+    num_coils = data_mdbs[-1].mdh.UsedChannels
 
     log_module.debug(f"allocate img arrays")
     etl = sampling_config.df_sampling_pattern["echo_number"].unique().max() + 1
@@ -417,10 +421,6 @@ def load_pulseq_rd(
         (n_read, n_phase, etl),
         dtype=bool
     )
-
-    log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
-    # remove data not needed, i.e. SYNCDATA acquisitions
-    data_mdbs = [d for d in data_mdbs if "SYNCDATA" not in d.get_active_flags()]
 
     # check number of scans
     if not len(sampling_config.samples) == len(data_mdbs):
