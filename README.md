@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/863383414.svg)](https://doi.org/10.5281/zenodo.13992707)
+
 # PyMRItools
 
 Toolbox for MRI sequence programming, reconstruction, simulation, processing, and analysis using Python.
