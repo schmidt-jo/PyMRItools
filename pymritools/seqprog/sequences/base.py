@@ -470,25 +470,30 @@ class Sequence2D(abc.ABC):
         # To merge both: given phase parameter and any complex signal array data
         sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
 
-    def _set_phase_grad(self, echo_idx: int, phase_idx: int, no_ref_1: bool = False):
+    def _set_phase_grad(self, echo_idx: int, phase_idx: int,
+                        no_ref_1: bool = False, excitation: bool = False):
         # caution we assume trapezoidal phase encode gradients
         area_factors = np.array([0.5, 1.0, 0.5])
         # we get the actual line index from the sampling pattern, dependent on echo number and phase index in the loop
         idx_phase = self.k_pe_indexes[echo_idx, phase_idx]
         # additionally we need the last blocks phase encode for rephasing
-        if echo_idx > 0:
-            # if we are not on the first readout:
+        if echo_idx == 0 and not no_ref_1:
+            block = self.block_refocus_1
+        elif echo_idx == 0 and excitation:
+            block = self.block_excitation
+        else:
+            # if we are not on the first refocusing or the first refocusing is identical to the others:
             # we need the last phase encode value to reset before refocusing
-            last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
+            if echo_idx == 0:
+                # in case there is no difference in refocusing, the first refocus needs to rephase the excitation phase
+                last_idx_phase = self.k_pe_indexes[echo_idx, phase_idx]
+            else:
+                # we need to rephase the previous phase encode
+                last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
             block = self.block_refocus
             # we set the re-phase phase encode gradient
             phase_enc_time_pre_pulse = np.sum(np.diff(block.grad_phase.t_array_s[:4]) * area_factors)
             block.grad_phase.amplitude[1:3] = self.phase_areas[last_idx_phase] / phase_enc_time_pre_pulse
-        else:
-            if no_ref_1:
-                block = self.block_excitation
-            else:
-                block = self.block_refocus_1
 
         # we set the post pulse phase encode gradient that sets up the next readout
         if np.abs(self.phase_areas[idx_phase]) > 1:
@@ -1268,7 +1273,7 @@ class Sequence2D(abc.ABC):
             height=800
         )
 
-        name = f"sequence_t-{t_start_s:d}_to_t-{t_end_s:d}"
+        name = f"sequence_t-{int(t_start_s):d}_to_t-{int(t_end_s):d}"
         fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
         log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
         if file_suffix in ["png", "pdf"]:
