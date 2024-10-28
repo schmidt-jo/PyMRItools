@@ -64,7 +64,7 @@ def main(settings: DenoiseSettingsMPK):
     filtered_k[sampling_mask] = matched_filter_noise_removal(
         noise_data_n_ch_samp=noise_scans, k_space_lines_read_ph_sli_ch_t=input_filter,
         settings=settings
-    ).fatten()
+    ).flatten()
 
     # save
     if settings.visualize:

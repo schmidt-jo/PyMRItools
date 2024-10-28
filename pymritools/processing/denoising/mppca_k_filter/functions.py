@@ -275,7 +275,7 @@ def matched_filter_noise_removal(
                     shared_xaxes=True,
                     vertical_spacing=0.03
                 )
-                colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, 5))
+                colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, 6))
                 for idx_c, c in enumerate(channels):
                     showlegend = True if idx_c == 0 else False
                     # add magnitude and phase for each line
@@ -317,13 +317,24 @@ def matched_filter_noise_removal(
                         row=1 + idx_c, col=2
                     )
                     # histogram
-                    hist, bins = torch.histogram(s[idx_b, c], bins=50)
+                    hist, bins = torch.histogram(bs_eigv[0, c], bins=100)
                     hist /= torch.max(hist)
                     bin_mid = bins[1:] - torch.diff(bins) / 2
                     fig.add_trace(
                         go.Bar(
                             x=bin_mid[bin_mid<50], y=hist[bin_mid<50], name="histogram of singular values",
                             marker=dict(color=colors[3]), legendgroup=2, showlegend=showlegend
+                        ),
+                        row=idx_c + 1, col=2
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=eigv[eigv<50],
+                            y=torch.clamp(
+                                weighting[0, c][eigv<50] + torch.randn_like(eigv[eigv<50])*0.02 + 0.05, 0, 1
+                            ),
+                            name="singular values", mode="markers",
+                            marker=dict(color=colors[5]), legendgroup=2, showlegend=showlegend
                         ),
                         row=idx_c + 1, col=2
                     )
