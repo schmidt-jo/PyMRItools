@@ -24,6 +24,7 @@ def main(settings: DenoiseSettingsMPK):
         path_figs.mkdir(exist_ok=True, parents=True)
     # load data
     k_space = torch_load(settings.in_k_space)
+    noise_scans = torch_load(settings.in_noise_scans)
     affine = torch_load(settings.in_affine)
     sampling_mask = torch_load(settings.in_sampling_mask) if settings.in_sampling_mask is not None else None
     # assuming k-space dims [x, y, z, ch, t], cast if not the case
@@ -35,13 +36,16 @@ def main(settings: DenoiseSettingsMPK):
         sampling_mask = torch.sum(torch.abs(k_space), dim=-1, keepdim=True) > 1e-10
     # expand to k_space size
     while sampling_mask.shape.__len__() < k_space.shape.__len__():
+        # we assume here channels and slices are missing, this is a specific usecase not true for e.g. 3D sequences
         l = sampling_mask.shape.__len__()
-        sampling_mask.unsqueeze(-1).expand(*[-1]*(l-1), k_space.shape[l])
+        exp = [-1] * (l + 1)
+        exp[-2] = k_space.shape[l-1]
+        sampling_mask = sampling_mask.unsqueeze(-2).expand(exp)
     # deduce read direction, assuming fully sampled read
     read_dir = -1
-    if torch.sum(torch.abs(sampling_mask[:, int(sampling_mask.shape[1] / 2), 0, 0, 0]), dim=0) < sampling_mask.shape[0]:
+    if torch.sum(torch.abs(sampling_mask[:, int(sampling_mask.shape[1] / 2), 0, 0, 0].to(torch.int)), dim=0) < sampling_mask.shape[0]:
         read_dir = 0
-    if torch.sum(torch.abs(sampling_mask[int(sampling_mask.shape[0] / 2), :, 0, 0, 0]), dim=0) < sampling_mask.shape[1]:
+    if torch.sum(torch.abs(sampling_mask[int(sampling_mask.shape[0] / 2), :, 0, 0, 0].to(torch.int)), dim=0) < sampling_mask.shape[1]:
         if read_dir == 0:
             msg = f"found k - space to be undersampled in x and y direction. Can choose either direction for processing."
             log_module.info(msg)
@@ -58,7 +62,7 @@ def main(settings: DenoiseSettingsMPK):
 
     # pass to function
     filtered_k[sampling_mask] = matched_filter_noise_removal(
-        noise_data_n_ch_samp=None, k_space_lines_read_ph_sli_ch_t=input_filter,
+        noise_data_n_ch_samp=noise_scans, k_space_lines_read_ph_sli_ch_t=input_filter,
         settings=settings
     ).fatten()
 
@@ -90,3 +94,4 @@ if __name__ == '__main__':
     except Exception as e:
         parser.print_help()
         logging.exception(e)
+        exit(-1)

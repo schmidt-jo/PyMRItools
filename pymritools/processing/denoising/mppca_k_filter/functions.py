@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import plotly.colors as plc
 import plotly.graph_objects as go
+import plotly.subplots as psub
 
 from pymritools.config.processing import DenoiseSettingsMPK
 
@@ -123,15 +124,15 @@ def matched_filter_noise_removal(
     # we got noise data, assumed dims [num_noise_scans, num_channels, num_samples]
     # want to use this to calculate a np distribution of noise singular values per channel
     # start rearranging, channels to front, combine num scans
-    noise_data_n_ch_samp = np.moveaxis(noise_data_n_ch_samp, 0, -1)
-    noise_data_n_ch_samp = np.reshape(noise_data_n_ch_samp, (noise_data_n_ch_samp.shape[0], -1))
+    noise_data_n_ch_samp = torch.movedim(noise_data_n_ch_samp, 0, -1)
+    noise_data_n_ch_samp = torch.reshape(noise_data_n_ch_samp, (noise_data_n_ch_samp.shape[0], -1))
     shape = noise_data_n_ch_samp.shape
     # should be dims [channels, num_samples * num_scans]
 
     # want to make the sampled lines as square as possible
     matrix_short_side = find_approx_squared_matrix_form(shape)
     # reshape again - spread the last dim aka the line into a approx square matrix
-    noise_data_n_ch_samp = np.reshape(noise_data_n_ch_samp, (shape[0], matrix_short_side, -1))
+    noise_data_n_ch_samp = torch.reshape(noise_data_n_ch_samp, (shape[0], matrix_short_side, -1))
     m = matrix_short_side
     n = noise_data_n_ch_samp.shape[-1]
 
@@ -159,11 +160,11 @@ def matched_filter_noise_removal(
     # the more we want to threshold them
     # do some adjustments to convert to weighting factor. This needs some testing of optimality!
     p_noise_w = torch.clamp(
-        p_noise / torch.max(p_noise, dim=len(sigma.shape), keepdim=True),
+        p_noise / torch.max(p_noise, dim=len(sigma.shape), keepdim=True).values,
         0, 0.25
     )
     # scale back to 1
-    p_noise_w /= torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True)
+    p_noise_w /= torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True).values
     # fill in ones in front
     p_noise_w[:, :int(settings.noise_histogram_depth / 10)] = 1
 
@@ -176,21 +177,25 @@ def matched_filter_noise_removal(
 
         colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, p_weight.shape[0]))
         # quick testing visuals
-        fig = go.Figure()
+        fig = psub.make_subplots(
+            rows=2, cols=1
+        )
         for idx_c, p in enumerate(p_weight):
             fig.add_trace(
                 go.Scattergl(
                     x=noise_ax, y=p_noise[idx_c],
-                    marker=dict(color=colors[idx_c]), name=f"channel-{idx_c}",
+                    marker=dict(color=colors[idx_c]), name=f"channel-{idx_c+1}",
                     showlegend=True
-                )
+                ),
+                row=1, col=1
             )
             fig.add_trace(
                 go.Scattergl(
                     x=noise_ax, y=p.numpy(),
                     marker=dict(color=colors[idx_c]),
-                    name=f"weighting function, ch-{idx_c}", showlegend=False
-                )
+                    name=f"weighting function, ch-{idx_c+1}", showlegend=False
+                ),
+                row=2, col=1
             )
         path = fig_path.joinpath("noise_dist_weighting_per_channel").with_suffix(".html")
         log_module.info(f"write file: {path}")
@@ -256,30 +261,84 @@ def matched_filter_noise_removal(
 
         if settings.visualize:
             fig_path = plib.Path(settings.out_path).joinpath("figs/")
-            if idx_b % 10 == 0:
+            # pick 2 channels
+            channels = [5, 15]
+            if idx_b % 100 == 0:
                 # quick visuals for reference
+                # get first line from batch and reshape to actual 1D line - same for filtered line
                 noisy_line = batch[0].reshape((batch.shape[1], -1)).cpu().numpy()
                 noisy_line_filt = k_space_filt[start].reshape((batch.shape[1], -1))
-                fig = go.Figure()
-                for idx_c in [5, 15]:
+                # want subplot showing histogram versus weighting function and k-space line w and w/o applied filter
+                fig = psub.make_subplots(
+                    rows=len(channels), cols=2,
+                    row_titles=[f"channel: {c}" for c in channels],
+                    shared_xaxes=True,
+                    vertical_spacing=0.03
+                )
+                colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, 5))
+                for idx_c, c in enumerate(channels):
+                    showlegend = True if idx_c == 0 else False
+                    # add magnitude and phase for each line
                     fig.add_trace(
-                        go.Scattergl(y=np.abs(noisy_line[idx_c]), name=f"ch-{idx_c}, noisy line mag")
+                        go.Scattergl(
+                            y=np.abs(noisy_line[c]), marker=dict(color=colors[0]),
+                            name=f"noisy line mag", legendgroup=0, showlegend=showlegend
+                        ),
+                        row=1+idx_c, col=1
                     )
                     fig.add_trace(
-                        go.Scattergl(y=np.abs(noisy_line_filt[idx_c]), name=f"ch-{idx_c}, noisy line mag filtered")
+                        go.Scattergl(
+                            y=np.abs(noisy_line_filt[c]), marker=dict(color=colors[1]),
+                            name=f"noisy line mag filtered", legendgroup=1, showlegend=showlegend
+                        ),
+                        row=1+idx_c, col=1
                     )
-                path = fig_path.joinpath(f"line_batch-{idx_b}_noise_filterin").with_suffix(".html")
+                    # add histogram and weighting function
+                    eigv = bs_eigv[0, c]
+                    fig.add_trace(
+                        go.Scattergl(
+                            x=eigv[eigv<50], y=weighting[0, c][eigv<50], mode="lines",
+                            fill="tozeroy", line=dict(color=colors[2], width=2), opacity=0.5,
+                            legendgroup=3, showlegend=showlegend,
+                            name=f"weighting function of s.-vals."
+                        ),
+                        row=1+idx_c, col=2
+                    )
+                    # noise mp distribution
+                    pc = p_noise[c]
+                    pc /= torch.max(pc)
+                    fig.add_trace(
+                        go.Scattergl(
+                            x=noise_ax, y=pc,
+                            fill="tozeroy", line=dict(color=colors[4], width=2), opacity=0.5,
+                            legendgroup=4, showlegend=showlegend,
+                            name=f"Noise MP distribution"
+                        ),
+                        row=1 + idx_c, col=2
+                    )
+                    # histogram
+                    hist, bins = torch.histogram(s[idx_b, c], bins=50)
+                    hist /= torch.max(hist)
+                    bin_mid = bins[1:] - torch.diff(bins) / 2
+                    fig.add_trace(
+                        go.Bar(
+                            x=bin_mid[bin_mid<50], y=hist[bin_mid<50], name="histogram of singular values",
+                            marker=dict(color=colors[3]), legendgroup=2, showlegend=showlegend
+                        ),
+                        row=idx_c + 1, col=2
+                    )
+                fig.update_yaxes(title="Intensity [a.u.]", row=1, col=1)
+                fig.update_yaxes(title="Intensity [a.u.]", row=2, col=1)
+                fig.update_yaxes(title="Occurrence / Weighting [a.u.]", row=1, col=2)
+                fig.update_yaxes(title="Occurrence / Weighting [a.u.]", row=2, col=2)
+                fig.update_xaxes(title="Sample Number", row=1, col=1)
+                fig.update_xaxes(title="Sample Number", row=2, col=1)
+                fig.update_xaxes(title="Singular Value", row=1, col=2)
+                fig.update_xaxes(title="Singular Value", row=2, col=2)
+                path = fig_path.joinpath(f"line_batch-{idx_b}_noise_filtering").with_suffix(".html")
                 log_module.info(f"write file: {path}")
                 fig.write_html(path.as_posix())
 
-                fig = go.Figure()
-                for idx_c in [5, 15]:
-                    fig.add_trace(
-                        go.Scattergl(y=weighting[0, idx_c], name=f"ch-{idx_c}, noisy line mag")
-                    )
-                path = fig_path.joinpath(f"weighting_batch-{idx_b}_noise_filtering").with_suffix(".html")
-                log_module.info(f"write file: {path}")
-                fig.write_html(path.as_posix())
 
     # reshape - get matrix shuffled line back to the an actual 1D line
     k_space_filt = np.reshape(k_space_filt, (*k_space_filt.shape[:-2], -1))

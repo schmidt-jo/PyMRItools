@@ -27,6 +27,7 @@ def set_load_path(path_to_file: str | plib.Path, suffix: str):
         err = f"file {path_to_file} not found to be a {suffix} file."
         log_module.error(err)
         raise AttributeError(err)
+    log_module.info(f"Load file: {path_to_file}")
     return path_to_file
 
 
