@@ -14,8 +14,8 @@ from pymritools.recon.loraks.algorithm import operators
 
 log_module = logging.getLogger(__name__)
 
-
-class Base:
+# TODO: Remove? Make it simple first without any class inheritance.
+class OperatorBase:
     def __init__(self, k_space_input: torch.Tensor, sampling_mask: torch.Tensor,
                  radius: int, max_num_iter: int, conv_tol: float,
                  rank_s: int = 250, rank_c: int = 150, lambda_c: float = 0.0, lambda_s: float = 0.0,

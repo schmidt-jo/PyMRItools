@@ -17,6 +17,7 @@ from pymritools.utils import (
 log_module = logging.getLogger(__name__)
 
 
+# TODO: Remove? No usages in code
 def shift_read_dir(data: torch.tensor, read_dir: int, forward: bool = True):
     if forward:
         return torch.movedim(data, read_dir, 0)
@@ -180,6 +181,10 @@ class S(MatrixOperatorLowRank2D):
         return self.neighborhood_indices.shape[1] + self.neighborhood_indices_pt_sym.shape[1]
 
 
+# Test code to verify that matrix sizes and operators work for the phantom data.
+# It sets everything and runs one iteration C-Loraks and one iteration S-Loraks without optimizing
+# anything.
+# TODO: Extract good test methods for building, applying, etc. operators.
 if __name__ == '__main__':
     # set up logging
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s -- %(message)s',

@@ -4,13 +4,13 @@ import tqdm
 
 import torch
 
-from pymritools.recon.loraks.algorithm import Base
+from pymritools.recon.loraks.algorithm import OperatorBase
 from pymritools.utils.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
 
 
-class ACLoraks(Base):
+class ACLoraks(OperatorBase):
     def __init__(
             self, k_space_input: torch.Tensor, sampling_mask: torch.Tensor,
             max_num_iter: int, conv_tol: float,

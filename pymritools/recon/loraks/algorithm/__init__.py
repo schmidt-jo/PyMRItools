@@ -1,3 +1,3 @@
-from .base import Base
+from .operatorbase import OperatorBase
 
-__all__ = ["Base"]
+__all__ = ["OperatorBase"]

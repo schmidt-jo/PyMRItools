@@ -118,7 +118,7 @@ def get_idx_2d_rectangular_neighborhood_patches_in_shape(
     grid = shape_grid[:, None, :] + nb_grid[None, :, :]
     return grid
 
-
+# TODO: Remove? We don't want some complex class structure initially.
 class MatrixOperatorLowRank2D(ABC):
     """
     Base implementation of matrix operator,
