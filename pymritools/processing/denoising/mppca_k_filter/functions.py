@@ -7,18 +7,9 @@ import torch
 import plotly.colors as plc
 import plotly.graph_objects as go
 
+from pymritools.config.processing import DenoiseSettingsMPK
+
 log_module = logging.getLogger(__name__)
-
-def misc():
-    ext_k_sampling_mask = np.tile(k_sampling_mask[:, :, None, None, :], (1, 1, *k_space.shape[2:4], 1))
-
-    filter_input = np.reshape(
-        k_space[ext_k_sampling_mask],
-        (k_space.shape[0], -1, *k_space.shape[2:])
-    )
-    k_space_filt = np.zeros_like(k_space)
-    filtered_input = matched_filter_noise_removal(noise_data=noise_scans, k_space_lines=filter_input)
-    k_space_filt[ext_k_sampling_mask] = filtered_input.flatten()
 
 
 def distribution_mp(
@@ -111,7 +102,7 @@ def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Te
 
 def matched_filter_noise_removal(
         noise_data_n_ch_samp: np.ndarray | torch.Tensor, k_space_lines_read_ph_sli_ch_t: np.ndarray | torch.Tensor,
-        noise_histogram_depth: int = 100):
+        settings: DenoiseSettingsMPK):
     """
     Function to filter noise using the PCA of readout lines / samples.
     First this function extracts a noise MP distribution from noise scans,
@@ -151,7 +142,7 @@ def matched_filter_noise_removal(
     # take some percentage bigger than biggest eigenvalue
     noise_s_max = 1.2 * torch.max(s_lam)
     # build some axis for which we calculate the mp - distribution
-    noise_ax = torch.linspace(0, noise_s_max, noise_histogram_depth)
+    noise_ax = torch.linspace(0, noise_s_max, settings.noise_histogram_depth)
 
     gamma = m / n
     # get biggest and lowest s to approximate noise characteristics from
@@ -174,34 +165,36 @@ def matched_filter_noise_removal(
     # scale back to 1
     p_noise_w /= torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True)
     # fill in ones in front
-    p_noise_w[:, :int(noise_histogram_depth / 10)] = 1
+    p_noise_w[:, :int(settings.noise_histogram_depth / 10)] = 1
 
     # invert distribution to create weighting
     p_weight = 1 - p_noise_w / torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True).values
     p_weight_ax = noise_ax
 
-    colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, p_weight.shape[0]))
-    # quick testing visuals
-    fig = go.Figure()
-    for idx_c, p in enumerate(p_weight):
-        fig.add_trace(
-            go.Scattergl(
-                x=noise_ax, y=p_noise[idx_c],
-                marker=dict(color=colors[idx_c]), name=f"channel-{idx_c}",
-                showlegend=True
+    if settings.visualize:
+        fig_path =plib.Path(settings.out_path).joinpath("figs/")
+
+        colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, p_weight.shape[0]))
+        # quick testing visuals
+        fig = go.Figure()
+        for idx_c, p in enumerate(p_weight):
+            fig.add_trace(
+                go.Scattergl(
+                    x=noise_ax, y=p_noise[idx_c],
+                    marker=dict(color=colors[idx_c]), name=f"channel-{idx_c}",
+                    showlegend=True
+                )
             )
-        )
-        fig.add_trace(
-            go.Scattergl(
-                x=noise_ax, y=p.numpy(),
-                marker=dict(color=colors[idx_c]),
-                name=f"weighting function, ch-{idx_c}", showlegend=False
+            fig.add_trace(
+                go.Scattergl(
+                    x=noise_ax, y=p.numpy(),
+                    marker=dict(color=colors[idx_c]),
+                    name=f"weighting function, ch-{idx_c}", showlegend=False
+                )
             )
-        )
-    fig_path = plib.Path("./examples/raw_data/rd_file/figs/").absolute()
-    path = fig_path.joinpath("noise_dist_weighting_per_channel").with_suffix(".html")
-    log_module.info(f"write file: {path}")
-    fig.write_html(path.as_posix())
+        path = fig_path.joinpath("noise_dist_weighting_per_channel").with_suffix(".html")
+        log_module.info(f"write file: {path}")
+        fig.write_html(path.as_posix())
 
     # we want a svd across a 2d matrix spanned by readout line samples
     # the rational is that basically over all matrix entries there could only be a smooth signal sampled,
@@ -229,14 +222,13 @@ def matched_filter_noise_removal(
     k_space_filt = torch.zeros_like(k_space_lines_read_ph_sli_ch_t)
 
     # batch svd
-    batch_size = 200
-    num_batches = int(np.ceil(k_space_lines_read_ph_sli_ch_t.shape[0] / batch_size))
+    num_batches = int(np.ceil(k_space_lines_read_ph_sli_ch_t.shape[0] / settings.batch_size))
     # using gpu - test how much we can put there and how it scales for speed
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     for idx_b in tqdm.trange(num_batches, desc="filter svd"):
     # for idx_b in tqdm.trange(5, desc="filter svd"):
-        start = idx_b * batch_size
-        end = min((idx_b + 1) * batch_size, k_space_lines_read_ph_sli_ch_t.shape[0])
+        start = idx_b * settings.batch_size
+        end = min((idx_b + 1) * settings.batch_size, k_space_lines_read_ph_sli_ch_t.shape[0])
         # send batch to GPU
         batch = k_space_lines_read_ph_sli_ch_t[start:end].to(device)
         # svd batch
@@ -262,30 +254,32 @@ def matched_filter_noise_removal(
         # assign and move off GPU
         k_space_filt[start:end] = signal_filt.cpu()
 
-        if idx_b % 10 == 0:
-            # quick visuals for reference
-            noisy_line = batch[0].reshape((batch.shape[1], -1)).cpu().numpy()
-            noisy_line_filt = k_space_filt[start].reshape((batch.shape[1], -1))
-            fig = go.Figure()
-            for idx_c in [5, 15]:
-                fig.add_trace(
-                    go.Scattergl(y=np.abs(noisy_line[idx_c]), name=f"ch-{idx_c}, noisy line mag")
-                )
-                fig.add_trace(
-                    go.Scattergl(y=np.abs(noisy_line_filt[idx_c]), name=f"ch-{idx_c}, noisy line mag filtered")
-                )
-            path = fig_path.joinpath(f"line_batch-{idx_b}_noise_filterin").with_suffix(".html")
-            log_module.info(f"write file: {path}")
-            fig.write_html(path.as_posix())
+        if settings.visualize:
+            fig_path = plib.Path(settings.out_path).joinpath("figs/")
+            if idx_b % 10 == 0:
+                # quick visuals for reference
+                noisy_line = batch[0].reshape((batch.shape[1], -1)).cpu().numpy()
+                noisy_line_filt = k_space_filt[start].reshape((batch.shape[1], -1))
+                fig = go.Figure()
+                for idx_c in [5, 15]:
+                    fig.add_trace(
+                        go.Scattergl(y=np.abs(noisy_line[idx_c]), name=f"ch-{idx_c}, noisy line mag")
+                    )
+                    fig.add_trace(
+                        go.Scattergl(y=np.abs(noisy_line_filt[idx_c]), name=f"ch-{idx_c}, noisy line mag filtered")
+                    )
+                path = fig_path.joinpath(f"line_batch-{idx_b}_noise_filterin").with_suffix(".html")
+                log_module.info(f"write file: {path}")
+                fig.write_html(path.as_posix())
 
-            fig = go.Figure()
-            for idx_c in [5, 15]:
-                fig.add_trace(
-                    go.Scattergl(y=weighting[0, idx_c], name=f"ch-{idx_c}, noisy line mag")
-                )
-            path = fig_path.joinpath(f"weighting_batch-{idx_b}_noise_filtering").with_suffix(".html")
-            log_module.info(f"write file: {path}")
-            fig.write_html(path.as_posix())
+                fig = go.Figure()
+                for idx_c in [5, 15]:
+                    fig.add_trace(
+                        go.Scattergl(y=weighting[0, idx_c], name=f"ch-{idx_c}, noisy line mag")
+                    )
+                path = fig_path.joinpath(f"weighting_batch-{idx_b}_noise_filtering").with_suffix(".html")
+                log_module.info(f"write file: {path}")
+                fig.write_html(path.as_posix())
 
     # reshape - get matrix shuffled line back to the an actual 1D line
     k_space_filt = np.reshape(k_space_filt, (*k_space_filt.shape[:-2], -1))

@@ -1,3 +1,5 @@
+from email.policy import default
+
 from pymritools.config.base import BaseClass
 from dataclasses import dataclass
 import logging
@@ -6,7 +8,7 @@ log_module = logging.getLogger(__name__)
 
 
 @dataclass
-class Settings(BaseClass):
+class SettingsMPPCA(BaseClass):
     """
     Configuration for mppca denoising
     """
@@ -43,4 +45,42 @@ class Settings(BaseClass):
     )
     noise_bias_mask: str = field(
         default="", alias="-nbm", help="input noise mask for noise statistics estimation if bias correction is set."
+    )
+
+
+@dataclass
+class SettingsMPK(BaseClass):
+    """
+    Configuration for mp - kspace filter denoising
+    """
+    in_k_space: str = field(
+        alias="-i", default="",
+        help="Input k-space .pt file"
+    )
+    in_noise_scans: str = field(
+        alias="-in", default="",
+        help="Input noise scans file."
+    )
+    in_affine: str = field(
+        alias="-ia", default="",
+        help="input affine matrix, necessary if input file is .pt, optional if .nii"
+    )
+    in_sampling_mask: str = field(
+        alias="-im", default="",
+        help="(optional) input sampling mask to reduce computational cost by computing only sampled pe/slice lines. "
+             "Can be deduced from k-space itself."
+    )
+
+    file_prefix: str = field(
+        default="d", alias="-fp",
+        help=f"Output file prefix appended to name after denoising"
+    )
+    # flags & vars
+    batch_size: int = field(
+        alias="-b", default=200,
+        help=f"Batch size for processing"
+    )
+    noise_histogram_depth: int = field(
+        alias="-nh", default=100,
+        help="Sampling depth at which to sample the noise histogram axes for the noise scans."
     )

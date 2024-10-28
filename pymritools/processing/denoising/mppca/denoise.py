@@ -8,7 +8,7 @@ _____
 """
 from pymritools.utils import nifti_load, nifti_save, fft, root_sum_of_squares, gaussian_2d_kernel
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.config.processing import DenoiseSettings
+from pymritools.config.processing import DenoiseSettingsMPPCA
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 import pathlib as plib
 
@@ -22,9 +22,9 @@ from autodmri import estimator
 log_module = logging.getLogger(__name__)
 
 
-def denoise(settings: DenoiseSettings):
+def denoise(settings: DenoiseSettingsMPPCA):
     # load in data
-    input_data, input_img = nifti_load(settings.in_path)
+    input_data, input_img = nifti_load(settings.in_k_space)
     input_data = torch.from_numpy(input_data)
     # ToDo: do for non .nii input
 
@@ -353,10 +353,10 @@ def main():
     # set up argument parser
     parser, prog_args = setup_parser(
         prog_name="MPPCA Denoising",
-        dict_config_dataclasses={"settings": DenoiseSettings}
+        dict_config_dataclasses={"settings": DenoiseSettingsMPPCA}
     )
     # get settings
-    settings = DenoiseSettings.from_cli(args=prog_args.settings, parser=parser)
+    settings = DenoiseSettingsMPPCA.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 
     try:
