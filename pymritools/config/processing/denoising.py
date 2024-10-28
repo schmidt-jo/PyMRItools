@@ -84,3 +84,14 @@ class SettingsMPK(BaseClass):
         alias="-nh", default=100,
         help="Sampling depth at which to sample the noise histogram axes for the noise scans."
     )
+    noise_mp_threshold: float = field(
+        alias="-nth", default=0.3,
+        help="The MP distribution estimated from the noise is normalized, then clamped to 1 if exceeding this threshold. "
+             "This way effectively each singular value below this threshold in the mp distribution is hard thresholded. "
+             "Above a smoothed inverted distribution curve is used"
+    )
+    noise_mp_stretch: float = field(
+        alias="-ns", default=1.0,
+        help="The estimated noise distribution is stretched by this factor above its bandwidth. "
+             "That way singular values above the distribution bandwidth will get affected by the filter"
+    )

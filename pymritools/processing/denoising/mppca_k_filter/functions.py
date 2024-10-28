@@ -161,7 +161,7 @@ def matched_filter_noise_removal(
     # do some adjustments to convert to weighting factor. This needs some testing of optimality!
     p_noise_w = torch.clamp(
         p_noise / torch.max(p_noise, dim=len(sigma.shape), keepdim=True).values,
-        0, 0.25
+        0, settings.noise_mp_threshold
     )
     # scale back to 1
     p_noise_w /= torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True).values
@@ -170,10 +170,19 @@ def matched_filter_noise_removal(
 
     # invert distribution to create weighting
     p_weight = 1 - p_noise_w / torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True).values
+    # stretch distribution past the original histogram axes,
+    # effectively increasing the upper singular values affected by filter
+    p_weight = torch.squeeze(
+        interpolate(
+            x=(noise_ax / settings.noise_mp_stretch)[None, None].expand(-1, ),
+            xp=noise_ax[None],
+            fp=p_weight[None]
+        )
+    )
     p_weight_ax = noise_ax
 
     if settings.visualize:
-        fig_path =plib.Path(settings.out_path).joinpath("figs/")
+        fig_path = plib.Path(settings.out_path).absolute().joinpath("figs/")
 
         colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, p_weight.shape[0]))
         # quick testing visuals
@@ -260,7 +269,7 @@ def matched_filter_noise_removal(
         k_space_filt[start:end] = signal_filt.cpu()
 
         if settings.visualize:
-            fig_path = plib.Path(settings.out_path).joinpath("figs/")
+            fig_path = plib.Path(settings.out_path).absolute().joinpath("figs/")
             # pick 2 channels
             channels = [5, 15]
             if idx_b % 100 == 0:

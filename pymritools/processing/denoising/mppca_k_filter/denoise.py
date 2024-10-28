@@ -54,11 +54,12 @@ def main(settings: DenoiseSettingsMPK):
     # move read dim to front
     input_filter = torch.movedim(k_space, read_dir, 0)
     nr, np, ns, nch, nt = input_filter.shape
+    filtered_k = torch.zeros_like(input_filter)
+
     sampling_mask = torch.movedim(sampling_mask, read_dir, 0)
 
     # reduce undersampled dimension
     input_filter = torch.reshape(input_filter[sampling_mask], (nr, -1, ns, nch, nt))
-    filtered_k = torch.zeros_like(input_filter)
 
     # pass to function
     filtered_k[sampling_mask] = matched_filter_noise_removal(
