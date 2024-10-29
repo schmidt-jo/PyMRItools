@@ -30,10 +30,10 @@ def compress_channels(input_k_space: torch.tensor, sampling_pattern: torch.tenso
     # out_path = plib.Path(opts.output_path).absolute()
     # fig_path = out_path.joinpath("plots/")
     # check input
-    if input_k_space.shape.__len__() < 5:
+    while input_k_space.shape.__len__() < 5:
         input_k_space = torch.unsqueeze(input_k_space, -1)
-    if sampling_pattern.shape.__len__() < 5:
-        sampling_pattern = torch.unsqueeze(sampling_pattern, 2)
+    while sampling_pattern.shape.__len__() < 5:
+        sampling_pattern = torch.unsqueeze(sampling_pattern, -2)
     nx, ny, nz, nch, nt = input_k_space.shape
     # check if we are actually provided fewer channels
     if nch <= num_compressed_channels:
