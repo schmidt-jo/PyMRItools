@@ -45,10 +45,10 @@ def distribution_mp(
     # build mask
     mask = (lam_m < x) & (x < lam_p)
     # fill probabilities
-    result[mask] =  (
+    result[mask] = (
             torch.sqrt(
                 (lam_p - x) * (x - lam_m)
-            ) / (2 * torch.pi * gamma * x * sigma**2)
+            ) / (2 * torch.pi * gamma * x * sigma ** 2)
     )[mask]
     result /= torch.sum(result)
     return torch.squeeze(result)
@@ -105,7 +105,7 @@ def matched_filter_noise_removal(
         noise_data_n_ch_samp: np.ndarray | torch.Tensor, k_space_lines_read_ph_sli_ch_t: np.ndarray | torch.Tensor,
         settings: DenoiseSettingsMPK):
     """
-    Function to filter noise using the PCA of readout lines / samples.
+    Filter noise using the PCA of readout lines / samples.
     First this function extracts a noise MP distribution from noise scans,
     then it looks for this distribution in sampled k-space lines after rearranging them into blocks and
     doing a SVD. The singular values identified to lay within the noise spectrum of the noise scans are down-weighted.
@@ -120,6 +120,9 @@ def matched_filter_noise_removal(
         noise_data_n_ch_samp = torch.from_numpy(noise_data_n_ch_samp)
     if not torch.is_tensor(k_space_lines_read_ph_sli_ch_t):
         k_space_lines_read_ph_sli_ch_t = torch.from_numpy(k_space_lines_read_ph_sli_ch_t)
+
+    # using gpu - test how much we can put there and how it scales for speed
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # we got noise data, assumed dims [num_noise_scans, num_channels, num_samples]
     # want to use this to calculate a np distribution of noise singular values per channel
@@ -148,7 +151,8 @@ def matched_filter_noise_removal(
     gamma = m / n
     # get biggest and lowest s to approximate noise characteristics from
     sigma = torch.sqrt(
-        (torch.max(s_lam, dim=1).values - torch.min(s_lam, dim=1).values) / 4 / np.sqrt(gamma)
+        (settings.noise_mp_stretch * torch.max(s_lam, dim=1).values - torch.min(s_lam, dim=1).values) /
+        4 / np.sqrt(gamma)
     )
 
     # get mp distribution of noise values for all channels
@@ -169,17 +173,8 @@ def matched_filter_noise_removal(
     p_noise_w[:, :int(settings.noise_histogram_depth / 10)] = 1
 
     # invert distribution to create weighting
-    p_weight = 1 - p_noise_w / torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True).values
-    # stretch distribution past the original histogram axes,
-    # effectively increasing the upper singular values affected by filter
-    p_weight = torch.squeeze(
-        interpolate(
-            x=(noise_ax / settings.noise_mp_stretch)[None, None].expand(-1, p_weight.shape[0], -1),
-            xp=noise_ax[None],
-            fp=p_weight[None]
-        )
-    )
-    p_weight_ax = noise_ax
+    p_weight = (1 - p_noise_w / torch.max(p_noise_w, dim=len(sigma.shape), keepdim=True).values).to(device)
+    p_weight_ax = noise_ax.to(device)
 
     if settings.visualize:
         fig_path = plib.Path(settings.out_path).absolute().joinpath("figs/")
@@ -193,16 +188,16 @@ def matched_filter_noise_removal(
             fig.add_trace(
                 go.Scattergl(
                     x=noise_ax, y=p_noise[idx_c],
-                    marker=dict(color=colors[idx_c]), name=f"channel-{idx_c+1}",
+                    marker=dict(color=colors[idx_c]), name=f"channel-{idx_c + 1}",
                     showlegend=True
                 ),
                 row=1, col=1
             )
             fig.add_trace(
                 go.Scattergl(
-                    x=noise_ax, y=p.numpy(),
+                    x=noise_ax, y=p.cpu().numpy(),
                     marker=dict(color=colors[idx_c]),
-                    name=f"weighting function, ch-{idx_c+1}", showlegend=False
+                    name=f"weighting function, ch-{idx_c + 1}", showlegend=False
                 ),
                 row=2, col=1
             )
@@ -237,10 +232,8 @@ def matched_filter_noise_removal(
 
     # batch svd
     num_batches = int(np.ceil(k_space_lines_read_ph_sli_ch_t.shape[0] / settings.batch_size))
-    # using gpu - test how much we can put there and how it scales for speed
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     for idx_b in tqdm.trange(num_batches, desc="filter svd"):
-    # for idx_b in tqdm.trange(5, desc="filter svd"):
+        # for idx_b in tqdm.trange(5, desc="filter svd"):
         start = idx_b * settings.batch_size
         end = min((idx_b + 1) * settings.batch_size, k_space_lines_read_ph_sli_ch_t.shape[0])
         # send batch to GPU
@@ -252,7 +245,7 @@ def matched_filter_noise_removal(
         )
         # process batch (can do straight away with tensor on device)
         # get eigenvalue from singular values
-        bs_eigv = s**2 / n
+        bs_eigv = s ** 2 / n
         # can calculate the weighting for the whole batched singular values at once
         weighting = interpolate(bs_eigv, xp=p_weight_ax, fp=p_weight)
         # we could also try original idea: make histogram and find / correlate the noise
@@ -293,25 +286,26 @@ def matched_filter_noise_removal(
                             y=np.abs(noisy_line[c]), marker=dict(color=colors[0]),
                             name=f"noisy line mag", legendgroup=0, showlegend=showlegend
                         ),
-                        row=1+idx_c, col=1
+                        row=1 + idx_c, col=1
                     )
                     fig.add_trace(
                         go.Scattergl(
                             y=np.abs(noisy_line_filt[c]), marker=dict(color=colors[1]),
                             name=f"noisy line mag filtered", legendgroup=1, showlegend=showlegend
                         ),
-                        row=1+idx_c, col=1
+                        row=1 + idx_c, col=1
                     )
                     # add histogram and weighting function
-                    eigv = bs_eigv[0, c]
+                    eigv = bs_eigv[0, c].cpu()
+                    w = weighting[0, c].cpu()
                     fig.add_trace(
                         go.Scattergl(
-                            x=eigv[eigv<50], y=weighting[0, c][eigv<50], mode="lines",
+                            x=eigv[eigv < 50], y=w[eigv < 50], mode="lines",
                             fill="tozeroy", line=dict(color=colors[2], width=2), opacity=0.5,
                             legendgroup=3, showlegend=showlegend,
                             name=f"weighting function of s.-vals."
                         ),
-                        row=1+idx_c, col=2
+                        row=1 + idx_c, col=2
                     )
                     # noise mp distribution
                     pc = p_noise[c]
@@ -326,21 +320,21 @@ def matched_filter_noise_removal(
                         row=1 + idx_c, col=2
                     )
                     # histogram
-                    hist, bins = torch.histogram(bs_eigv[0, c], bins=100)
+                    hist, bins = torch.histogram(eigv, bins=100)
                     hist /= torch.max(hist)
                     bin_mid = bins[1:] - torch.diff(bins) / 2
                     fig.add_trace(
                         go.Bar(
-                            x=bin_mid[bin_mid<50], y=hist[bin_mid<50], name="histogram of singular values",
+                            x=bin_mid[bin_mid < 50], y=hist[bin_mid < 50], name="histogram of singular values",
                             marker=dict(color=colors[3]), legendgroup=2, showlegend=showlegend
                         ),
                         row=idx_c + 1, col=2
                     )
                     fig.add_trace(
                         go.Scatter(
-                            x=eigv[eigv<50],
+                            x=eigv[eigv < 50],
                             y=torch.clamp(
-                                weighting[0, c][eigv<50] + torch.randn_like(eigv[eigv<50])*0.02 + 0.05, 0, 1
+                                w[eigv < 50] + torch.randn_like(eigv[eigv < 50]) * 0.02 + 0.05, 0, 1
                             ),
                             name="singular values", mode="markers",
                             marker=dict(color=colors[5]), legendgroup=2, showlegend=showlegend
@@ -359,12 +353,10 @@ def matched_filter_noise_removal(
                 log_module.info(f"write file: {path}")
                 fig.write_html(path.as_posix())
 
-
-    # reshape - get matrix shuffled line back to the an actual 1D line
-    k_space_filt = np.reshape(k_space_filt, (*k_space_filt.shape[:-2], -1))
+    # reshape - get matrix shuffled line back to an actual 1D line
+    k_space_filt = torch.reshape(k_space_filt, (*k_space_filt.shape[:-2], -1))
     # deflate batch dimensions
-    k_space_filt = np.reshape(k_space_filt, shape)
+    k_space_filt = torch.reshape(k_space_filt, shape)
     # move read dimension back to front
-    k_space_filt = np.swapaxes(k_space_filt, -1, 0)
+    k_space_filt = torch.swapaxes(k_space_filt, -1, 0)
     return k_space_filt
-

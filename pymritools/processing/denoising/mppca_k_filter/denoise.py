@@ -44,13 +44,13 @@ def main(settings: DenoiseSettingsMPK):
     # deduce read direction, assuming fully sampled read
     read_dir = -1
     if torch.sum(torch.abs(sampling_mask[:, int(sampling_mask.shape[1] / 2), 0, 0, 0].to(torch.int)), dim=0) < sampling_mask.shape[0]:
-        read_dir = 0
+        read_dir = 1
     if torch.sum(torch.abs(sampling_mask[int(sampling_mask.shape[0] / 2), :, 0, 0, 0].to(torch.int)), dim=0) < sampling_mask.shape[1]:
-        if read_dir == 0:
+        if read_dir == 1:
             msg = f"found k - space to be undersampled in x and y direction. Can choose either direction for processing."
             log_module.info(msg)
         else:
-            read_dir = 1
+            read_dir = 0
     # move read dim to front
     input_filter = torch.movedim(k_space, read_dir, 0)
     nr, np, ns, nch, nt = input_filter.shape
@@ -75,7 +75,6 @@ def main(settings: DenoiseSettingsMPK):
         nifti_save(img, img_aff=affine, path_to_dir=settings.out_path, file_name="filt_naive_rsos_recon")
 
     torch_save(filtered_k, path_to_file=path_out, file_name='filtered_k-space')
-
 
 
 if __name__ == '__main__':
