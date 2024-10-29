@@ -77,8 +77,9 @@ def cgd(
             xmin = x
             iimin = ii
             log_module.debug(f"min residual {normrmin:.2f}, at {iimin + 1}")
-        iter_dict["iter"] = f"{iter_dict['iter'][1:]}I"
-        iter_bar.set_postfix(iter_dict)
+        if iter_bar is not None:
+            iter_dict["iter"] = f"{iter_dict['iter'][1:]}I"
+            iter_bar.set_postfix(iter_dict)
     return xmin, res_vec, {"norm_res_min": normrmin, "iteration": iimin}
 
 

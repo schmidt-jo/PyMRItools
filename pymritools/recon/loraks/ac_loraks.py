@@ -87,9 +87,9 @@ class ACLoraks(OperatorBase):
 
     def get_acs_v(self, idx_batch: int, idx_slice: int, mode: str):
         """
-                Compute the V matrix for solving the AC LORAKS formulation from autocalibration data.
-                We need to find the ACS data first and then evaluate the nullspace subspace.
-                """
+        Compute the V matrix for solving the AC LORAKS formulation from autocalibration data.
+        We need to find the ACS data first and then evaluate the nullspace subspace.
+        """
         # we use data from current slice
         k_space_slice = self.fhd
         if mode in ["c", "C"]:
