@@ -124,6 +124,19 @@ def matched_filter_noise_removal(
     # using gpu - test how much we can put there and how it scales for speed
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # get the shapes
+    nr, npe, nsl, nch, nt = k_space_lines_read_ph_sli_ch_t.shape
+    # want to 0 pad read dimension in order to get a square matrix for processing
+    n_r_sqr = int(np.ceil(np.sqrt(nr)))
+
+    if n_r_sqr > nr:
+        pad = torch.zeros(n_r_sqr - nr, dtype=k_space_lines_read_ph_sli_ch_t.dtype)[:, None, None, None, None].expand(
+            -1, *k_space_lines_read_ph_sli_ch_t.shape[1:]
+        )
+        k_space_lines_read_ph_sli_ch_t = torch.concatenate(
+            (k_space_lines_read_ph_sli_ch_t, pad), dim=0
+        )
+
     # we got noise data, assumed dims [num_noise_scans, num_channels, num_samples]
     # want to use this to calculate a np distribution of noise singular values per channel
     # start rearranging, channels to front, combine num scans
