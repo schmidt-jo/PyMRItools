@@ -17,7 +17,7 @@ from pymritools.utils import (
 log_module = logging.getLogger(__name__)
 
 
-def c_matrix_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
+def c_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
     shape = k_space_x_y_ch_t.shape
     # build combined 3rd dim
     k_space_x_y_cht = torch.reshape(k_space_x_y_ch_t, (shape[0], shape[1], -1))
@@ -45,19 +45,22 @@ def c_adjoint_operator(c_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
         k_space_recon[
             indices[:, idx_nb, 0], indices[:, idx_nb, 1]
         ] += c_matrix[:, idx_nb]
-    return torch.reshape(k_space_recon, (-1, n_tch))
+    return torch.reshape(k_space_recon, k_space_dims)
 
 
 def s_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
     shape = k_space_x_y_ch_t.shape
     # need shape into 2D if not given like this
     k_space = torch.reshape(k_space_x_y_ch_t, (shape[0], shape[1], -1))
+    #  we want to build a matrix point symmetric to k_space around the center in the first two dimensions:
+
     # build S matrix
     log_module.debug(f"build s matrix")
     # we build the matrices per channel / time image
     s_p = k_space[indices[..., 0], indices[..., 1]]
-    # flip?
-    s_m = torch.flip(s_p, dims=(0, 1))
+    # flip - the indices arent mirrored symmetrically but the neighborhoods
+    # should be in the same order on the first axes.
+    s_m = torch.flip(k_space, dims=(0, 1))[indices[..., 0], indices[..., 1]]
     # s_m = k_space[self.neighborhood_indices_pt_sym[:, :, 0], self.neighborhood_indices_pt_sym[:, :, 1]]
     # concatenate along respective dimensions
     s_matrix = torch.concatenate((
@@ -74,7 +77,7 @@ def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
     # store shapes
     sm, sk = s_matrix.shape
     # get dims
-    snb = indices.shape[1]
+    snb = 2 * indices.shape[1]
     n_tch = int(sk / snb)
     # extract sub-matrices - they are concatenated in neighborhood dimension for all t-ch images
     t_ch_idxs = torch.arange(snb)[:, None] + torch.arange(n_tch)[None, :] * snb
@@ -99,14 +102,14 @@ def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
             indices[:, idx_nb, 0], indices[:, idx_nb, 1]
         ] += srp[:, idx_nb] + 1j * sip[:, idx_nb]
         # ToDo: can we use flip as well?
-        # k_space_recon[
-        #     self.neighborhood_indices_pt_sym[:, idx_nb, 0], self.neighborhood_indices_pt_sym[:, idx_nb, 1]
-        # ] += srm[:, idx_nb] + 1j * sim[:, idx_nb]
+        torch.flip(k_space_recon, dims=(0, 1))[
+            indices[:, idx_nb, 0], indices[:, idx_nb, 1]
+        ] += srm[:, idx_nb] + 1j * sim[:, idx_nb]
 
     # mask = self.p_star_p > 0
     # k_space_recon[mask] /= self.p_star_p[mask]
 
-    return torch.reshape(k_space_recon, self.k_space_dims)
+    return torch.reshape(k_space_recon, k_space_dims)
 
 class C(MatrixOperatorLowRank2D):
     def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3,
@@ -310,7 +313,6 @@ if __name__ == '__main__':
     op = S(nb_radius=r, k_space_dims_x_y_ch_t=(size_x, size_y, 1, 1))
     # construct c matrix
     m = op.operator(sl_k_space)
-
     target_rank = 40
     logging.info(f"S: matrix size: {m.shape}, target rank: {target_rank}")
 
@@ -325,14 +327,50 @@ if __name__ == '__main__':
         ),
         v
     )
-
     # get back to k - space
     k_recon = op.operator_adjoint(s_lr_approx_s)
     img_recon_s = fft(k_recon, axes=(0, 1), img_to_k=False)
 
+    # new version
+    psp_new = s_adjoint_operator(
+        s_operator(
+            k_space_x_y_ch_t=torch.ones_like(k_recon), indices=get_idx_2d_circular_neighborhood_patches_in_shape(
+                shape_2d=(size_x, size_y), nb_radius=r
+            )
+        ),
+        indices=get_idx_2d_circular_neighborhood_patches_in_shape(
+            shape_2d=(size_x, size_y), nb_radius=r
+        ),
+        k_space_dims=(size_x, size_y)
+    )
+
+    m_new = s_operator(
+        sl_k_space, get_idx_2d_circular_neighborhood_patches_in_shape((size_x, size_y), nb_radius=r)
+    )
+
+    # do svd
+    u, s, v = torch.linalg.svd(m_new, full_matrices=False)
+    s[target_rank:] = 0.0
+
+    # recon
+    s_lr_approx_s = torch.matmul(
+        torch.matmul(
+            u, torch.diag(s).to(dtype=u.dtype)
+        ),
+        v
+    )
+
+    # get back to k - space
+    k_recon = s_adjoint_operator(
+        s_lr_approx_s, get_idx_2d_circular_neighborhood_patches_in_shape((size_x, size_y), nb_radius=r),
+        (size_x, size_y)
+    )
+
+    img_recon_s_new = fft(k_recon, axes=(0, 1), img_to_k=False)
+
     sl_us_phantom = fft(sl_k_space, axes=(0, 1), img_to_k=False)
 
-    plots = [sl_phantom,  img_recon_c, psp_c, sl_us_phantom, img_recon_s, op.p_star_p]
+    plots = [sl_phantom,  img_recon_c, psp_c, sl_us_phantom, img_recon_s, img_recon_s_new, op.p_star_p, psp_new]
 
     fig = psub.make_subplots(
         rows=2, cols=len(plots)
@@ -340,10 +378,11 @@ if __name__ == '__main__':
     for idx_i, i in enumerate(plots):
         r = 1 + int(idx_i / int(len(plots) / 2))
         c = int(idx_i % int(len(plots) / 2)) + 1
-        fig.add_trace(
-            go.Heatmap(z=torch.squeeze(torch.abs(i)).numpy(), colorscale='Magma', showscale=False),
-            row=r, col=c
-        )
+        if i is not None:
+            fig.add_trace(
+                go.Heatmap(z=torch.squeeze(torch.abs(i)).numpy(), colorscale='Magma', showscale=False),
+                row=r, col=c
+            )
 
     fig_path = plib.Path("./examples/recon/loraks/phantom_recon").absolute().with_suffix(".html")
 
