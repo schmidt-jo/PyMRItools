@@ -128,7 +128,7 @@ def matched_filter_noise_removal(
     # want to use this to calculate a np distribution of noise singular values per channel
     # start rearranging, channels to front, combine num scans
     noise_data_n_ch_samp = torch.movedim(noise_data_n_ch_samp, 0, -1)
-    noise_data_n_ch_samp = torch.reshape(noise_data_n_ch_samp, (noise_data_n_ch_samp.shape[0], -1))
+    noise_data_n_ch_samp = torch.reshape(noise_data_n_ch_samp, (noise_data_n_ch_samp.shape[0], -1))[..., : k_space_lines_read_ph_sli_ch_t.shape[0]]
     shape = noise_data_n_ch_samp.shape
     # should be dims [channels, num_samples * num_scans]
 
