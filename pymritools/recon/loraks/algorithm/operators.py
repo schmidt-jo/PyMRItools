@@ -17,13 +17,96 @@ from pymritools.utils import (
 log_module = logging.getLogger(__name__)
 
 
-# TODO: Remove? No usages in code
-def shift_read_dir(data: torch.tensor, read_dir: int, forward: bool = True):
-    if forward:
-        return torch.movedim(data, read_dir, 0)
-    else:
-        return torch.movedim(data, 0, read_dir)
+def c_matrix_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
+    shape = k_space_x_y_ch_t.shape
+    # build combined 3rd dim
+    k_space_x_y_cht = torch.reshape(k_space_x_y_ch_t, (shape[0], shape[1], -1))
+    # extract from matrix
+    c_matrix = k_space_x_y_cht[indices[..., 0], indices[..., 1]]
+    # now we want the neighborhoods of individual t-ch info to be concatenated into the neighborhood axes.
+    c_matrix = torch.reshape(torch.movedim(c_matrix, -1, 1), (c_matrix.shape[0], -1))
+    return c_matrix
 
+
+def c_adjoint_operator(c_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
+    # Do we need to ensure dimensions? k-space in first, neighborhood / ch / t in second.
+    # store shapes
+    sm, sk = c_matrix.shape
+    # get dims
+    nb = indices.shape[1]
+    n_tch = int(sk / nb)
+    # extract sub-matrices - they are concatenated in neighborhood dimension for all t-ch images
+    t_ch_idxs = torch.arange(nb)[:, None] + torch.arange(n_tch)[None, :] * nb
+    c_matrix = c_matrix[:, t_ch_idxs]
+
+    # build k_space
+    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=torch.complex128, device=c_matrix.device)
+    for idx_nb in range(nb):
+        k_space_recon[
+            indices[:, idx_nb, 0], indices[:, idx_nb, 1]
+        ] += c_matrix[:, idx_nb]
+    return torch.reshape(k_space_recon, (-1, n_tch))
+
+
+def s_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
+    shape = k_space_x_y_ch_t.shape
+    # need shape into 2D if not given like this
+    k_space = torch.reshape(k_space_x_y_ch_t, (shape[0], shape[1], -1))
+    # build S matrix
+    log_module.debug(f"build s matrix")
+    # we build the matrices per channel / time image
+    s_p = k_space[indices[..., 0], indices[..., 1]]
+    # flip?
+    s_m = torch.flip(s_p, dims=(0, 1))
+    # s_m = k_space[self.neighborhood_indices_pt_sym[:, :, 0], self.neighborhood_indices_pt_sym[:, :, 1]]
+    # concatenate along respective dimensions
+    s_matrix = torch.concatenate((
+        torch.concatenate([(s_p - s_m).real, (-s_p + s_m).imag], dim=1),
+        torch.concatenate([(s_p + s_m).imag, (s_p + s_m).real], dim=1)
+    ), dim=0
+    )
+    # now we want the neighborhoods of individual t-ch info to be concatenated into the neighborhood axes.
+    s_matrix = torch.reshape(torch.movedim(s_matrix, -1, 1), (s_matrix.shape[0], -1))
+    return s_matrix
+
+
+def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
+    # store shapes
+    sm, sk = s_matrix.shape
+    # get dims
+    snb = indices.shape[1]
+    n_tch = int(sk / snb)
+    # extract sub-matrices - they are concatenated in neighborhood dimension for all t-ch images
+    t_ch_idxs = torch.arange(snb)[:, None] + torch.arange(n_tch)[None, :] * snb
+    s_matrix = s_matrix[:, t_ch_idxs]
+
+    matrix_u, matrix_d = torch.tensor_split(s_matrix, 2, dim=0)
+    srp_m_srm, msip_p_sim = torch.tensor_split(matrix_u, 2, dim=1)
+    sip_p_sim, srp_p_srm = torch.tensor_split(matrix_d, 2, dim=1)
+    # extract sub-sub
+    srp = srp_m_srm + srp_p_srm
+    srm = - srp_m_srm + srp_p_srm
+    sip = sip_p_sim - msip_p_sim
+    sim = msip_p_sim + sip_p_sim
+
+    # build k_space
+    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=torch.complex128).to(s_matrix.device)
+    # # fill k_space
+    log_module.debug(f"build k-space from s-matrix")
+    nb = int(snb / 2)
+    for idx_nb in range(nb):
+        k_space_recon[
+            indices[:, idx_nb, 0], indices[:, idx_nb, 1]
+        ] += srp[:, idx_nb] + 1j * sip[:, idx_nb]
+        # ToDo: can we use flip as well?
+        # k_space_recon[
+        #     self.neighborhood_indices_pt_sym[:, idx_nb, 0], self.neighborhood_indices_pt_sym[:, idx_nb, 1]
+        # ] += srm[:, idx_nb] + 1j * sim[:, idx_nb]
+
+    # mask = self.p_star_p > 0
+    # k_space_recon[mask] /= self.p_star_p[mask]
+
+    return torch.reshape(k_space_recon, self.k_space_dims)
 
 class C(MatrixOperatorLowRank2D):
     def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3,
