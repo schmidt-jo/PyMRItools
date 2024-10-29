@@ -52,7 +52,7 @@ def rd_to_torch(config: RD):
     data_mdbs = twix["mdb"]
     hdr = twix["hdr"]
     log_module.info("Loading RD")
-    k_space, k_sampling_mask, aff, noise_scans = load_pulseq_rd(
+    k_space, k_sampling_mask, aff, noise_scans, echoes_bu, echoes_bd = load_pulseq_rd(
         pulseq_config=pulseq, sampling_config=sampling,
         data_mdbs=data_mdbs, geometry=geometry, hdr=hdr,
         device=device
@@ -75,8 +75,17 @@ def rd_to_torch(config: RD):
         nifti_save(data=k_sampling_mask.astype(float), img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
 
     # save as torch tensor for recon
-    torch_save(k_space, path_out, "k_space")
-    torch_save(k_sampling_mask, path_out, "k_sampling_mask")
+    if echoes_bu is not None:
+        torch_save(k_space[..., echoes_bu], path_to_file=path_out, file_name="k_space_bu")
+        torch_save(k_sampling_mask[..., echoes_bu], path_to_file=path_out, file_name="k_sampling_mask_bu")
+        torch_save(echoes_bu, path_to_file=path_out, file_name="echo_nums_bu")
+    if echoes_bd is not None:
+        torch_save(k_space[..., echoes_bd], path_to_file=path_out, file_name="k_space_bd")
+        torch_save(k_sampling_mask[..., echoes_bd], path_to_file=path_out, file_name="k_sampling_mask_bd")
+        torch_save(echoes_bd, path_to_file=path_out, file_name="echo_nums_bd")
+    if echoes_bd is None and echoes_bu is None:
+        torch_save(k_space, path_out, "k_space")
+        torch_save(k_sampling_mask, path_out, "k_sampling_mask")
     torch_save(aff, path_out, "affine")
     torch_save(noise_scans, path_out, "k_noise_scans")
 

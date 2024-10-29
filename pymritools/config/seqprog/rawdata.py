@@ -239,5 +239,11 @@ class RD(BaseClass):
         alias="-samp", default="",
         help="Input sampling file containing the object storing sampling pattern and k-space trajectories."
     )
+    # vars & flags
+    split_read_polarity: bool = field(
+        alias="-spr", default=True,
+        help="Split read-polarity, i.e. produce separate k_space for each readout direction. " 
+             "The polarities must include 'bu' for blip up and 'bd' for bd in sample/trajectory identifiers"
+    )
 
 

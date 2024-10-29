@@ -155,7 +155,7 @@ def get_affine(
 
 def load_pulseq_rd(
         pulseq_config: PulseqParameters2D, sampling_config: Sampling,
-        data_mdbs: list[Mdb], geometry: Geometry, hdr: dict,
+        data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, split_read_polarity: bool = True,
         device: torch.device = torch.device("cpu")):
     if device != torch.device("cpu") and not torch.cuda.is_available():
         device = torch.device("cpu")
@@ -205,6 +205,9 @@ def load_pulseq_rd(
     log_module.debug(f"Start sorting".ljust(20))
     # save noise scans separately, used later
     noise_scans = None
+    # save echo numbers in case we want to split the readout polarities
+    echo_numbers_bu = None
+    echo_numbers_bd = None
 
     for acq in sampling_config.df_sampling_pattern["acquisition"].unique():
         log_module.info(f"Processing acquisition type: {acq}")
@@ -226,6 +229,12 @@ def load_pulseq_rd(
         sampled_phase_encodes = sampled_lines["phase_encode_number"].to_numpy()
         # get corresponding echo numbers
         sampled_echo_numbers = sampled_lines["echo_number"].to_numpy()
+        if split_read_polarity:
+            # we want to split read polarity, for this we want to safe the echo numbers belonging to each readout dir
+            if "bu" in acq:
+                echo_numbers_bu = sampled_lines["echo_number"].to_numpy()
+            elif "bd" in acq:
+                echo_numbers_bd = sampled_lines["echo_number"].to_numpy()
         # get corresponding slice numbers
         sampled_slice_numbers = sampled_lines["slice_number"].to_numpy()
 
@@ -311,7 +320,7 @@ def load_pulseq_rd(
         slice_gap_mm=gap
     )
 
-    return k_space, k_sampling_mask, aff, noise_scans
+    return k_space, k_sampling_mask, aff, noise_scans, echo_numbers_bu, echo_numbers_bd
 
 
 def load_siemens_rd():
