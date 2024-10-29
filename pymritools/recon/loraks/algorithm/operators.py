@@ -101,7 +101,6 @@ def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
         k_space_recon[
             indices[:, idx_nb, 0], indices[:, idx_nb, 1]
         ] += srp[:, idx_nb] + 1j * sip[:, idx_nb]
-        # ToDo: can we use flip as well?
         torch.flip(k_space_recon, dims=(0, 1))[
             indices[:, idx_nb, 0], indices[:, idx_nb, 1]
         ] += srm[:, idx_nb] + 1j * sim[:, idx_nb]

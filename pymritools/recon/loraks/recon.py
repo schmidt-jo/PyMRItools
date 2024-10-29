@@ -2,13 +2,11 @@ import logging
 import pathlib as plib
 
 import torch
-import plotly.graph_objects as go
 
 from pymritools.config.recon import PyLoraksConfig
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.utils import torch_save, torch_load, root_sum_of_squares, nifti_save, fft
 from pymritools.processing.coil_compression import compress_channels
-from pymritools.recon.loraks.ac_loraks import ACLoraks
 from pymritools.recon.loraks.algorithm.new_ac_loraks import ac_loraks
 
 log_module = logging.getLogger(__name__)
@@ -19,10 +17,6 @@ def load_data(settings: PyLoraksConfig):
     k_space = torch_load(settings.in_k_space)
     affine = torch_load(settings.in_affine)
     sampling_pattern = torch_load(settings.in_sampling_mask)
-    #
-    # if settings.read_dir > 0:
-    #     k_space = torch.swapdims(k_space, 0, 1)
-    #     sampling_pattern = torch.swapdims(sampling_pattern, 0, 1)
 
     logging.debug(f"For debug reduce dims")
     if settings.debug:
@@ -54,23 +48,6 @@ def load_data(settings: PyLoraksConfig):
         # probably when processing single slice or debugging
         k_space = k_space[..., None]
     read, phase, sli, ch, t = k_space.shape
-
-    # # flatten xy dims
-    # s_xy = sampling_pattern.shape[0] * sampling_pattern.shape[1]
-    # if abs(s_xy - read * phase) > 1e-3:
-    #     err = f"sampling pattern dimensions do not match input k-space data"
-    #     logging.error(err)
-    #     raise ValueError(err)
-    #
-    # logging.debug(f"Set sampling indices as matrix (fhf)")
-    # f_indexes = torch.squeeze(
-    #     torch.nonzero(
-    #         torch.reshape(
-    #             sampling_pattern.to(torch.int),
-    #             (s_xy, -1)
-    #         )
-    #     )
-    # )
 
     return k_space, sampling_pattern, affine
 
@@ -112,53 +89,27 @@ def recon(settings: PyLoraksConfig):
     loraks_name = loraks_name.replace(".", "p")
 
     # recon sos and phase coil combination
-    # solver = ACLoraks(
-    #     k_space_input=k_space, sampling_mask=sampling_mask,
-    #     radius=settings.radius,
-    #     rank_c=settings.c_rank, lambda_c=settings.c_lambda,
-    #     rank_s=settings.s_rank, lambda_s=settings.s_lambda,
-    #     max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
-    #     fft_algorithm=False, device=device, fig_path=path_figs,
-    #     channel_batch_size=settings.batch_size
-    # )
+
     loraks_recon = ac_loraks(
         k_space_x_y_z_ch_t=k_space, sampling_mask_x_y_t=sampling_mask,
         radius=settings.radius,
         rank_c=settings.c_rank, lambda_c=settings.c_lambda,
         rank_s=settings.s_rank, lambda_s=settings.s_lambda,
         max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
+        batch_size_echoes=settings.batch_size,
         device=device
     )
-    # solver.reconstruct()
-
-    # print stats
-    # residuals, stats = solver.get_residuals()
-    # logging.info(f"Minimum residual l2: {stats['norm_res_min']:.3f}")
-    # logging.info(f"save optimizer loss plot")
-    # quick plot of residual sum
-    # fig = go.Figure()
-    # for idx_slice in range(solver.dim_slice):
-    #     fig.add_trace(
-    #         go.Scattergl(y=residuals[idx_slice], name=f"slice: {idx_slice}")
-    #     )
-    # fig_name = solver.fig_path.joinpath(f"{loraks_name}_residuals.html")
-    # logging.info(f"write file: {fig_name}")
-    # fig.write_html(fig_name.as_posix())
 
     # get k-space
     # loraks_recon = solver.get_k_space()
     # ToDo implement (aspire) phase reconstruction
 
-    # switch back
-    # if settings.read_dir > 0:
-    #     loraks_recon = torch.swapdims(loraks_recon, 0, 1)
-    #
     if settings.process_slice:
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
 
     logging.info(f"Save k-space reconstruction")
     file_name = path_out.joinpath(loraks_name).with_suffix(".pt")
-    logging.info(f"write file: {file_name}")
+    # logging.info(f"write file: {file_name}")
     torch.save(loraks_recon, file_name.as_posix())
 
     # loraks_phase = torch.angle(loraks_recon)
@@ -170,7 +121,7 @@ def recon(settings: PyLoraksConfig):
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
 
     # save data as tensors, for further usage of whole data
-    torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
+    # torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
 
     logging.info("FFT into image space")
     # fft into real space

@@ -11,7 +11,8 @@ from pymritools.recon.loraks.algorithm.operators import (
     c_operator, c_adjoint_operator,
     s_operator, s_adjoint_operator
 )
-from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape
+from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape, fft
+from pymritools.utils.phantom import SheppLogan
 from pymritools.utils.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ def ac_loraks(
         radius: int,
         rank_c: int, lambda_c: float,
         rank_s: int, lambda_s: float,
+        batch_size_echoes: int = 4,
         max_num_iter: int = 10, conv_tol: float = 1e-3,
         device: torch.device = torch.get_default_device()):
     # __ One Time Calculations __
@@ -116,14 +118,13 @@ def ac_loraks(
     fig.write_html(fig_name.as_posix())
 
     # __ need to batch. we can just permute and batch echoes
-    num_batched_echoes = 3
     idxs_echoes = torch.randperm(n_echoes)
-    num_batches = int(np.ceil(n_echoes / num_batched_echoes))
+    num_batches = int(np.ceil(n_echoes / batch_size_echoes))
 
     iter_bar = tqdm.trange(num_batches, desc="batch_processing")
     for idx_b in iter_bar:
-        start = idx_b * num_batched_echoes
-        end = np.min([(idx_b + 1) * num_batched_echoes, n_echoes])
+        start = idx_b * batch_size_echoes
+        end = np.min([(idx_b + 1) * batch_size_echoes, n_echoes])
         batch_k_space_x_y_ch_t = k_space_x_y_ch_t[:, :, :, idxs_echoes[start:end]].to(device)
         batch_aha = aha[:, :, :, idxs_echoes[start:end]].to(device)
 
@@ -132,45 +133,51 @@ def ac_loraks(
         # but the other way around. i.e. masking the k_space batch with the found AC region indices and
         # then building c and s matrix?
         # __ for C
-        # find the V matrix for the ac subspaces
-        m_ac = c_operator(k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices)[c_ac_idxs]
-        # put on device if not there already
-        m_ac = m_ac.to(device)
-        # via eigh
-        eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
-        m_ac_rank = eig_vals.shape[0]
-        # get subspaces from svd of subspace matrix
-        eig_vals, idxs = torch.sort(torch.abs(eig_vals), descending=True)
-        # eig_vecs_r = eig_vecs[idxs]
-        eig_vecs = eig_vecs[:, idxs]
-        # v_sub_r = eig_vecs_r[:self.rank].to(self.device)
-        v_sub_c = eig_vecs[:, :rank_c].to(device)
-        if m_ac_rank < rank_c:
-            err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
-            log_module.error(err)
-            raise ValueError(err)
+        if lambda_c > 1e-9:
+            # find the V matrix for the ac subspaces
+            m_ac = c_operator(k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices)[c_ac_idxs]
+            # put on device if not there already
+            m_ac = m_ac.to(device)
+            # via eigh
+            eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
+            m_ac_rank = eig_vals.shape[0]
+            # get subspaces from svd of subspace matrix
+            eig_vals, idxs = torch.sort(torch.abs(eig_vals), descending=True)
+            # eig_vecs_r = eig_vecs[idxs]
+            eig_vecs = eig_vecs[:, idxs]
+            # v_sub_r = eig_vecs_r[:self.rank].to(self.device)
+            v_sub_c = eig_vecs[:, :rank_c].to(device)
+            if m_ac_rank < rank_c:
+                err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
+                log_module.error(err)
+                raise ValueError(err)
+            vvc = torch.matmul(v_sub_c, v_sub_c.conj().T)
+        else:
+            vvc = torch.zeros(1, device=device, dtype=torch.complex128)
 
         # __ for S
-        # find the V matrix for the ac subspaces
-        m_ac = s_operator(k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices)[s_ac_idxs]
-        # put on device if not there already
-        m_ac = m_ac.to(device)
-        # via eigh
-        eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
-        m_ac_rank = eig_vals.shape[0]
-        # get subspaces from svd of subspace matrix
-        eig_vals, idxs = torch.sort(torch.abs(eig_vals), descending=True)
-        # eig_vecs_r = eig_vecs[idxs]
-        eig_vecs = eig_vecs[:, idxs]
-        # v_sub_r = eig_vecs_r[:self.rank].to(self.device)
-        v_sub_s = eig_vecs[:, :rank_s].to(device)
-        if m_ac_rank < rank_s:
-            err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
-            log_module.error(err)
-            raise ValueError(err)
+        if lambda_s > 1e-9:
+            # find the V matrix for the ac subspaces
+            m_ac = s_operator(k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices)[s_ac_idxs]
+            # put on device if not there already
+            m_ac = m_ac.to(device)
+            # via eigh
+            eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
+            m_ac_rank = eig_vals.shape[0]
+            # get subspaces from svd of subspace matrix
+            eig_vals, idxs = torch.sort(torch.abs(eig_vals), descending=True)
+            # eig_vecs_r = eig_vecs[idxs]
+            eig_vecs = eig_vecs[:, idxs]
+            # v_sub_r = eig_vecs_r[:self.rank].to(self.device)
+            v_sub_s = eig_vecs[:, :rank_s].to(device)
+            if m_ac_rank < rank_s:
+                err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
+                log_module.error(err)
+                raise ValueError(err)
 
-        vvs = torch.matmul(v_sub_s, v_sub_s.conj().T)
-        vvc = torch.matmul(v_sub_c, v_sub_c.conj().T)
+            vvs = torch.matmul(v_sub_s, v_sub_s.conj().T)
+        else:
+            vvs = torch.zeros(1, device=device, dtype=torch.complex128)
 
         # defince optimization function
         def func_op(x):
@@ -231,6 +238,32 @@ def get_m_1_diag_vector(
     return m1_fhf - lambda_s * m1_v_s - lambda_c * m1_v_c
 
 
+def phantom():
+    # get phantom
+    sl_us_k = SheppLogan().get_subsampled_k_space(shape=(400, 400), acceleration=3, ac_lines=30).to(torch.complex128)
+    sl_us_img = fft(sl_us_k, axes=(0, 1))
+    sl_img = SheppLogan().get_2D_image(shape=(400, 400))
+    sl_sampling_mask = torch.abs(sl_us_k) > 1e-9
+    # reconstruct
+    recon = ac_loraks(
+        k_space_x_y_z_ch_t=sl_us_k[:, :, None, None, None], sampling_mask_x_y_t=sl_sampling_mask[:, :, None],
+        radius=3, rank_c=15, lambda_c=0.0, rank_s=20, lambda_s=0.1, max_num_iter=20
+    )
+    img = fft(recon, axes=(0, 1))
+
+    fig = psub.make_subplots(
+        rows=1, cols=3
+    )
+    for idx, i in enumerate([sl_img, sl_us_img, img]):
+        fig.add_trace(
+            go.Heatmap(z=torch.abs(torch.squeeze(i))),
+            row=1, col=1+idx
+        )
+
+    fig_name = plib.Path("./examples/recon/loraks").joinpath('phantom_test').with_suffix('.html')
+    log_module.info(f"write file: {fig_name}")
+    fig.write_html(fig_name.as_posix())
+
+
 if __name__ == '__main__':
-    # ac_loraks()
-    pass
+    phantom()
