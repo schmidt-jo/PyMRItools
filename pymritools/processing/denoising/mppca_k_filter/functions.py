@@ -174,7 +174,7 @@ def matched_filter_noise_removal(
     # effectively increasing the upper singular values affected by filter
     p_weight = torch.squeeze(
         interpolate(
-            x=(noise_ax / settings.noise_mp_stretch)[None, None].expand(-1, ),
+            x=(noise_ax / settings.noise_mp_stretch)[None, None].expand(-1, p_weight.shape[0], -1),
             xp=noise_ax[None],
             fp=p_weight[None]
         )
