@@ -232,9 +232,9 @@ def load_pulseq_rd(
         if split_read_polarity:
             # we want to split read polarity, for this we want to safe the echo numbers belonging to each readout dir
             if "bu" in acq:
-                echo_numbers_bu = sampled_lines["echo_number"].to_numpy()
+                echo_numbers_bu = torch.from_numpy(sampled_lines["echo_number"].unique().sort().to_numpy().copy())
             elif "bd" in acq:
-                echo_numbers_bd = sampled_lines["echo_number"].to_numpy()
+                echo_numbers_bd = torch.from_numpy(sampled_lines["echo_number"].unique().sort().to_numpy().copy())
         # get corresponding slice numbers
         sampled_slice_numbers = sampled_lines["slice_number"].to_numpy()
 

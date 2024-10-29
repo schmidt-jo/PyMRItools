@@ -67,6 +67,9 @@ def main(settings: DenoiseSettingsMPK):
         settings=settings
     ).flatten()
 
+    # move read dim back
+    filtered_k = torch.movedim(filtered_k, 0, read_dir)
+
     # save
     if settings.visualize:
         # do quick naive fft rsos recon
