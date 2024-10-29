@@ -249,11 +249,11 @@ def load_pulseq_rd(
 
         # sort k_space data
         k_space[
-        k_pos[None, :],
-        sampled_phase_encodes[:, None],
-        sampled_slice_numbers[:, None],
-        :,
-        sampled_echo_numbers[:, None]
+            k_pos[None, :],
+            sampled_phase_encodes[:, None],
+            sampled_slice_numbers[:, None],
+            :,
+            sampled_echo_numbers[:, None]
         ] = np.moveaxis(data, -2, -1)
 
         # sampling equal for all slice numbers, we can reduce to one of the slices
