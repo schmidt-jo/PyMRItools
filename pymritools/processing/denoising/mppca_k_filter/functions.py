@@ -127,7 +127,7 @@ def matched_filter_noise_removal(
     # get the shapes
     nr, npe, nsl, nch, nt = k_space_lines_read_ph_sli_ch_t.shape
     # want to 0 pad read dimension in order to get a square matrix for processing
-    n_r_sqr = int(np.ceil(np.sqrt(nr)))
+    n_r_sqr = int(np.ceil(np.sqrt(nr))**2)
 
     if n_r_sqr > nr:
         pad = torch.zeros(n_r_sqr - nr, dtype=k_space_lines_read_ph_sli_ch_t.dtype)[:, None, None, None, None].expand(
@@ -139,9 +139,12 @@ def matched_filter_noise_removal(
 
     # we got noise data, assumed dims [num_noise_scans, num_channels, num_samples]
     # want to use this to calculate a np distribution of noise singular values per channel
-    # start rearranging, channels to front, combine num scans
+    # start rearranging, channels to front, combine num scans -
+    # take only as many num samples as we have in actual signal lines
     noise_data_n_ch_samp = torch.movedim(noise_data_n_ch_samp, 0, -1)
-    noise_data_n_ch_samp = torch.reshape(noise_data_n_ch_samp, (noise_data_n_ch_samp.shape[0], -1))[..., : k_space_lines_read_ph_sli_ch_t.shape[0]]
+    noise_data_n_ch_samp = torch.reshape(
+        noise_data_n_ch_samp, (noise_data_n_ch_samp.shape[0], -1)
+    )
     shape = noise_data_n_ch_samp.shape
     # should be dims [channels, num_samples * num_scans]
 
@@ -372,4 +375,6 @@ def matched_filter_noise_removal(
     k_space_filt = torch.reshape(k_space_filt, shape)
     # move read dimension back to front
     k_space_filt = torch.swapaxes(k_space_filt, -1, 0)
+    # remove 0 padding
+    k_space_filt = k_space_filt[:nr]
     return k_space_filt
