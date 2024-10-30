@@ -1,6 +1,7 @@
 import logging
 import abc
 import pathlib as plib
+import pickle
 
 from scipy.constants import physical_constants
 import numpy as np
@@ -296,11 +297,9 @@ class Sequence2D(abc.ABC):
         self.sampling.save(save_file.as_posix())
 
         # write used kernels
-        path_kernels = path.joinpath("kernels").absolute()
-        path_kernels.mkdir(exist_ok=True, parents=True)
-
-        for k, v in self.kernels_to_save.items():
-            v.save(path_kernels.joinpath(k).with_suffix(".pkl"))
+        save_file = path.joinpath(f"{name}_kernels").with_suffix(".pkl")
+        with open(save_file.as_posix(), "wb") as f:
+            pickle.dump(self.kernels_to_save, f)
 
         # ToDo: write pulse file
         # if not self.config.pulse_file:

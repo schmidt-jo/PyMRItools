@@ -1,5 +1,6 @@
 import logging
 import pathlib as plib
+import pickle
 
 import tqdm
 import torch
@@ -8,6 +9,7 @@ from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
 from .base_sequence import Simulation
 from pymritools.simulation.emc.core import functions, GradPulse
+from pymritools.seqprog.core.kernels import Kernel
 
 log_module = logging.getLogger(__name__)
 
@@ -17,6 +19,15 @@ class MEGESSE(Simulation):
         super().__init__(params=params, settings=settings)
 
     def _prep(self):
+        # load kernels
+        path_to_kernels = plib.Path(self.settings.kernel_file).absolute()
+        with open(path_to_kernels.as_posix(), "rb") as f:
+            kernels = pickle.load(f)
+        if self.settings.visualize:
+            for k, v in kernels.items():
+                v.plot(path=self.fig_path, name=k, file_suffix="png")
+
+    def _prep_arxv(self):
         """ want to set up gradients and pulses like in the megesse protocol
         For this we need all parts that are distinct and then set them up to push the calculation through
         """
