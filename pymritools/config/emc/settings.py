@@ -23,12 +23,6 @@ class SimulationSettings(BaseClass):
         alias="-db", default="database_test.pkl",
         help="set filename of database"
     )
-    sim_type: str = field(
-        alias="-t",
-        default="mese_balanced_read",
-        choices=["mese_siemens", "mese_balanced_read", "megesse", "fid", "single"],
-        help= "set simulation type"
-    )
 
     t1_list: list = field(
         alias="var_t1", default_factory=lambda: [1.5],

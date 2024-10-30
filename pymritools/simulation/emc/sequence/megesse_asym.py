@@ -1,9 +1,14 @@
-from pymritools.simulation.emc.core import functions, GradPulse
-from .base import Simulation
-from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
-import torch
-import tqdm
 import logging
+import pathlib as plib
+
+import tqdm
+import torch
+
+from pymritools.config import setup_program_logging, setup_parser
+from pymritools.config.database import DB
+from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
+from .base import Simulation
+from pymritools.simulation.emc.core import functions, GradPulse
 
 log_module = logging.getLogger(__name__)
 
@@ -193,3 +198,34 @@ class MEGESSE(Simulation):
                 # save excitation profile snapshot
                 self.set_magnetization_profile_snap(snap_name=f"refocus_{rf_idx + 1}_post_acquisition")
 
+
+def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
+    sequence = MEGESSE(params=params, settings=settings)
+    sequence.simulate()
+    sequence.save()
+
+
+def main():
+    # setup logging
+    setup_program_logging(name="EMC simulation - MEGESSE asymmetric echoes", level=logging.INFO)
+    # setup parser
+    parser, args = setup_parser(
+        prog_name="EMC simulation - MEGESSE asymmetric echoes",
+        dict_config_dataclasses={"settings": EmcSimSettings, "params": EmcParameters}
+    )
+
+    settings = EmcSimSettings.from_cli(args=args.settings)
+    settings.display()
+
+    params = args.params
+
+    try:
+        simulate(settings=settings, params=params)
+    except Exception as e:
+        parser.print_usage()
+        log_module.exception(e)
+    exit(-1)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,10 +1,13 @@
 import logging
-import torch
 import abc
+import pathlib as plib
+
+import torch
+
 from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
+from pymritools.config.database import DB
 from pymritools.simulation.emc.core import GradPulse, SequenceTimings
 from pymritools.config.rf import RFPulse
-import pathlib as plib
 log_module = logging.getLogger(__name__)
 
 
@@ -117,6 +120,33 @@ class Simulation(abc.ABC):
         self._set_device()
         # simulate
         self._simulate()
+
+    def save(self):
+        db = DB.from_simulation_data(params=self.params, sim_data=self.data)
+
+        if self.settings.config_file:
+            c_name = plib.Path(self.settings.config_file).absolute().stem
+        else:
+            c_name = "emc_config"
+
+        save_path = plib.Path(self.settings.out_path).absolute()
+        save_file = save_path.joinpath(c_name).with_suffix(".json")
+        logging.info(f"Save Config File: {save_file.as_posix()}")
+        self.settings.save_json(save_file.as_posix(), indent=2)
+
+        # database
+        save_file = save_path.joinpath(self.settings.database_name)
+        logging.info(f"Save DB File: {save_file.as_posix()}")
+        db.save(save_file)
+
+        if self.settings.visualize:
+            # plot magnetization profile snapshots
+            # sim_obj.plot_magnetization_profiles(animate=False)
+            # sim_obj.plot_emc_signal()
+            # if settings.signal_fourier_sampling:
+            #     sim_obj.plot_signal_traces()
+            # plot database
+            db.plot(self.fig_path)
 
     # def plot_magnetization_profiles(self, animate: bool = True):
     #     # pick middle sim range values

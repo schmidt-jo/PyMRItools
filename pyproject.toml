@@ -50,7 +50,9 @@ twixtools = "1.0"
 
 [tool.poetry.scripts]
 # simulations
-simulation_emc = "pymritools.simulation.emc.core.simulate:main"
+simulation_emc_megesse_asym = "pymritools.simulation.emc.sequence.megesse_asym:main"
+simulation_emc_megesse_sym = "pymritools.simulation.emc.sequence.megesse_sym:main"
+simulation_emc_mese = "pymritools.simulation.emc.sequence.mese:main"
 # processing scripts
 processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
 processing_denoise_mppca = "pymritools.processing.denoising.mppca.denoise:main"

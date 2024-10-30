@@ -1,10 +1,13 @@
+import time
+import logging
+
+import tqdm
+import torch
+
+from pymritools.config import setup_program_logging, setup_parser
 from pymritools.simulation.emc.core import functions, GradPulse
 from pymritools.config.emc import EmcSimSettings, EmcParameters
-from .base import Simulation
-import torch
-import logging
-import time
-import tqdm
+from .base_sequence import Simulation
 
 log_module = logging.getLogger(__name__)
 
@@ -162,7 +165,40 @@ class MESE(Simulation):
             #     plotting.plot_slice_img_tensor(slice_image_tensor=image_tensor, sim_data=self.data,
             #                                    out_path=self.fig_path)
 
-            self.data.emc_signal_mag = 2 * torch.abs(torch.sum(image_tensor, dim=-1)) / self.params.acq_number
+            self.data.emc_signal_mag = 2 * torch.abs(torch.sum(image_tensor, dim=-1)) / self.params.acquisition_number
             self.data.emc_signal_phase = torch.angle(torch.sum(image_tensor, dim=-1))
 
         self.data.time = time.time() - t_start
+
+
+def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
+    sequence = MESE(params=params, settings=settings)
+    sequence.simulate()
+    sequence.save()
+
+
+def main():
+    # setup logging
+    setup_program_logging(name="EMC simulation - MESE", level=logging.INFO)
+    # setup parser
+    parser, args = setup_parser(
+        prog_name="EMC simulation - MESE",
+        dict_config_dataclasses={"settings": EmcSimSettings, "params": EmcParameters}
+    )
+
+    settings = EmcSimSettings.from_cli(args=args.settings)
+    settings.display()
+
+    params = args.params
+
+    try:
+        simulate(settings=settings, params=params)
+    except Exception as e:
+        parser.print_usage()
+        log_module.exception(e)
+    exit(-1)
+
+
+if __name__ == '__main__':
+    main()
+
