@@ -64,7 +64,7 @@ def get_count_matrix(shape: tuple, indices: torch.Tensor, mode: str):
         raise ValueError(err)
     ones_matrix = get_loraks_matrix_from_ones(shape, indices, mode)
     count_matrix = op_adj(
-        s_matrix=ones_matrix,
+        ones_matrix,
         indices=indices, k_space_dims=shape
     ).real.to(torch.int)
     return count_matrix
@@ -203,7 +203,7 @@ def ac_loraks(
         radius: int,
         rank_c: int, lambda_c: float,
         rank_s: int, lambda_s: float,
-        batch_size_echoes: int = 4,
+        batch_size_channels: int = 16,
         max_num_iter: int = 10, conv_tol: float = 1e-3,
         visualize: bool = True,
         device: torch.device = torch.get_default_device()):
@@ -218,8 +218,8 @@ def ac_loraks(
     shape = k_space_x_y_z_ch_t.shape
     n_read, n_phase, n_slice, n_channels, n_echoes = shape
     # for now just pick middle slice
-    idx_slice = int(n_slice / 2)
-    k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_slice]
+    # idx_slice = int(n_slice / 2)
+    # k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_slice]
 
     # get indices for operators
     indices = get_idx_2d_circular_neighborhood_patches_in_shape(
@@ -272,69 +272,70 @@ def ac_loraks(
                 go.Heatmap(z=torch.abs(i)[:, :, 0, 0], showscale=False),
                 row=2, col=1 + idx_i
             )
-        fig_name = plib.Path("./examples/recon/loraks_arxv").joinpath('count-matrices_ac-region').with_suffix('.html')
+        fig_name = plib.Path("./examples/recon/loraks").joinpath('count-matrices_ac-region').with_suffix('.html')
         log_module.info(f"write file: {fig_name}")
         fig.write_html(fig_name.as_posix())
 
-    # __ need to batch. we can just permute and batch echoes
-    idxs_echoes = torch.randperm(n_echoes)
-    num_batches = int(np.ceil(n_echoes / batch_size_echoes))
+    for idx_s in range(n_slice):
+        log_module.info(f"Processing slice :: {idx_s+1} / {n_slice}")
+        # __ need to batch. we can just permute and batch echoes
+        idxs_channels = torch.randperm(n_channels)
+        num_batches = int(np.ceil(n_channels / batch_size_channels))
+        batch_aha = aha.to(device)
+        iter_bar = tqdm.trange(num_batches, desc="batch_processing")
+        for idx_b in iter_bar:
+            start = idx_b * batch_size_channels
+            end = np.min([(idx_b + 1) * batch_size_channels, n_channels])
+            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, idxs_channels[start:end]].to(device)
 
-    iter_bar = tqdm.trange(num_batches, desc="batch_processing")
-    for idx_b in iter_bar:
-        start = idx_b * batch_size_echoes
-        end = np.min([(idx_b + 1) * batch_size_echoes, n_echoes])
-        batch_k_space_x_y_ch_t = k_space_x_y_ch_t[:, :, :, idxs_echoes[start:end]].to(device)
-        batch_aha = aha[:, :, :, idxs_echoes[start:end]].to(device)
+            # __ per slice calculations
+            # ToDo: we know the ACS indices already, can we calculate this not with the full batch and masking afterwards,
+            # but the other way around. i.e. masking the k_space batch with the found AC region indices and
+            # then building c and s matrix?
+            # __ for C
+            if lambda_c > 1e-9:
+                vvc = get_v_matrix_of_ac_subspace(
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices, ac_indices=c_ac_idxs, mode="c", rank=rank_c
+                )
+            else:
+                vvc = torch.zeros(1, device=device, dtype=torch.complex128)
 
-        # __ per slice calculations
-        # ToDo: we know the ACS indices already, can we calculate this not with the full batch and masking afterwards,
-        # but the other way around. i.e. masking the k_space batch with the found AC region indices and
-        # then building c and s matrix?
-        # __ for C
-        if lambda_c > 1e-9:
-            vvc = get_v_matrix_of_ac_subspace(
-                k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices, ac_indices=c_ac_idxs, mode="c", rank=rank_c
+            # __ for S
+            if lambda_s > 1e-9:
+                vvs = get_v_matrix_of_ac_subspace(
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices, ac_indices=s_ac_idxs, mode="s", rank=rank_s
+                )
+            else:
+                vvs = torch.zeros(1, device=device, dtype=torch.complex128)
+
+            # define optimization function
+            def func_op(x):
+                return get_m_1_diag_vector(
+                    f_re_pe_ch_t=x, v_s=vvs, v_c=vvc, aha=batch_aha,
+                    lambda_c=lambda_c, lambda_s=lambda_s, indices=indices
+                )
+
+            # iter_bar = tqdm.trange(1, desc="Slice::Processing::Batch")
+            xmin, res_vec, results = cgd(
+                func_operator=func_op,
+                x=torch.zeros_like(batch_k_space_x_y_ch_t, device=device), b=batch_k_space_x_y_ch_t.to(device),
+                max_num_iter=max_num_iter,
+                conv_tol=conv_tol,
+                iter_bar=iter_bar
             )
-        else:
-            vvc = torch.zeros(1, device=device, dtype=torch.complex128)
 
-        # __ for S
-        if lambda_s > 1e-9:
-            vvs = get_v_matrix_of_ac_subspace(
-                k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices, ac_indices=s_ac_idxs, mode="s", rank=rank_s
-            )
-        else:
-            vvs = torch.zeros(1, device=device, dtype=torch.complex128)
-
-        # define optimization function
-        def func_op(x):
-            return get_m_1_diag_vector(
-                f_re_pe_ch_t=x, v_s=vvs, v_c=vvc, aha=batch_aha,
-                lambda_c=lambda_c, lambda_s=lambda_s, indices=indices
-            )
-
-        # iter_bar = tqdm.trange(1, desc="Slice::Processing::Batch")
-        xmin, res_vec, results = cgd(
-            func_operator=func_op,
-            x=torch.zeros_like(batch_k_space_x_y_ch_t, device=device), b=batch_k_space_x_y_ch_t.to(device),
-            max_num_iter=max_num_iter,
-            conv_tol=conv_tol,
-            iter_bar=iter_bar
-        )
-
-        k_space_x_y_ch_t[:, :, :, idxs_echoes[start:end]] = xmin.cpu()
+            k_space_x_y_z_ch_t[:, :, idx_s, idxs_channels[start:end]] = xmin.cpu()
 
     # move read dir to back
-    k_space_x_y_ch_t = torch.movedim(k_space_x_y_z_ch_t, 0, read_dir)
-    return k_space_x_y_ch_t[:, :, None]
+    k_space_x_y_z_ch_t = torch.movedim(k_space_x_y_z_ch_t, 0, read_dir)
+    return k_space_x_y_z_ch_t
 
 
 def get_m_1_diag_vector(
         f_re_pe_ch_t: torch.Tensor, aha: torch.Tensor, lambda_c: float, lambda_s: float, indices: torch.Tensor,
         v_s: torch.Tensor = torch.zeros((1, 1)), v_c: torch.Tensor = torch.zeros((1, 1))) -> torch.Tensor:
     """
-    We define the M_1 matrix from A^H A f and the loraks_arxv operator P_x(f) V V^H,
+    We define the M_1 matrix from A^H A f and the loraks operator P_x(f) V V^H,
     after extracting V from ACS data and getting the P_x based on the Loraks mode used.
     """
     # if input is zero vector -> S and C matrices will be 0 matrices. hence all multiplications will return 0

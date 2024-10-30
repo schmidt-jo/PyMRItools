@@ -52,7 +52,7 @@ def compress_channels(input_k_space: torch.tensor, sampling_pattern: torch.tenso
     mid_x = int(nx / 2)
     mid_y = int(ny / 2)
     # make sure sampling pattern is bool
-    sampling_pattern = sampling_pattern.to(torch.bool)
+    sampling_mask = sampling_pattern.clone().to(torch.bool)
     if use_ac_data:
         # move from middle out
         lrbt = [mid_x, mid_x, mid_y, mid_y]
@@ -70,20 +70,20 @@ def compress_channels(input_k_space: torch.tensor, sampling_pattern: torch.tenso
                     else:
                         pos_x = mid_x
                         pos_y = pos
-                    if sampling_pattern[pos_x, pos_y, 0, 0, 1] and cont_lrbt[idx_dir]:
+                    if sampling_mask[pos_x, pos_y, 0, 0, 1] and cont_lrbt[idx_dir]:
                         # sampling pattern true and still looking
                         lrbt[idx_dir] = pos
-                    elif not sampling_pattern[pos_x, pos_y, 0, 0, 1] and cont_lrbt[idx_dir]:
+                    elif not sampling_mask[pos_x, pos_y, 0, 0, 1] and cont_lrbt[idx_dir]:
                         # sampling pattern false, toggle looking
                         cont_lrbt[idx_dir] = False
         # extract ac region
-        ac_mask = torch.zeros_like(sampling_pattern[:, :, 0, 0, 0])
+        ac_mask = torch.zeros_like(sampling_mask[:, :, 0, 0, 0])
         ac_mask[lrbt[0]:lrbt[1], lrbt[2]:lrbt[3]] = True
         # check detected region
         ac_mask = ac_mask[:, :, None, None, None].expand(-1, -1, nz, nch, nt)
     else:
         # use all available sampled data
-        ac_mask = sampling_pattern.expand(-1, -1, nz, nch, -1)
+        ac_mask = sampling_mask.expand(-1, -1, nz, nch, -1)
     if torch.nonzero(ac_mask).shape[0] < 100:
         err = f"Number of available sampled data / AC region detected too small (<100 voxel). exiting"
         log_module.error(err)
@@ -235,7 +235,7 @@ def compress_channels(input_k_space: torch.tensor, sampling_pattern: torch.tenso
     compressed_data = torch.movedim(compressed_data, 0, read_dim)
 
     # remove fft "bleed"
-    compressed_data[~sampling_pattern.expand(-1, -1, nz, num_compressed_channels, -1)] = 0
+    compressed_data[~sampling_mask.expand(-1, -1, nz, num_compressed_channels, -1)] = 0
 
     # if opts.visualize and opts.debug:
     #     sli, ch, t = (torch.tensor([*compressed_data.shape[2:]]) / 2).to(torch.int)

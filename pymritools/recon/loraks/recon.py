@@ -16,7 +16,7 @@ def load_data(settings: PyLoraksConfig):
     logging.debug("Load data")
     k_space = torch_load(settings.in_k_space)
     affine = torch_load(settings.in_affine)
-    sampling_pattern = torch_load(settings.in_sampling_mask)
+    sampling_pattern = torch.squeeze(torch_load(settings.in_sampling_mask))
 
     logging.debug(f"For debug reduce dims")
     if settings.debug:
@@ -31,10 +31,10 @@ def load_data(settings: PyLoraksConfig):
         logging.info(f"single slice processing: pick slice {mid_slice + 1}")
         k_space = k_space[:, :, mid_slice, None]
 
-    logging.debug(f"Check sampling pattern shape")
-    if sampling_pattern.shape.__len__() < 3:
-        # sampling pattern supposed to be x, y, t
-        sampling_pattern = sampling_pattern[:, :, None]
+    # logging.debug(f"Check sampling pattern shape")
+    # # if sampling_pattern.shape.__len__() < 3:
+    # #     # sampling pattern supposed to be x, y, t
+    # #     sampling_pattern = sampling_pattern[:, :, None]
 
     if settings.coil_compression is not None:
         k_space = compress_channels(
@@ -80,7 +80,7 @@ def recon(settings: PyLoraksConfig, mode: str):
         f"coil compression - {settings.coil_compression}")
 
     # set up name
-    loraks_name = f"loraks_{mode}_k_space_recon_r-{settings.radius}"
+    loraks_name = f"{mode}_k_space_recon_r-{settings.radius}"
     if settings.c_lambda > 1e-6 and mode != "loraks":
         loraks_name = f"{loraks_name}_lc-{settings.c_lambda:.3f}_rank-c-{settings.c_rank}"
     if settings.s_lambda > 1e-6:
@@ -94,7 +94,7 @@ def recon(settings: PyLoraksConfig, mode: str):
             rank_c=settings.c_rank, lambda_c=settings.c_lambda,
             rank_s=settings.s_rank, lambda_s=settings.s_lambda,
             max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
-            batch_size_echoes=settings.batch_size,
+            batch_size_channels=settings.batch_size,
             device=device
         )
     elif mode == "loraks":
@@ -115,10 +115,6 @@ def recon(settings: PyLoraksConfig, mode: str):
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
 
     logging.info(f"Save k-space reconstruction")
-    file_name = path_out.joinpath(loraks_name).with_suffix(".pt")
-    # logging.info(f"write file: {file_name}")
-    torch.save(loraks_recon, file_name.as_posix())
-
     # loraks_phase = torch.angle(loraks_recon)
     # loraks_phase = torch.mean(loraks_phase, dim=-2)
     # loraks_mag = torch.abs(loraks_recon)
@@ -126,9 +122,6 @@ def recon(settings: PyLoraksConfig, mode: str):
     # loraks_recon_k = loraks_mag * torch.exp(1j * loraks_phase)
     if settings.process_slice:
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
-
-    # save data as tensors, for further usage of whole data
-    # torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
 
     logging.info("FFT into image space")
     # fft into real space
@@ -144,6 +137,9 @@ def recon(settings: PyLoraksConfig, mode: str):
     nii_name = loraks_name.replace("k_space", "image")
     nifti_save(data=loraks_recon_mag, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_mag")
     nifti_save(data=loraks_phase, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_phase")
+
+    # save data as tensors, for further usage of whole data
+    torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
 
 
 def recon_ac_loraks():
@@ -179,4 +175,4 @@ def recon_loraks():
 
 
 if __name__ == '__main__':
-    recon_loraks()
+    recon_ac_loraks()
