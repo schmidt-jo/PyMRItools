@@ -12,7 +12,7 @@ from pymritools.processing.denoising.mppca_k_filter.functions import matched_fil
 log_module = logging.getLogger(__name__)
 
 
-def main(settings: DenoiseSettingsMPK):
+def denoise(settings: DenoiseSettingsMPK):
     # check path
     path_out = plib.Path(settings.out_path).absolute()
     log_module.info(f"Setting up output path {path_out}")
@@ -80,7 +80,7 @@ def main(settings: DenoiseSettingsMPK):
     torch_save(filtered_k, path_to_file=path_out, file_name='filtered_k-space')
 
 
-if __name__ == '__main__':
+def main():
     # setup logging
     setup_program_logging(name="MP distribution k-space filter denoising", level=logging.INFO)
     # setup parser
@@ -93,8 +93,12 @@ if __name__ == '__main__':
     settings.display()
 
     try:
-        main(settings=settings)
+        denoise(settings=settings)
     except Exception as e:
         parser.print_help()
         logging.exception(e)
         exit(-1)
+
+
+if __name__ == '__main__':
+    main()
