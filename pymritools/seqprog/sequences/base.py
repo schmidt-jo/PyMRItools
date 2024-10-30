@@ -30,7 +30,9 @@ class Sequence2D(abc.ABC):
         of slices to measure, they are epi style readouts with lower resolution and can be switched on here)
 
     """
-    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
+    def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D,
+                 create_excitation_kernel: bool = True, create_refocus_1_kernel: bool = True,
+                 create_refocus_kernel: bool = True):
 
         self.config: PulseqConfig = config
         self.visualize: bool = config.visualize
@@ -91,37 +93,46 @@ class Sequence2D(abc.ABC):
             system=self.system
         )
         # refocusing - after first
-        self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
-            params=self.params,
-            system=self.system,
-            pulse_num=1,
-            return_pe_time=True,
-            read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
-            pulse_file=self.config.pulse_file
-        )
-        # refocusing first
-        self.block_refocus_1 = Kernel.refocus_slice_sel_spoil(
-            params=self.params,
-            system=self.system,
-            pulse_num=0,
-            return_pe_time=False,
-            read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
-            pulse_file=self.config.pulse_file
-        )
-        # excitation
-        # via kernels we can build slice selective blocks of excitation and refocusing
-        # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
-        # gradient slice refocus gradient. For this we need to now the ramp area of the
-        # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
-        # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
-        # accounting for ramp area
-        ramp_area = float(self.block_refocus_1.grad_slice.area[0])
-        # excitation pulse
-        self.block_excitation = Kernel.excitation_slice_sel(
-            params=self.params, system=self.system,
-            adjust_ramp_area=ramp_area,
-            pulse_file=self.config.pulse_file
-        )
+        if create_refocus_kernel:
+            self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
+                params=self.params,
+                system=self.system,
+                pulse_num=1,
+                return_pe_time=True,
+                read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                pulse_file=self.config.pulse_file
+            )
+        else:
+            self.block_refocus: Kernel = NotImplemented
+        if create_refocus_1_kernel:
+            # refocusing first
+            self.block_refocus_1 = Kernel.refocus_slice_sel_spoil(
+                params=self.params,
+                system=self.system,
+                pulse_num=0,
+                return_pe_time=False,
+                read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                pulse_file=self.config.pulse_file
+            )
+        else:
+            self.block_refocus_1: Kernel = NotImplemented
+        if create_excitation_kernel:
+            # excitation
+            # via kernels we can build slice selective blocks of excitation and refocusing
+            # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
+            # gradient slice refocus gradient. For this we need to now the ramp area of the
+            # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
+            # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
+            # accounting for ramp area
+            ramp_area = float(self.block_refocus_1.grad_slice.area[0])
+            # excitation pulse
+            self.block_excitation = Kernel.excitation_slice_sel(
+                params=self.params, system=self.system,
+                adjust_ramp_area=ramp_area,
+                pulse_file=self.config.pulse_file
+            )
+        else:
+            self.block_excitation: Kernel = NotImplemented
 
         # set up spoling at end of echo train
         self.block_spoil_end: Kernel = Kernel.spoil_all_grads(
@@ -159,7 +170,7 @@ class Sequence2D(abc.ABC):
 
         # navigators
         # self.navs_on: bool = self.params.use_navs
-        self.navs_on: bool = False      # no navigator implementation for now
+        self.navs_on: bool = False      # not yet implemented
         self.nav_num: int = 0
         self.nav_t_total: float = 0.0
         # for now we fix the navigator resolution at 5 times coarser than the chosen resolution
@@ -168,6 +179,8 @@ class Sequence2D(abc.ABC):
         if self.navs_on:
             self._set_navigators()
 
+    def set_on_grad_raster_time(self, time: float):
+        return np.ceil(time / self.system.grad_raster_time) * self.system.grad_raster_time
     # __ public __
     # create
     # @classmethod
@@ -425,13 +438,15 @@ class Sequence2D(abc.ABC):
             )
             self.sequence.add_block(post_delay.to_simple_ns())
 
-    def _set_fa_and_update_slice_offset(self, rf_idx: int, slice_idx: int, excitation: bool = False):
+    def _set_fa_and_update_slice_offset(
+            self, rf_idx: int, slice_idx: int, excitation: bool = False, no_ref_1: bool = False
+    ):
         if excitation:
             sbb = self.block_excitation
             fa_rad = self.params.excitation_rf_rad_fa
             phase_rad = self.params.excitation_rf_rad_phase
         else:
-            if rf_idx == 0:
+            if rf_idx == 0 and not no_ref_1:
                 sbb = self.block_refocus_1
             else:
                 sbb = self.block_refocus
@@ -455,22 +470,30 @@ class Sequence2D(abc.ABC):
         # To merge both: given phase parameter and any complex signal array data
         sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
 
-    def _set_phase_grad(self, echo_idx: int, phase_idx: int):
+    def _set_phase_grad(self, echo_idx: int, phase_idx: int,
+                        no_ref_1: bool = False, excitation: bool = False):
         # caution we assume trapezoidal phase encode gradients
         area_factors = np.array([0.5, 1.0, 0.5])
         # we get the actual line index from the sampling pattern, dependent on echo number and phase index in the loop
         idx_phase = self.k_pe_indexes[echo_idx, phase_idx]
         # additionally we need the last blocks phase encode for rephasing
-        if echo_idx > 0:
-            # if we are not on the first readout:
+        if echo_idx == 0 and not no_ref_1:
+            block = self.block_refocus_1
+        elif echo_idx == 0 and excitation:
+            block = self.block_excitation
+        else:
+            # if we are not on the first refocusing or the first refocusing is identical to the others:
             # we need the last phase encode value to reset before refocusing
-            last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
+            if echo_idx == 0:
+                # in case there is no difference in refocusing, the first refocus needs to rephase the excitation phase
+                last_idx_phase = self.k_pe_indexes[echo_idx, phase_idx]
+            else:
+                # we need to rephase the previous phase encode
+                last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
             block = self.block_refocus
             # we set the re-phase phase encode gradient
             phase_enc_time_pre_pulse = np.sum(np.diff(block.grad_phase.t_array_s[:4]) * area_factors)
             block.grad_phase.amplitude[1:3] = self.phase_areas[last_idx_phase] / phase_enc_time_pre_pulse
-        else:
-            block = self.block_refocus_1
 
         # we set the post pulse phase encode gradient that sets up the next readout
         if np.abs(self.phase_areas[idx_phase]) > 1:
@@ -1249,7 +1272,7 @@ class Sequence2D(abc.ABC):
             height=800
         )
 
-        name = f"sequence_t-{t_start_s:d}_to_t-{t_end_s:d}"
+        name = f"sequence_t-{int(t_start_s):d}_to_t-{int(t_end_s):d}"
         fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
         log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
         if file_suffix in ["png", "pdf"]:
@@ -1428,6 +1451,11 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     if config.visualize:
         logging.info("Plotting")
         # pyp_seq.plot(time_range=(0, 4e-3 * jstmc_seq.params.tr), time_disp='s')
-        sequence.plot_sequence(t_start_s=4, t_end_s=6, sim_grad_moments=True)
+        sequence.plot_sequence(t_start_s=2*sequence.params.tr*1e-3, t_end_s=2.5*sequence.params.tr*1e-3, sim_grad_moments=True)
+        sequence.plot_sequence(
+            t_start_s=(sequence.params.number_central_lines+2)*sequence.params.tr*1e-3,
+            t_end_s=(sequence.params.number_central_lines+4)*sequence.params.tr*1e-3,
+            sim_grad_moments=True
+        )
         sequence.plot_sequence(t_start_s=0, t_end_s=2, sim_grad_moments=True)
         sequence.plot_sampling()

@@ -142,7 +142,7 @@ class Parameters2D(Serializable):
         default=2, help="Readout oversampling factor."
     )
     number_noise_scans: int = field(
-        default=10, help="Set number of pre-scan ADCs used for noise estimation and pre-whitening of data."
+        default=10, help="Number of noise scans before starting sequence."
     )
 
     # timing
