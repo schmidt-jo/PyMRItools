@@ -71,9 +71,10 @@ class MEGESSE(Sequence2D):
             self.block_acquisition_neg_polarity.plot(path=self.path_figs, name="bd-acquisition")
 
         # register all slice select kernel pulse gradients
-        self.kernel_pulses_slice_select = {
+        self.kernels_to_save = {
             "excitation": self.block_excitation, "refocus_1": self.block_refocus_1,
-            "refocus": self.block_refocus
+            "refocus": self.block_refocus,
+            "acq_bu": self.block_acquisition, "acq_bd": self.block_acquisition_neg_polarity,
         }
 
         # ToDo:

@@ -139,8 +139,8 @@ class Sequence2D(abc.ABC):
             params=self.params, system=self.system
         )
 
-        # register all pulses that need slice select
-        self.kernel_pulses_slice_select: dict = {}
+        # save kernels for emc
+        self.kernels_to_save: dict = {}
 
         # use random state for reproducibility of eg sampling patterns
         # (for that matter any random or semi random sampling used)
@@ -299,7 +299,7 @@ class Sequence2D(abc.ABC):
         path_kernels = path.joinpath("kernels").absolute()
         path_kernels.mkdir(exist_ok=True, parents=True)
 
-        for k, v in self.kernel_pulses_slice_select.items():
+        for k, v in self.kernels_to_save.items():
             v.save(path_kernels.joinpath(k).with_suffix(".pkl"))
 
         # ToDo: write pulse file
