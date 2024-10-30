@@ -26,7 +26,7 @@ def denoise(settings: DenoiseSettingsMPK):
     k_space = torch_load(settings.in_k_space)
     noise_scans = torch_load(settings.in_noise_scans)
     affine = torch_load(settings.in_affine)
-    sampling_mask = torch_load(settings.in_sampling_mask) if settings.in_sampling_mask is not None else None
+    sampling_mask = torch.squeeze(torch_load(settings.in_sampling_mask)) if settings.in_sampling_mask is not None else None
     # assuming k-space dims [x, y, z, ch, t], cast if not the case
     while k_space.shape.__len__() < 5:
         k_space.unsqueeze(-1)
@@ -73,7 +73,7 @@ def denoise(settings: DenoiseSettingsMPK):
     # save
     if settings.visualize:
         # do quick naive fft rsos recon
-        img = fft(filtered_k, axes=(0, 1))
+        img = fft(filtered_k, img_to_k=False, axes=(0, 1))
         img = root_sum_of_squares(img, dim_channel=-2)
         nifti_save(img, img_aff=affine, path_to_dir=settings.out_path, file_name="filt_naive_rsos_recon")
 
