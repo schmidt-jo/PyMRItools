@@ -95,7 +95,7 @@ def recon(settings: PyLoraksConfig, mode: str):
             rank_s=settings.s_rank, lambda_s=settings.s_lambda,
             max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
             batch_size_channels=settings.batch_size,
-            device=device
+            device=device, path_visuals=path_figs
         )
     elif mode == "loraks":
         loraks_recon = loraks(
@@ -139,7 +139,7 @@ def recon(settings: PyLoraksConfig, mode: str):
     nifti_save(data=loraks_phase, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_phase")
 
     # save data as tensors, for further usage of whole data
-    torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
+    # torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
 
 
 def recon_ac_loraks():
