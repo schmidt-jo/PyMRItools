@@ -1,15 +1,16 @@
 import copy
 import typing
-import pathlib as plib
-
-from . import events
-from pymritools.config.seqprog import PulseqParameters2D
-import numpy as np
 import logging
+import pathlib as plib
+import pickle
 
-from pypulseq import Opts
+import numpy as np
 import plotly.subplots as psub
 import plotly.graph_objects as go
+
+from pypulseq import Opts
+from . import events
+from pymritools.config.seqprog import PulseqParameters2D
 
 log_module = logging.getLogger(__name__)
 
@@ -23,7 +24,6 @@ class Kernel:
     kernel class, representation of one block for a sequence containing RF, ADC, Delay and all gradient events.
     Collection of methods to build predefined blocks for reusage
     """
-
     def __init__(
             self, system: Opts = Opts(),
             rf: events.RF = events.RF(),
@@ -44,6 +44,35 @@ class Kernel:
         self.adc: events.ADC = adc
 
         self.delay: events.DELAY = delay
+
+    def save(self, file_name: str | plib.Path):
+        file_name = plib.Path(file_name).absolute()
+        if not ".pkl" in file_name.suffixes:
+            file_name = file_name.with_suffix(".pkl")
+            msg = f"File name must end with .pkl. Adopting: {file_name}"
+            log_module.info(msg)
+        if not file_name.parent.exists():
+            msg = f"Parent directory {file_name.parent.absolute()} does not exist. Creating"
+            log_module.info(msg)
+            file_name.parent.mkdir(exist_ok=True, parents=True)
+        log_module.info(f"save kernel to {file_name}")
+        with open(file_name, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, file_name: str | plib.Path):
+        file_name = plib.Path(file_name).absolute()
+        if not ".pkl" in file_name.suffixes:
+            file_name = file_name.with_suffix(".pkl")
+            msg = f"File name must end with .pkl. Adopting: {file_name}"
+            log_module.info(msg)
+        if not file_name.is_file():
+            msg = f"File {file_name} does not exist."
+            log_module.error(msg)
+            raise FileNotFoundError(msg)
+        log_module.info(f"loading file: {file_name}")
+        with open(file_name, "rb") as f:
+            return pickle.load(f)
 
     def copy(self):
         return copy.deepcopy(self)

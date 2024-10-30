@@ -140,7 +140,7 @@ class Sequence2D(abc.ABC):
         )
 
         # register all pulses that need slice select
-        self.kernel_pulses_slice_select: list = []
+        self.kernel_pulses_slice_select: dict = {}
 
         # use random state for reproducibility of eg sampling patterns
         # (for that matter any random or semi random sampling used)
@@ -267,7 +267,7 @@ class Sequence2D(abc.ABC):
         if no pulse file was given we write one
         ToDo: Port to .h5 format to put this in a common storage and dropout one file
         """
-        file_name = plib.Path(self.config.out_path).absolute()
+        path = plib.Path(self.config.out_path).absolute()
         if not name:
             name = f"seq"
         voxel_size = ""
@@ -279,21 +279,28 @@ class Sequence2D(abc.ABC):
         if self.params.rf_adapt_z:
             name = f"{name}_rf-ad-z"
         # write sequence file
-        save_file = file_name.joinpath(f"{name}_sequence").with_suffix(".seq")
+        save_file = path.joinpath(f"{name}_sequence").with_suffix(".seq")
         log_module.info(f"writing file: {save_file.as_posix()}")
         # write sequence after setting some header definitions (i.e. for correct FOV display on scanner
         self.set_pulseq_definitions()
         self.sequence.write(save_file.as_posix())
 
         # write pulseq file
-        save_file = file_name.joinpath(f"{name}_pulseq_config").with_suffix(".json")
+        save_file = path.joinpath(f"{name}_pulseq_config").with_suffix(".json")
         log_module.info(f"writing file: {save_file.as_posix()}")
         self.params.save_json(save_file.as_posix(), indent=2)
 
         # write sampling file
-        save_file = file_name.joinpath(f"{name}_sampling_config").with_suffix(".pkl")
+        save_file = path.joinpath(f"{name}_sampling_config").with_suffix(".pkl")
         # log_module.info(f"writing file: {save_file.as_posix()}")
         self.sampling.save(save_file.as_posix())
+
+        # write used kernels
+        path_kernels = path.joinpath("kernels").absolute()
+        path_kernels.mkdir(exist_ok=True, parents=True)
+
+        for k, v in self.kernel_pulses_slice_select.items():
+            v.save(path_kernels.joinpath(k).with_suffix(".pkl"))
 
         # ToDo: write pulse file
         # if not self.config.pulse_file:

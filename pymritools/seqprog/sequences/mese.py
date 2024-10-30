@@ -30,8 +30,10 @@ class MESE(Sequence2D):
             self.block_acquisition.plot(path=self.path_figs, name="fs_acquisition")
 
         # register slice select pulse grad kernels
-        self.kernel_pulses_slice_select = [self.block_excitation, self.block_refocus_1, self.block_refocus]
-
+        self.kernel_pulses_slice_select = {
+            "excitation": self.block_excitation, "refocus_1": self.block_refocus_1,
+            "refocus": self.block_refocus
+        }
     # __ pypsi __
     # sampling + k traj
     def _set_k_trajectories(self):

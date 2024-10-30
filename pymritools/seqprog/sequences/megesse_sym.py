@@ -86,8 +86,9 @@ class MEGESSE(Sequence2D):
             self.block_acquisition_neg_polarity.plot(path=self.path_figs, name="bd-acquisition")
 
         # register all slice select kernel pulse gradients
-        self.kernel_pulses_slice_select = [self.block_excitation, self.block_refocus]
-
+        self.kernel_pulses_slice_select = {
+            "excitation": self.block_excitation, "refocus": self.block_refocus
+        }
         # ToDo:
         # as is now all gesse readouts sample the same phase encode lines as the spin echoes.
         # this would allow joint recon of t2 and t2* contrasts independently
