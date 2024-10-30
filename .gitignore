@@ -84,3 +84,4 @@ cython_debug/
 /src/
 
 /examples/raw_data/rd_file/
+/jupy_nbs/
