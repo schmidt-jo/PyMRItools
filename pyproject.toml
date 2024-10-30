@@ -59,7 +59,8 @@ modeling_mono_exponential_fit = "pymritools.modeling.decay.mexp:main"
 modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search:main"
 # sequence programing
 seqprog_mese = "pymritools.seqprog.sequences.mese:main"
-seqprog_megesse = "pymritools.seqprog.sequences.megesse:main"
+seqprog_megesse_sym = "pymritools.seqprog.sequences.megesse_sym:main"
+seqprog_megesse_asym = "pymritools.seqprog.sequences.megesse_asym:main"
 seqprog_raw_data_to_torch = "pymritools.seqprog.rawdata.rd_read:main"
 # reconstruction
 recon_loraks = "pymritools.recon.loraks.recon:main"
