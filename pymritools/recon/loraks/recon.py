@@ -7,7 +7,7 @@ from pymritools.config.recon import PyLoraksConfig
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.utils import torch_save, torch_load, root_sum_of_squares, nifti_save, fft
 from pymritools.processing.coil_compression import compress_channels
-from pymritools.recon.loraks.algorithm.new_ac_loraks import ac_loraks
+from pymritools.recon.loraks.algorithms import ac_loraks, loraks
 
 log_module = logging.getLogger(__name__)
 
@@ -47,12 +47,11 @@ def load_data(settings: PyLoraksConfig):
     while k_space.shape.__len__() < 5:
         # probably when processing single slice or debugging
         k_space = k_space[..., None]
-    read, phase, sli, ch, t = k_space.shape
 
     return k_space, sampling_pattern, affine
 
 
-def recon(settings: PyLoraksConfig):
+def recon(settings: PyLoraksConfig, mode: str):
     # setup
     log_module.info(f"Set output path: {settings.out_path}")
     path_out = plib.Path(settings.out_path).absolute()
@@ -69,7 +68,7 @@ def recon(settings: PyLoraksConfig):
     else:
         device = torch.device("cpu")
     torch.manual_seed(0)
-    
+
     # load data
     k_space, sampling_mask, affine = load_data(settings=settings)
 
@@ -81,28 +80,36 @@ def recon(settings: PyLoraksConfig):
         f"coil compression - {settings.coil_compression}")
 
     # set up name
-    loraks_name = f"loraks_k_space_recon_r-{settings.radius}"
-    if settings.c_lambda > 1e-6:
+    loraks_name = f"loraks_{mode}_k_space_recon_r-{settings.radius}"
+    if settings.c_lambda > 1e-6 and mode != "loraks":
         loraks_name = f"{loraks_name}_lc-{settings.c_lambda:.3f}_rank-c-{settings.c_rank}"
     if settings.s_lambda > 1e-6:
         loraks_name = f"{loraks_name}_ls-{settings.s_lambda:.3f}_rank-s-{settings.s_rank}"
     loraks_name = loraks_name.replace(".", "p")
 
-    # recon sos and phase coil combination
-
-    loraks_recon = ac_loraks(
-        k_space_x_y_z_ch_t=k_space, sampling_mask_x_y_t=sampling_mask,
-        radius=settings.radius,
-        rank_c=settings.c_rank, lambda_c=settings.c_lambda,
-        rank_s=settings.s_rank, lambda_s=settings.s_lambda,
-        max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
-        batch_size_echoes=settings.batch_size,
-        device=device
-    )
-
-    # get k-space
-    # loraks_recon = solver.get_k_space()
-    # ToDo implement (aspire) phase reconstruction
+    if mode == "ac-loraks":
+        loraks_recon = ac_loraks(
+            k_space_x_y_z_ch_t=k_space, sampling_mask_x_y_t=sampling_mask,
+            radius=settings.radius,
+            rank_c=settings.c_rank, lambda_c=settings.c_lambda,
+            rank_s=settings.s_rank, lambda_s=settings.s_lambda,
+            max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
+            batch_size_echoes=settings.batch_size,
+            device=device
+        )
+    elif mode == "loraks":
+        loraks_recon = loraks(
+            k_space_x_y_z_ch_t=k_space, sampling_mask_x_y_t=sampling_mask,
+            radius=settings.radius,
+            rank=settings.s_rank, lam=settings.s_lambda,
+            max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
+            batch_size_echoes=settings.batch_size,
+            device=device
+        )
+    else:
+        err = f"Mode {mode} not recognized or implemented."
+        log_module.error(err)
+        raise ValueError(err)
 
     if settings.process_slice:
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
@@ -139,21 +146,37 @@ def recon(settings: PyLoraksConfig):
     nifti_save(data=loraks_phase, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_phase")
 
 
-def main():
+def recon_ac_loraks():
     # setup  logging
-    setup_program_logging(name="PyLoraks", level=logging.INFO)
+    setup_program_logging(name="AC Loraks", level=logging.INFO)
     # setup parser
-    parser, args = setup_parser(prog_name="PyLoraks", dict_config_dataclasses={"settings": PyLoraksConfig})
+    parser, args = setup_parser(prog_name="AC Loraks", dict_config_dataclasses={"settings": PyLoraksConfig})
     # get cli args
     settings = PyLoraksConfig.from_cli(args=args.settings, parser=parser)
     settings.display()
 
     try:
-        recon(settings=settings)
+        recon(settings=settings, mode="ac-loraks")
+    except Exception as e:
+        logging.exception(e)
+        parser.print_help()
+
+
+def recon_loraks():
+    # setup  logging
+    setup_program_logging(name="Loraks", level=logging.INFO)
+    # setup parser
+    parser, args = setup_parser(prog_name="Loraks", dict_config_dataclasses={"settings": PyLoraksConfig})
+    # get cli args
+    settings = PyLoraksConfig.from_cli(args=args.settings, parser=parser)
+    settings.display()
+
+    try:
+        recon(settings=settings, mode="loraks")
     except Exception as e:
         logging.exception(e)
         parser.print_help()
 
 
 if __name__ == '__main__':
-    main()
+    recon_loraks()
