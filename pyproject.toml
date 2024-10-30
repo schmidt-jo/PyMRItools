@@ -54,6 +54,7 @@ simulation_emc = "pymritools.simulation.emc.core.simulate:main"
 # processing scripts
 processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
 processing_denoise_mppca = "pymritools.processing.denoising.mppca.denoise:main"
+processing_denoise_mpk = "pymritools.processing.denoising.mppca_k_filter.denoise:main"
 # modeling scripts
 modeling_mono_exponential_fit = "pymritools.modeling.decay.mexp:main"
 modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search:main"

@@ -122,7 +122,10 @@ def matched_filter_noise_removal(
         k_space_lines_read_ph_sli_ch_t = torch.from_numpy(k_space_lines_read_ph_sli_ch_t)
 
     # using gpu - test how much we can put there and how it scales for speed
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if settings.use_gpu and torch.cuda.is_available():
+        device = torch.device(f"cuda:{settings.gpu_device}")
+    else:
+        device = torch.device("cpu")
 
     # get the shapes
     nr, npe, nsl, nch, nt = k_space_lines_read_ph_sli_ch_t.shape
