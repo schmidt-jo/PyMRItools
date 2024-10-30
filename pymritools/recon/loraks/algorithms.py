@@ -115,12 +115,6 @@ def loraks(
         data_consistency = 0.95,
         device: torch.device = torch.get_default_device()):
     # __ One Time Calculations __
-    read_dir = deduce_read_direction(sampling_mask_x_y_t=sampling_mask_x_y_t)
-
-    # move read dir to front
-    k_space_x_y_z_ch_t = torch.movedim(k_space_x_y_z_ch_t, read_dir, 0)
-    sampling_mask_x_y_t = torch.movedim(sampling_mask_x_y_t, read_dir, 0)
-
     # get dimensions
     shape = k_space_x_y_z_ch_t.shape
     n_read, n_phase, n_slice, n_channels, n_echoes = shape
@@ -199,8 +193,7 @@ def loraks(
         bar.postfix = (
             f"loss 1: {loss_1.item():.2f} -- loss 2: {loss_2.item():.2f} -- total_loss: {loss.item():.2f} -- rank: {rank}"
         )
-    # move read dir to back
-    k = torch.movedim(k, 0, read_dir)
+
     return k[:, :, None]
 
 
