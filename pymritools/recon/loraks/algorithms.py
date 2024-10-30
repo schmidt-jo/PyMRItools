@@ -205,7 +205,7 @@ def ac_loraks(
         rank_s: int, lambda_s: float,
         batch_size_channels: int = 16,
         max_num_iter: int = 10, conv_tol: float = 1e-3,
-        visualize: bool = True,
+        visualize: bool = True, path_visuals: str | plib.Path = "",
         device: torch.device = torch.get_default_device()):
     # __ One Time Calculations __
     read_dir = deduce_read_direction(sampling_mask_x_y_t=sampling_mask_x_y_t)
@@ -226,6 +226,8 @@ def ac_loraks(
         shape_2d=(n_read, n_phase), nb_radius=radius, device=torch.device("cpu")
     )
 
+    plot_list = []
+    plot_names =[]
     # check if C matrix is used and calculate + extract ac indices
     if lambda_c > 1e-7:
         c_count_matrix = get_count_matrix(
@@ -233,6 +235,8 @@ def ac_loraks(
         )
         c_ac = sampling_mask_x_y_t[indices[..., 0], indices[..., 1]].to(torch.int)
         c_ac_idxs = torch.sum(c_ac, dim=(1, 2)) == c_ac.shape[1] * c_ac.shape[2]
+        plot_list.append(c_count_matrix)
+        plot_names.append("C")
     else:
         c_count_matrix = 0
         c_ac_idxs = None
@@ -246,6 +250,8 @@ def ac_loraks(
         s_ac_m = torch.flip(sampling_mask_x_y_t, dims=(0, 1))[indices[..., 0], indices[..., 1]].to(torch.int)
         s_ac_idxs = (torch.sum(c_ac, dim=(1, 2)) + torch.sum(s_ac_m, dim=(1, 2))) == c_ac.shape[1] * c_ac.shape[2] * 2
         s_ac_idxs = torch.tile(s_ac_idxs, dims=(2,))
+        plot_list.append(s_count_matrix)
+        plot_names.append("S")
     else:
         s_count_matrix = 0
         s_ac_idxs = None
@@ -254,25 +260,32 @@ def ac_loraks(
 
     if visualize:
         # plot count matrices
-        fig = psub.make_subplots(rows=2, cols=2, subplot_titles=('C', 'S'))
-        for idx_i, i in enumerate([c_count_matrix, s_count_matrix]):
+        fig = psub.make_subplots(rows=2, cols=len(plot_list), subplot_titles=plot_names)
+        for idx_i, i in enumerate(plot_list):
             fig.add_trace(
                 go.Heatmap(z=torch.abs(i)[:, :, 0, 0], showscale=False),
                 row=1, col=1 + idx_i
             )
-        # want to translate the indices into an image
-        c_ones_matrix = get_loraks_matrix_from_ones(shape=(n_read, n_phase, 1, n_echoes), indices=indices, mode="c")
-        c_ones_matrix[~c_ac_idxs] = 0
-        c_ac_img = c_adjoint_operator(c_ones_matrix, indices=indices, k_space_dims=(n_read, n_phase, 1, n_echoes))
-        s_ones_matrix = get_loraks_matrix_from_ones(shape=(n_read, n_phase, 1, n_echoes), indices=indices, mode="s")
-        s_ones_matrix[~s_ac_idxs] = 0
-        s_ac_img = s_adjoint_operator(s_ones_matrix, indices=indices, k_space_dims=(n_read, n_phase, 1, n_echoes))
-        for idx_i, i in enumerate([c_ac_img, s_ac_img]):
+        ac_list = []
+        if "C" in plot_names:
+            # want to translate the indices into an image
+            c_ones_matrix = get_loraks_matrix_from_ones(shape=(n_read, n_phase, 1, n_echoes), indices=indices, mode="c")
+            c_ones_matrix[~c_ac_idxs] = 0
+            c_ac_img = c_adjoint_operator(c_ones_matrix, indices=indices, k_space_dims=(n_read, n_phase, 1, n_echoes))
+            ac_list.append(c_ac_img)
+        if "S" in plot_names:
+            s_ones_matrix = get_loraks_matrix_from_ones(shape=(n_read, n_phase, 1, n_echoes), indices=indices, mode="s")
+            s_ones_matrix[~s_ac_idxs] = 0
+            s_ac_img = s_adjoint_operator(s_ones_matrix, indices=indices, k_space_dims=(n_read, n_phase, 1, n_echoes))
+            ac_list.append(s_ac_img)
+        for idx_i, i in enumerate(ac_list):
             fig.add_trace(
                 go.Heatmap(z=torch.abs(i)[:, :, 0, 0], showscale=False),
                 row=2, col=1 + idx_i
             )
-        fig_name = plib.Path("./examples/recon/loraks").joinpath('count-matrices_ac-region').with_suffix('.html')
+        if not path_visuals:
+            path_visuals = plib.Path("./examples/recon/loraks")
+        fig_name = path_visuals.joinpath('count-matrices_ac-region').with_suffix('.html')
         log_module.info(f"write file: {fig_name}")
         fig.write_html(fig_name.as_posix())
 
