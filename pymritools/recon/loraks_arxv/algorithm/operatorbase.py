@@ -10,7 +10,7 @@ import pathlib as plib
 
 import torch
 
-from pymritools.recon.loraks.algorithm import operators
+from pymritools.recon.loraks_arxv.algorithm import operators
 
 log_module = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class OperatorBase:
                  rank_s: int = 250, rank_c: int = 150, lambda_c: float = 0.0, lambda_s: float = 0.0,
                  channel_batch_size: int = 4,
                  device: torch.device = torch.device("cpu"), fig_path: plib.Path = None, visualize: bool = True):
-        log_module.info(f"config loraks flavor")
+        log_module.info(f"config loraks_arxv flavor")
         # config
         self.device: torch.device = device
         # self.fig_path = plib.Path(opts.output_path).absolute().joinpath("plots")
@@ -42,7 +42,7 @@ class OperatorBase:
 
         # combined b-ch - t dim
         self.dim_t_ch = self.dim_echoes * self.ch_batch_size
-        # loraks params
+        # loraks_arxv params
         self.radius: int = radius
         self.rank_s: int = rank_s
         self.lambda_s: float = lambda_s
@@ -71,7 +71,7 @@ class OperatorBase:
         # we assume here: sampling equal in channels, and readout dir = dim 0
         self.fhd: torch.Tensor = self.k_space_input * self.fhf
 
-        # set iterate - if we would initialize k space with 0 -> loraks terms would give all 0s,
+        # set iterate - if we would initialize k space with 0 -> loraks_arxv terms would give all 0s,
         # and first iterations would just regress to fhd, hence we can init fhd from the get go
         self.k_iter_current: torch.Tensor = self.fhd.clone().detach()
         self.iter_residuals: torch.Tensor = torch.zeros((self.dim_slice, self.max_num_iter))

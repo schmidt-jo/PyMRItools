@@ -4,7 +4,7 @@ import tqdm
 
 import torch
 
-from pymritools.recon.loraks.algorithm import OperatorBase
+from pymritools.recon.loraks_arxv.algorithm import OperatorBase
 from pymritools.utils.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class ACLoraks(OperatorBase):
         # we use data from current slice
         k_space_slice = self.fhd
         if mode in ["c", "C"]:
-            # want sub-matrix of respective loraks matrix with fully populated rows
+            # want sub-matrix of respective loraks_arxv matrix with fully populated rows
             # build X matrix from k-space current slice
             c_matrix = self.op_c.operator(k_space_x_y_ch_t=k_space_slice)
             # take only fully populated rows
@@ -129,7 +129,7 @@ class ACLoraks(OperatorBase):
         v_sub = eig_vecs[:, :rank].to(self.device)
 
         if m_ac_rank < rank:
-            err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
+            err = f"loraks_arxv rank parameter is too large, cant be bigger than ac matrix dimensions."
             log_module.error(err)
             raise ValueError(err)
 
@@ -142,7 +142,7 @@ class ACLoraks(OperatorBase):
             self, f: torch.tensor,
             v_s: torch.tensor = torch.zeros((1, 1)), v_c: torch.tensor = torch.zeros((1, 1))) -> torch.tensor:
         """
-        We define the M_1 matrix from A^H A f and the loraks operator P_x(f) V V^H,
+        We define the M_1 matrix from A^H A f and the loraks_arxv operator P_x(f) V V^H,
         after extracting V from ACS data and getting the P_x based on the Loraks mode used.
         """
         # if input is zero vector -> S and C matrices will be 0 matrices. hence all multiplications will return 0

@@ -8,7 +8,7 @@ import plotly.subplots as psub
 
 from pymritools.utils.phantom import SheppLogan
 from pymritools.utils import fft, root_sum_of_squares, randomized_svd
-from pymritools.recon.loraks.algorithm import operators
+from pymritools.recon.loraks_arxv.algorithm import operators
 
 log_module = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def main():
     log_module.info(f"using device: {device}")
 
     # to check the figures - use accessible path
-    # path_fig = plib.Path("/data/pt_np-jschmidt/data/05_code_dev/loraks")
+    # path_fig = plib.Path("/data/pt_np-jschmidt/data/05_code_dev/loraks_arxv")
     path_fig = plib.Path("/home/patrick/Workspace/PycharmProjects/PyMRItools/results")
     path_fig.mkdir(exist_ok=True, parents=True)
 

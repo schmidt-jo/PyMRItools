@@ -1,4 +1,4 @@
-""" script functions and operators needed for loraks implementation - use torch"""
+""" script functions and operators needed for loraks_arxv implementation - use torch"""
 import logging
 import pathlib as plib
 
@@ -117,7 +117,7 @@ class C(MatrixOperatorLowRank2D):
 
     def _operator(self, k_space_x_y_ch_t: torch.tensor) -> torch.tensor:
         """
-        operator to map k-space vector to loraks c matrix
+        operator to map k-space vector to loraks_arxv c matrix
         :param k_space_x_y_ch_t: k_space vector in 4d
         :return: C matrix, dims [(kx - 2R)*(ky - 2R)
         """
@@ -383,7 +383,7 @@ if __name__ == '__main__':
                 row=r, col=c
             )
 
-    fig_path = plib.Path("./examples/recon/loraks/phantom_recon").absolute().with_suffix(".html")
+    fig_path = plib.Path("./examples/recon/loraks_arxv/phantom_recon").absolute().with_suffix(".html")
 
     logging.info(f"write file: {fig_path}")
     fig.write_html(fig_path.as_posix())
