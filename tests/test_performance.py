@@ -1,17 +1,5 @@
 from .utils import do_performance_test
 import pymritools.utils.matrix_indexing as op_indexing
-import pymritools.recon.loraks.algorithm.opt_operators as loraks_operators
-
-
-def test_c_k_space_pt_idxs_operator_performance():
-    """
-    Test for the C operator of LORAKS
-    :return:
-    """
-    nx = 2048
-    ny = 2048
-    radius = 5
-    do_performance_test(loraks_operators.get_C_k_space_pt_idxs, nx, ny, radius)
 
 ## Test performance of indexing
 
