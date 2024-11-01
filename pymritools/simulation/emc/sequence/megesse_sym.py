@@ -7,7 +7,7 @@ import torch
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
-from .base_sequence import Simulation
+from pymritools.simulation.emc.sequence.base_sequence import Simulation
 from pymritools.simulation.emc.core import functions, GradPulse
 from pymritools.seqprog.core.kernels import Kernel
 
@@ -20,9 +20,14 @@ class MEGESSE(Simulation):
 
     def _prep(self):
         # load kernels
-        path_to_kernels = plib.Path(self.settings.kernel_file).absolute()
-        with open(path_to_kernels.as_posix(), "rb") as f:
+        kernel_file = plib.Path(self.settings.kernel_file).absolute()
+        if not kernel_file.is_file():
+            err = f"Kernel file {kernel_file} does not exist"
+            log_module.error(err)
+            raise FileNotFoundError(err)
+        with open(kernel_file, "rb") as f:
             kernels = pickle.load(f)
+
         if self.settings.visualize:
             for k, v in kernels.items():
                 v.plot(path=self.fig_path, name=k, file_suffix="png")

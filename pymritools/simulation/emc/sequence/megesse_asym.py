@@ -7,7 +7,7 @@ import torch
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.database import DB
 from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
-from .base import Simulation
+from pymritools.simulation.emc.sequence.base_sequence import Simulation
 from pymritools.simulation.emc.core import functions, GradPulse
 
 log_module = logging.getLogger(__name__)
