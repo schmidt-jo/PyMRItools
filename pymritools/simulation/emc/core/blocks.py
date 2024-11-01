@@ -84,12 +84,20 @@ class GradPulse:
         self.data_pulse_y = self.data_pulse_y.to(dtype=torch.float32)
 
     @classmethod
-    def prep_from_pulseq_kernel(cls, kernel: Kernel, name: str, settings: EmcSimSettings,
-                                pulse_number: int = 0, dt_set_sampling_steps_us: int = 5):
+    def prep_from_pulseq_kernel(
+            cls, kernel: Kernel, name: str, b1s: torch.Tensor, settings: EmcSimSettings,
+            flip_angle_rad: float,
+            pulse_number: int = 0, dt_set_sampling_steps_us: int = 5
+    ):
 
+        gamma_pi = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6 * 2 * np.pi
         def convert_gradient(grad: torch.Tensor):
             return 1e-3 / physical_constants["proton gyromag. ratio in MHz/T"][0] * grad
 
+        if settings.use_gpu and torch.cuda.is_available():
+            device = torch.device(f"cuda:{settings.gpu_device}")
+        else:
+            device = torch.device("cpu")
         # we want to extract pulse and slice gradient and interpolate for all time steps,
         # since the kernel object defines gradients only on few points
         # get the pulse data
@@ -105,7 +113,6 @@ class GradPulse:
         pulse_shape = torch.concatenate((torch.zeros(2), pulse_shape), dim=0)
 
         rf_duration_us = kernel.rf.t_duration_s * 1e6
-        dt_sampling_us = rf_duration_us / num_samples
         # interpolate the pulse with given sampling steps (should only 0 pad front if sampling steps are equal)
         # rebuild sampling time array with new sampling steps
         t_end_us = np.max([kernel.rf.get_duration(), kernel.grad_slice.get_duration()]) * 1e6
@@ -113,9 +120,15 @@ class GradPulse:
         pulse_shape = interpolate(t_us, pulse_t_us, pulse_shape)
         pulse_shape[t_us > torch.max(pulse_t_us)] = 0.0
         pulse_t_us = t_us
-        b1s = torch.tensor(settings.b1_list)
+        # normalize pulse shape
+        fa = torch.sum(torch.abs(pulse_shape * gamma_pi)) * dt_set_sampling_steps_us * 1e-6
+        pulse = pulse_shape / torch.linalg.norm(torch.abs(pulse_shape))
+        # calculate fa of this normed shape
+        fa_normed = torch.sum(torch.abs(pulse * gamma_pi)) * dt_set_sampling_steps_us * 1e-6
+        # adjust to actual fa
+        pulse = flip_angle_rad / fa_normed * pulse
 
-        pulse = b1s[:, None] * pulse_shape[None, :]
+        pulse = b1s[:, None] * pulse[None, :].to(b1s.device)
 
         gz_t_us = torch.from_numpy(kernel.grad_slice.t_array_s + kernel.grad_slice.t_delay_s) * 1e6
         gz_amp = convert_gradient(torch.from_numpy(kernel.grad_slice.amplitude))
@@ -124,13 +137,14 @@ class GradPulse:
 
         instance = cls(
             pulse_type=name, pulse_number=pulse_number, num_sampling_points=num_samples,
-            dt_sampling_steps_us=dt_sampling_us,
+            dt_sampling_steps_us=dt_set_sampling_steps_us,
             duration_us=np.max([kernel.rf.t_duration_s, kernel.grad_slice.t_duration_s])
         )
         instance.data_grad = gz_amp
         instance.data_pulse_x = pulse.real
         instance.data_pulse_y = pulse.imag
         instance._set_float32()
+        instance.set_device(device)
         return instance
 
 
@@ -369,8 +383,8 @@ class GradPulse:
 
     def plot(self, b1_vals, fig_path: str | plib.Path):
         plot_gradient_pulse(
-            pulse_x=self.data_pulse_x, pulse_y=self.data_pulse_y,
-            grad_z=self.data_grad, b1_vals=b1_vals,
+            pulse_x=self.data_pulse_x.cpu(), pulse_y=self.data_pulse_y.cpu(),
+            grad_z=self.data_grad.cpu(), b1_vals=b1_vals.cpu(),
             out_path=fig_path,
             name=f"{self.pulse_type}-{self.pulse_number}"
         )

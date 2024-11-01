@@ -45,19 +45,11 @@ class MEGESSE(Simulation):
         self.rf_etl = 4
         self.params.etl = 5 * self.rf_etl + 2
 
-        pulse_file = plib.Path(self.settings.pulse_file).absolute()
-        if not pulse_file.is_file():
-            err = f"Pulse file {pulse_file} does not exist"
-            log_module.error(err)
-            raise FileNotFoundError(err)
-        pulse = RFPulse.load(pulse_file)
-        self.pulse = pulse
-
         # excitation
         k = kernels["excitation"]
         # build grad pulse
         self.gp_excitation = GradPulse.prep_from_pulseq_kernel(
-            kernel=k, name="excitation", settings=self.settings
+            kernel=k, name="excitation", settings=self.settings, b1s=self.data.b1_vals, flip_angle_rad=torch.pi/2,
         )
         # fill params info
         self.params.duration_excitation = k.rf.t_duration_s * 1e6
@@ -67,7 +59,8 @@ class MEGESSE(Simulation):
         k = kernels["refocus"]
         self.gps_refocus = [
             GradPulse.prep_from_pulseq_kernel(
-                kernel=k, name="refocus", pulse_number=rfi, settings=self.settings
+                kernel=k, name="refocus", pulse_number=rfi, settings=self.settings, b1s=self.data.b1_vals,
+                flip_angle_rad=140 / 180 * torch.pi
             ) for rfi in range(self.rf_etl)
         ]
         # fill params info
