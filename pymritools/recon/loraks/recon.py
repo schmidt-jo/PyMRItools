@@ -131,15 +131,17 @@ def recon(settings: PyLoraksConfig, mode: str):
     # for nii we rSoS combine channels
     loraks_recon_mag = root_sum_of_squares(input_data=loraks_recon_img, dim_channel=-2)
 
-    loraks_phase = torch.angle(loraks_recon_img)
-    loraks_phase = torch.mean(loraks_phase, dim=-2)
+    # ToDo Phase combination implementation
+    # loraks_phase = torch.angle(loraks_recon_img)
+    # loraks_phase = torch.mean(loraks_phase, dim=-2)
 
     nii_name = loraks_name.replace("k_space", "image")
     nifti_save(data=loraks_recon_mag, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_mag")
-    nifti_save(data=loraks_phase, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_phase")
+    # nifti_save(data=loraks_phase, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_phase")
 
     # save data as tensors, for further usage of whole data
-    # torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
+    if not settings.process_slice:
+        torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
 
 
 def recon_ac_loraks():
