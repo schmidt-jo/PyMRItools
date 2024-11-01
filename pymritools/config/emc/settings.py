@@ -19,6 +19,10 @@ class SimulationSettings(BaseClass):
         alias="-kernels", default="./examples/simulation/kernels/kernels",
         help="provide file to kernel dict., i.e. named sequence event blocks"
     )
+    te_file: str = field(
+        alias="-te", default="",
+        help="provide list of tes"
+    )
     pulse_file: str = field(
         alias="-pul", default="./examples/simulation/emc/pulse_pypulseq_default_gauss.pkl",
         help="separate pulse file to pulse class object"

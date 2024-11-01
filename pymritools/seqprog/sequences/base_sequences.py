@@ -1,3 +1,4 @@
+import json
 import logging
 import abc
 import pathlib as plib
@@ -298,8 +299,15 @@ class Sequence2D(abc.ABC):
 
         # write used kernels
         save_file = path.joinpath(f"{name}_kernels").with_suffix(".pkl")
+        log_module.info(f"writing file: {save_file.as_posix()}")
         with open(save_file.as_posix(), "wb") as f:
             pickle.dump(self.kernels_to_save, f)
+
+        # tes
+        save_file = path.joinpath(f"{name}_te").with_suffix(".json")
+        log_module.info(f"writing file: {save_file.as_posix()}")
+        with open(save_file.as_posix(), "w") as f:
+            json.dump(self.te, f, indent=2)
 
         # ToDo: write pulse file
         # if not self.config.pulse_file:

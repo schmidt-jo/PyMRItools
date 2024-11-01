@@ -130,6 +130,7 @@ class GradPulse:
         instance.data_grad = gz_amp
         instance.data_pulse_x = pulse.real
         instance.data_pulse_y = pulse.imag
+        instance._set_float32()
         return instance
 
 

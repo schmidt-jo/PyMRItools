@@ -146,7 +146,7 @@ class Simulation(abc.ABC):
             # if settings.signal_fourier_sampling:
             #     sim_obj.plot_signal_traces()
             # plot database
-            db.plot(self.fig_path)
+            db.plot(out_path=self.fig_path)
 
     # def plot_magnetization_profiles(self, animate: bool = True):
     #     # pick middle sim range values
