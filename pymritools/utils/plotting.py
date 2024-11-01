@@ -11,8 +11,8 @@ log_module = logging.getLogger(__name__)
 
 
 def plot_gradient_pulse(
-        pulse_x: torch.tensor, pulse_y: torch.tensor, grad_z: torch.tensor,
-        b1_vals: torch.tensor, out_path: plib.Path | str, name: str):
+        pulse_x: torch.Tensor, pulse_y: torch.Tensor, grad_z: torch.Tensor,
+        b1_vals: torch.Tensor, out_path: plib.Path | str, name: str):
     x_ax = torch.arange(pulse_x.shape[1])
     # calculate complex pulse shape
     p_cplx = pulse_x + 1j * pulse_y
@@ -176,7 +176,7 @@ def plot_emc_sim_data(sim_data: SimulationData, out_path: plib.Path | str, name:
 #     fig.write_html(fig_file.as_posix())
 
 
-def plot_slice_img_tensor(slice_image_tensor: torch.tensor, sim_data: SimulationData,
+def plot_slice_img_tensor(slice_image_tensor: torch.Tensor, sim_data: SimulationData,
                           out_path: plib.Path | str, name: str = ""):
     if name:
         name = f"_{name}"

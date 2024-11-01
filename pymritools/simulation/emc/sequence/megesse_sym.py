@@ -7,9 +7,9 @@ import torch
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
+from pymritools.config.rf import RFPulse
 from pymritools.simulation.emc.sequence.base_sequence import Simulation
 from pymritools.simulation.emc.core import functions, GradPulse
-from pymritools.seqprog.core.kernels import Kernel
 
 log_module = logging.getLogger(__name__)
 
@@ -31,6 +31,52 @@ class MEGESSE(Simulation):
         if self.settings.visualize:
             for k, v in kernels.items():
                 v.plot(path=self.fig_path, name=k, file_suffix="png")
+
+        self.rf_etl = 4
+        self.params.etl = 5 * self.rf_etl + 2
+
+        pulse_file = plib.Path(self.settings.pulse_file).absolute()
+        if not pulse_file.is_file():
+            err = f"Pulse file {pulse_file} does not exist"
+            log_module.error(err)
+            raise FileNotFoundError(err)
+        pulse = RFPulse.load(pulse_file)
+        self.pulse = pulse
+
+        # excitation
+        k = kernels["excitation"]
+        # build grad pulse
+        self.gp_excitation = GradPulse.prep_from_pulseq_kernel(
+            kernel=k, name="excitation", settings=self.settings
+        )
+        # fill params info
+        self.params.duration_excitation = k.rf.t_duration_s * 1e6
+        self.params.duration_excitation_rephase = (k.grad_slice.get_duration() - k.rf.t_delay_s - k.rf.t_duration_s) * 1e6
+
+        # refocus
+        k = kernels["refocus"]
+        self.gps_refocus = [
+            GradPulse.prep_from_pulseq_kernel(
+                kernel=k, name="refocus", pulse_number=rfi, settings=self.settings
+            ) for rfi in range(self.rf_etl)
+        ]
+        # fill params info
+        self.params.duration_refocus = k.rf.t_duration_s * 1e6
+        self.params.duration_crush = (k.grad_slice.get_duration() - k.rf.t_duration_s) * 1e6 / 2
+
+        # extract params from acquisition kernel
+        self.params.acquisition_number = 1
+        self.params.bw = 1 / kernels["acq_bu"].adc.get_duration()
+        self.gp_acquisition = GradPulse.prep_acquisition(params=self.params)
+        # prep sim data due to etl change
+        self.data = SimulationData(params=self.params, settings=self.settings, device=self.device)
+
+        if self.settings.visualize:
+            self.gp_excitation.plot(self.data.b1_vals, fig_path=self.fig_path)
+            self.gps_refocus[0].plot(self.data.b1_vals, fig_path=self.fig_path)
+            self.gps_refocus[1].plot(self.data.b1_vals, fig_path=self.fig_path)
+            self.gp_acquisition.plot(self.data.b1_vals, fig_path=self.fig_path)
+
 
     def _prep_arxv(self):
         """ want to set up gradients and pulses like in the megesse protocol
@@ -81,39 +127,40 @@ class MEGESSE(Simulation):
         # first readout echo time
         t_gre1 = (
                 self.params.duration_excitation / 2 + self.params.duration_excitation_verse_lobes +
-                self.params.duration_excitation_rephase +
-                (self.partial_fourier_gre1 - 0.5) * self.params.duration_acquisition
+                self.params.duration_excitation_rephase + self.params.duration_acquisition / 2
         )
         # first set echo time
         t_gre1_set = self.params.tes[0] * 1e6
         # set var
         self.sequence_timings.register_timing(name="exc_gre1", value_us=t_gre1_set - t_gre1)
+        # gre 2 gre
+        t_e2e = self.params.duration_acquisition
+        t_gre2_set = self.params.tes[1] * 1e6
+        self.sequence_timings.register_timing(name="gre1_gre2", value_us=t_gre2_set - t_gre1_set - t_e2e)
 
         # echo to refocusing
-        t_gre1_ref1 = (
-                self.params.duration_acquisition * 0.5 + self.params.duration_crush +
-                self.params.duration_refocus_verse_lobes + self.params.duration_refocus / 2
+        t_e2ref = (
+            self.params.duration_acquisition * 0.5 + self.params.duration_crush +
+            self.params.duration_refocus_verse_lobes + self.params.duration_refocus / 2
         )
-        # set midpoint gre1 til ref1 is half of se (tes[2]) time minus first echo
-        t_gre1_ref1_set = 1e6 * (self.params.tes[2] / 2 - self.params.tes[0])
+        # set midpoint gre2 til ref1 is half of se (tes[2]) time minus first echo
+        t_gre2_ref1_set = 1e6 * (self.params.tes[2] - self.params.tes[1]) / 2
         # set var
-        self.sequence_timings.register_timing(name="gre1_ref1", value_us=t_gre1_ref1_set - t_gre1_ref1)
+        self.sequence_timings.register_timing(name="gre_ref", value_us=t_gre2_ref1_set - t_e2ref)
 
         # refocusing to gradient readout
-        t_ref1_gre2 = (
+        t_ref1_gre3 = (
                 self.params.duration_refocus / 2 + self.params.duration_refocus_verse_lobes +
                 self.params.duration_crush + self.params.duration_acquisition / 2
         )
-        # set midpoint second gradient echo is tes[1] minus refocusing time (half of spin echo time tes[2])
-        t_ref_gre_set = 1e6 * (self.params.tes[1] - self.params.tes[2] / 2)
-        self.sequence_timings.register_timing(name="ref_gre", value_us=t_ref_gre_set - t_ref1_gre2)
+        # set midpoint third gradient echo is tes[2] minus refocusing time (half of spin echo time tes[2])
+        t_ref_gre_set = 1e6 * (self.params.tes[2] - self.params.tes[1]) / 2
+        self.sequence_timings.register_timing(name="ref_gre", value_us=t_ref_gre_set - t_e2ref)
 
-        # gradient echo 2 to spin echo (two halves of the acquisition duration
-        t_gre2_se = self.params.duration_acquisition
         # set midpoints of echoes subtracted
-        t_gre2_se_set = 1e6 * (self.params.tes[2] - self.params.tes[1])
+        t_e2e_set = 1e6 * (self.params.tes[3] - self.params.tes[2])
         # set var
-        self.sequence_timings.register_timing(name="gre_se", value_us=t_gre2_se_set - t_gre2_se)
+        self.sequence_timings.register_timing(name="gre_se", value_us=t_e2e_set - t_e2e)
 
     def _simulate(self):
         if self.settings.signal_fourier_sampling:

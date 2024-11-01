@@ -3,15 +3,33 @@ Module to Build Pulse-Gradient Blocks, to get and cast data needed for simulatio
 _____
 Jochen Schmidt, 26.09.2024
 """
+import pathlib as plib
+import logging
+
+import torch
+import numpy as np
+from scipy.constants import physical_constants
+
 from pymritools.config.emc import EmcSimSettings, EmcParameters
 from pymritools.config.rf import RFPulse
 from pymritools.simulation.emc.core import functions
+from pymritools.seqprog.core import Kernel
 from pymritools.utils import plot_gradient_pulse
-import pathlib as plib
-import logging
-import torch
-import numpy as np
 log_module = logging.getLogger(__name__)
+
+
+def interpolate(x, xp, fp):
+    indices = torch.searchsorted(xp, x)
+    indices = torch.clamp(indices, 1, xp.shape[0] - 1)
+    # find adjacent left and right points on originally sampled axes xp
+    x0 = xp[indices - 1]
+    x1 = xp[indices]
+    # find values of originally sampled function considering its differing for each idx_a
+    y0 = fp[indices - 1]
+    y1 = fp[indices]
+    # get the slope
+    slope = (y1 - y0) / (x1 - x0)
+    return slope * (x - x0) + y0
 
 
 #ToDo
@@ -64,6 +82,56 @@ class GradPulse:
         self.data_grad = self.data_grad.to(dtype=torch.float32)
         self.data_pulse_x = self.data_pulse_x.to(dtype=torch.float32)
         self.data_pulse_y = self.data_pulse_y.to(dtype=torch.float32)
+
+    @classmethod
+    def prep_from_pulseq_kernel(cls, kernel: Kernel, name: str, settings: EmcSimSettings,
+                                pulse_number: int = 0, dt_set_sampling_steps_us: int = 5):
+
+        def convert_gradient(grad: torch.Tensor):
+            return 1e-3 / physical_constants["proton gyromag. ratio in MHz/T"][0] * grad
+
+        # we want to extract pulse and slice gradient and interpolate for all time steps,
+        # since the kernel object defines gradients only on few points
+        # get the pulse data
+        # insert 2 zeros in case we have delay
+        t_delay_us = torch.linspace(0, kernel.rf.t_delay_s * 1e6 - 1, 2)
+
+        pulse_t_us = torch.concatenate(
+            (t_delay_us, torch.from_numpy(kernel.rf.t_array_s + kernel.rf.t_delay_s) * 1e6), dim=0
+        )
+        pulse_shape = torch.from_numpy(kernel.rf.signal)
+        pulse_shape *= torch.exp(1j * torch.full_like(pulse_shape, kernel.rf.phase_rad))
+        num_samples = pulse_shape.shape[0]
+        pulse_shape = torch.concatenate((torch.zeros(2), pulse_shape), dim=0)
+
+        rf_duration_us = kernel.rf.t_duration_s * 1e6
+        dt_sampling_us = rf_duration_us / num_samples
+        # interpolate the pulse with given sampling steps (should only 0 pad front if sampling steps are equal)
+        # rebuild sampling time array with new sampling steps
+        t_end_us = np.max([kernel.rf.get_duration(), kernel.grad_slice.get_duration()]) * 1e6
+        t_us = torch.arange(0, t_end_us, dt_set_sampling_steps_us)
+        pulse_shape = interpolate(t_us, pulse_t_us, pulse_shape)
+        pulse_shape[t_us > torch.max(pulse_t_us)] = 0.0
+        pulse_t_us = t_us
+        b1s = torch.tensor(settings.b1_list)
+
+        pulse = b1s[:, None] * pulse_shape[None, :]
+
+        gz_t_us = torch.from_numpy(kernel.grad_slice.t_array_s + kernel.grad_slice.t_delay_s) * 1e6
+        gz_amp = convert_gradient(torch.from_numpy(kernel.grad_slice.amplitude))
+
+        gz_amp = interpolate(x=pulse_t_us, xp=gz_t_us, fp=gz_amp)
+
+        instance = cls(
+            pulse_type=name, pulse_number=pulse_number, num_sampling_points=num_samples,
+            dt_sampling_steps_us=dt_sampling_us,
+            duration_us=np.max([kernel.rf.t_duration_s, kernel.grad_slice.t_duration_s])
+        )
+        instance.data_grad = gz_amp
+        instance.data_pulse_x = pulse.real
+        instance.data_pulse_y = pulse.imag
+        return instance
+
 
     @classmethod
     def prep_grad_pulse_excitation(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings):
@@ -283,10 +351,7 @@ class GradPulse:
         grad_pulse = cls(pulse_type='Acquisition', pulse_number=0, num_sampling_points=1,
                          dt_sampling_steps_us=dt_sampling_steps)
         # assign data, we only have one step with a defined gradient size
-        grad_pulse.data_grad = torch.linspace(
-            params.gradient_acquisition,
-            params.gradient_acquisition,
-            1)
+        grad_pulse.data_grad = torch.zeros(1)
         # need to cast to pulse data dim [b1s, num_steps], no rf played while readout
         grad_pulse.data_pulse_x = torch.zeros(1)[None, :]
         grad_pulse.data_pulse_y = torch.zeros(1)[None, :]
