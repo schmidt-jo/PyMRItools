@@ -64,7 +64,8 @@ modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search:ma
 seqprog_mese = "pymritools.seqprog.sequences.mese:main"
 seqprog_megesse_sym = "pymritools.seqprog.sequences.megesse_sym:main"
 seqprog_megesse_asym = "pymritools.seqprog.sequences.megesse_asym:main"
-seqprog_raw_data_to_torch = "pymritools.seqprog.rawdata.rd_read:main"
+seqprog_raw_data_pulseq = "pymritools.seqprog.rawdata.rd_read:pulseq"
+seqprog_raw_data_siemens = "pymritools.seqprog.rawdata.rd_read:siemens"
 # reconstruction
 recon_ac_loraks = "pymritools.recon.loraks.recon:recon_ac_loraks"
 recon_loraks = "pymritools.recon.loraks.recon:recon_loraks"

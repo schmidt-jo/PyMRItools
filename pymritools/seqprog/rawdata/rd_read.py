@@ -6,14 +6,14 @@ import numpy as np
 
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd
+from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd, load_siemens_rd
 from pymritools.utils import torch_save, fft, root_sum_of_squares, nifti_save, HidePrints
 import twixtools
 
 log_module = logging.getLogger(__name__)
 
 
-def rd_to_torch(config: RD):
+def pulseq_rd_to_torch(config: RD):
     # load sampling configuration
     path_to_file = plib.Path(config.input_sample_config).absolute()
     if not path_to_file.exists():
@@ -90,7 +90,7 @@ def rd_to_torch(config: RD):
     torch_save(noise_scans, path_out, "k_noise_scans")
 
 
-def main():
+def pulseq():
     # setup logging
     setup_program_logging(name="Raw Data to torch", level=logging.INFO)
 
@@ -102,11 +102,91 @@ def main():
     rd_config.display()
 
     try:
-        rd_to_torch(config=rd_config)
+        pulseq_rd_to_torch(config=rd_config)
+    except Exception as e:
+        parser.print_help()
+        logging.exception(e)
+
+
+def siemens_rd_to_torch(config: RD):
+    # load data
+    path_to_file = plib.Path(config.input_file).absolute()
+    if not path_to_file.exists():
+        err = f"File {path_to_file.as_posix()} does not exist."
+        log_module.error(err)
+        raise FileNotFoundError(err)
+    log_module.info(f"Loading raw data file: {path_to_file.as_posix()}")
+    if ".dat" not in path_to_file.suffixes:
+        err = "File not recognized as .dat raw data file."
+        log_module.error(err)
+        raise ValueError(err)
+    # ToDo: set device - have to optimize to fit gpu, for now too big
+    # if RD.use_gpu and torch.cuda.is_available():
+    #     device = torch.device(f"cuda:{RD.gpu_device}")
+    # else:
+    device = torch.device("cpu")
+    with HidePrints():
+        twix = twixtools.read_twix(path_to_file.as_posix(), parse_geometry=True, verbose=True, include_scans=-1)[0]
+        # twix_hl = twixtools.map_twix(path_to_file.as_posix())
+    # noise = twix_hl[0]["image"]
+    # data = twix_hl[1]["image"]
+    # refscan = twix_hl[1]["refscan"]
+    # data.flags["remove_os"] = True
+    # refscan.flags["remove_os"] = True
+    #
+    # k_space = data[:].squeeze()
+    # k_space = np.permute_dims(k_space, [1, 2, 4, 3, 0])
+    # k_ref = refscan[:].squeeze()
+    # k_ref = np.permute_dims(k_ref, [1, 2, 4, 3, 0])
+    #
+    # noise_scans = noise[:].squeeze()
+
+    geometry = twix["geometry"]
+    data_mdbs = twix["mdb"]
+    hdr = twix["hdr"]
+    log_module.info("Loading RD")
+    k_space, k_sampling_mask, aff, noise_scans = load_siemens_rd(
+        data_mdbs=data_mdbs, hdr=hdr,
+        geometry=geometry,
+        device=device
+    )
+
+    log_module.info("Saving")
+    # output path
+    path_out = plib.Path(config.out_path).absolute()
+
+    if config.visualize:
+        # transform into image
+        img = fft(k_space, img_to_k=False, axes=(0, 1))
+        # do rSoS
+        img = root_sum_of_squares(img, dim_channel=-2)
+        # nifti save
+        nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
+
+    # save as torch tensor for recon
+    torch_save(k_space, path_out, "k_space")
+    torch_save(aff, path_out, "affine")
+    torch_save(noise_scans, path_out, "k_noise_scans")
+
+
+
+def siemens():
+    # setup logging
+    setup_program_logging(name="Raw Data to torch", level=logging.INFO)
+
+    # setup parser
+    parser, args = setup_parser(prog_name="Raw Data to torch", dict_config_dataclasses={"settings": RD})
+
+    # get config
+    rd_config = RD.from_cli(args=args.settings, parser=parser)
+    rd_config.display()
+
+    try:
+        siemens_rd_to_torch(config=rd_config)
     except Exception as e:
         parser.print_help()
         logging.exception(e)
 
 
 if __name__ == '__main__':
-    main()
+    siemens()

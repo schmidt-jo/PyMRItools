@@ -4,6 +4,7 @@ import torch
 from scipy.spatial.transform import Rotation
 import numpy as np
 import polars as pl
+import tqdm
 
 from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
@@ -323,6 +324,120 @@ def load_pulseq_rd(
     return k_space, k_sampling_mask, aff, noise_scans, echo_numbers_bu, echo_numbers_bd
 
 
-def load_siemens_rd():
-    log_module.error(f"Siemens raw data extraction not yet implemented!")
-    return None, None, None
+def load_siemens_rd(
+        data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, split_read_polarity: bool = True,
+        device: torch.device = torch.device("cpu")):
+    if device != torch.device("cpu") and not torch.cuda.is_available():
+        device = torch.device("cpu")
+    log_module.info(f"setup device")
+
+    log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
+    # remove data not needed, i.e. SYNCDATA acquisitions
+    data_mdbs = [d for d in data_mdbs if "SYNCDATA" not in d.get_active_flags()]
+
+    log_module.debug(f"setup dimension info")
+
+    # find number of coils
+    num_coils = data_mdbs[-1].mdh.UsedChannels
+
+    tes = np.array(hdr["MeasYaps"]["alTE"]) * 1e-6
+    trs = np.array(hdr["MeasYaps"]["alTR"]) * 1e-6
+    fa = np.array(hdr["MeasYaps"]["adFlipAngleDegree"])
+    # get dimensions
+    n_slice = int(hdr["Config"]["NParMeas"])
+    n_phase = int(hdr["Config"]["NLinMeas"])
+    n_read = int(data_mdbs[-1].mdh.SamplesInScan)
+    n_echoes = int(hdr["Config"]["NEcoMeas"])
+    for mdb in tqdm.tqdm(data_mdbs):
+        if mdb.cEco > n_echoes:
+            msg = f"found echo counter extending set number of echoes"
+            log_module.error(msg)
+            raise ValueError(msg)
+        if mdb.cPar > n_slice:
+            msg = f"found slice counter extending set number of slices"
+            log_module.error(msg)
+            raise ValueError(msg)
+        if mdb.cLin > n_phase:
+            msg = f"found phase counter extending set number of phases"
+            log_module.error(msg)
+            raise ValueError(msg)
+    os_factor = 2
+
+    log_module.debug(f"allocate img arrays")
+
+    # build image array
+    # read_dir = None
+    # x is rl, y is pa
+    # if read_dir == "AP":
+    #     transpose_xy = True
+    # else:
+    #     # the pulseq conf class should make sure its only those two options possible
+    #     transpose_xy = False
+
+    # allocate space
+    k_space = np.zeros(
+        (n_read, n_phase, n_slice, num_coils, n_echoes),
+        dtype=complex
+    )
+    noise_scans = []
+
+    for mdb in tqdm.tqdm(data_mdbs, desc="Sorting"):
+        if "NOISEADJSCAN" in mdb.get_active_flags():
+            noise_scans.append(mdb.data)
+            continue
+        else:
+            phase = mdb.cLin
+            slice = mdb.cPar
+            echo = mdb.cEco
+            k_space[:, phase, slice, :, echo] = mdb.data.T
+    # save noise scans separately, used later
+    noise_scans = np.array(noise_scans)
+    k_sampling_mask = (np.abs(k_space) > 1e-9).astype(int)
+    log_module.info("done")
+
+    # decorrelate channels
+    if noise_scans is not None:
+        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
+        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv, optimize=True)
+        noise_scans = np.einsum("imn, lm -> iln", noise_scans, psi_l_inv, optimize=True)
+
+    # remove oversampling, use gpu if set
+    k_space = remove_oversampling(
+        data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+    )
+    k_sampling_mask = k_sampling_mask[::os_factor]
+
+    # fft bandpass filter for oversampling removal not consistent
+    # with undersampled in the 0 filled regions data, remove artifacts
+    # extend mask to full dims
+    k_space *= k_sampling_mask
+
+    # correct gradient directions - at the moment we have reversed z dir
+    k_space = np.flip(k_space, axis=0)
+
+    log_module.info(f"Extract geometry & affine information")
+    # this is very dependent on the geom object from pulseq, can change with different pulseg.dll on scanner,
+    # which defines resolution and matrix sizes
+    # # for affine
+    voxel_dims = np.array(geometry.voxelsize)
+    fov = np.array(geometry.fov)
+
+    # k_space = np.swapaxes(k_space, 0, 1)
+    # fov = fov[[1, 0, 2]]
+    # swap dims if phase dir RL
+    # if transpose_xy:
+    #     k_space = np.swapaxes(k_space, 0, 1)
+    #     k_sampling_mask = np.swapaxes(k_sampling_mask, 0, 1)
+    #     voxel_dims = voxel_dims[[1, 0, 2]]
+    #     fov = fov[[1, 0, 2]]
+
+    # get affine
+    aff = get_affine(
+        geometry,
+        voxel_sizes_mm=voxel_dims,
+        fov_mm=fov,
+        slice_gap_mm=0.0
+    )
+
+    return k_space, k_sampling_mask, aff, noise_scans
+
