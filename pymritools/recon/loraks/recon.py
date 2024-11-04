@@ -16,7 +16,10 @@ def load_data(settings: PyLoraksConfig):
     logging.debug("Load data")
     k_space = torch_load(settings.in_k_space)
     affine = torch_load(settings.in_affine)
-    sampling_pattern = torch.squeeze(torch_load(settings.in_sampling_mask))
+    if settings.in_sampling_mask:
+        sampling_pattern = torch.squeeze(torch_load(settings.in_sampling_mask))
+    else:
+        sampling_pattern = (torch.abs(k_space) > 1e-9)[:, :, 0, 0]
 
     logging.debug(f"For debug reduce dims")
     if settings.debug:

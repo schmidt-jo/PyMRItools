@@ -414,6 +414,7 @@ def load_siemens_rd(
 
     # correct gradient directions - at the moment we have reversed z dir
     k_space = np.flip(k_space, axis=0)
+    k_sampling_mask = np.flip(k_sampling_mask, axis=0)
 
     log_module.info(f"Extract geometry & affine information")
     # this is very dependent on the geom object from pulseq, can change with different pulseg.dll on scanner,
