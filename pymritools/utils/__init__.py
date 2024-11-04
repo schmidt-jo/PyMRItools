@@ -1,4 +1,4 @@
-from .funtions import root_sum_of_squares, fft, gaussian_2d_kernel
+from .funtions import root_sum_of_squares, fft, gaussian_2d_kernel, normalize_data
 from .plotting import plot_gradient_pulse
 from .data_io import nifti_save, nifti_load, numpy_save, numpy_load, torch_save, torch_load, HidePrints
 from .matrix_indexing import (
@@ -12,6 +12,7 @@ from .algorithms import cgd, randomized_svd
 
 __all__ = [
     "root_sum_of_squares", "fft", "gaussian_2d_kernel",
+    "normalize_data",
     "plot_gradient_pulse", "nifti_save", "nifti_load",
     "numpy_save", "numpy_load", "torch_save", "torch_load",
     "HidePrints",

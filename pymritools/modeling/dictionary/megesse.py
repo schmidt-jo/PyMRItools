@@ -1,20 +1,17 @@
 import logging
 import pathlib as plib
 
-import tqdm
 import torch
-import numpy as np
 
-from pymritools.config.emc import EmcFitSettings
-from pymritools.config.emc.settings import FitSettings
-from pymritools.config.database import DB
-from pymritools.utils import nifti_save, nifti_load, normalize_data
 from pymritools.config import setup_program_logging, setup_parser
+from pymritools.config.emc import EmcFitSettings
+from pymritools.config.database import DB
+from pymritools.utils import normalize_data, nifti_load, nifti_save
 
 log_module = logging.getLogger(__name__)
 
 
-def fit(settings: FitSettings):
+def fit(settings: EmcFitSettings):
 
 
     # allocate space, no t1 fit for now, dont put on gpu,
@@ -110,13 +107,12 @@ def fit(settings: FitSettings):
     nifti_save(data=rho_theta_unmasked, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}rho-theta")
     nifti_save(data=pd, img_aff=input_img, path_to_dir=path_out, file_name=f"{name}pd-approx")
 
-
 def main():
     # Setup CLI Program
-    setup_program_logging(name="EMC Dictionary Grid Search", level=logging.INFO)
+    setup_program_logging(name="EMC Dictionary Combined R2 / R2* Search", level=logging.INFO)
     # Setup parser
     parser, prog_args = setup_parser(
-        prog_name="EMC Dictionary Grid Search",
+        prog_name="EMC Dictionary Combined R2 / R2* Search",
         dict_config_dataclasses={"settings": EmcFitSettings}
     )
     # Get settings

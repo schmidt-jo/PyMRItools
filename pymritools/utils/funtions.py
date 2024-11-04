@@ -4,6 +4,16 @@ import logging
 log_module = logging.getLogger(__name__)
 
 
+def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.Tensor):
+    norm_factor = torch.linalg.norm(data, dim=dim_t, keepdim=True)
+    # normalize
+    norm_data = torch.nan_to_num(
+        torch.divide(data, norm_factor),
+        nan=0.0, posinf=0.0, neginf=0.0
+    )
+    return norm_data, torch.squeeze(norm_factor)
+
+
 def fft(
         input_data: np.ndarray | torch.Tensor,
         img_to_k: bool = False, axes: tuple | int = (-1, -2)):
