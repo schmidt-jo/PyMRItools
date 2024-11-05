@@ -4,8 +4,10 @@ minimal SAR while offering maximal SNR.
 """
 import logging
 import pathlib as plib
-import numpy as np
-np.float_ = np.float64
+import sys
+
+path_to_pymritools = plib.Path(__name__).parent.parent.absolute()
+sys.path.append(path_to_pymritools.as_posix())
 
 import torch
 import wandb
@@ -23,15 +25,14 @@ def main():
         datefmt='%I:%M:%S', level=logging.INFO
     )
     # hardcode some of the path and parameters
-    path = plib.Path(
-        "/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/2024-11-05_optimization_testing/mese_vfa/"
-    )
+    path = plib.Path("./optimization/").absolute()
+    path.mkdir(exist_ok=True, parents=True)
     # set some params
     sim_settings = EmcSimSettings(
         out_path=path.joinpath("optim_sim").as_posix(),
-        kernel_file=path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_kernels").with_suffix(".pkl").as_posix(),
-        te_file=path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_te").with_suffix(".json").as_posix(),
-        pulse_file="/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/gauss.json",
+        # kernel_file=path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_kernels").with_suffix(".pkl").as_posix(),
+        # te_file=path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_te").with_suffix(".json").as_posix(),
+        # pulse_file="/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/gauss.json",
         t2_list=[
             [1, 50, 10], [50, 200, 25], [200, 500, 100]
         ],
@@ -39,9 +40,12 @@ def main():
     )
     # sim_settings.display()
 
-    params = EmcParameters.load(
-        "/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/"
-        "2024-11-05_optimization_testing/mese_vfa/emc_params.json"
+    params = EmcParameters(
+        etl=7, esp=7.37, bw=350,
+        duration_excitation=2000, gradient_excitation_rephase=-21.1,
+        duration_excitation_rephase=380,
+        gradient_refocus=-17.17, duration_refocus=2500,
+        gradient_crush=-42.3, duration_crush=1000,
     )
 
     # here we need to plug in the actual FAs
@@ -58,7 +62,7 @@ def main():
     mese.simulate()
 
     # compute losses
-    sar = torch.sqrt(torch.sum(torch.tensor(fas/180*torch.pi)**2))
+    sar = torch.sqrt(torch.sum((torch.tensor(fas) /180*torch.pi)**2))
     snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean()
     # minimize sar, maximize snr, with a minimizing total loss
     loss = sar - snr
