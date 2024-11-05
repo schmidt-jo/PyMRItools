@@ -162,11 +162,13 @@ def siemens_rd_to_torch(config: RD):
         img = root_sum_of_squares(img, dim_channel=-2)
         # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
+        nifti_save(data=k_sampling_mask.astype(float)[:, :, :, 0], img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
 
     # save as torch tensor for recon
     torch_save(k_space, path_out, "k_space")
     torch_save(aff, path_out, "affine")
     torch_save(noise_scans, path_out, "k_noise_scans")
+    torch_save(k_sampling_mask, path_out, "k_sampling_mask")
 
 
 
