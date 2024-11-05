@@ -21,18 +21,21 @@ class MESE(Simulation):
         # prep pulse grad data - this holds the pulse data and timings
         log_module.info('\t - pulse gradient preparation')
         self.gp_excitation = GradPulse.prep_grad_pulse_excitation(
-            pulse=self.pulse, params=self.params, settings=self.settings
+            pulse=self.pulse, params=self.params, settings=self.settings,
+            b1_vals=self.data.b1_vals,
         )
 
         gp_refocus_1 = GradPulse.prep_grad_pulse_refocus(
-            pulse=self.pulse, params=self.params, settings=self.settings, refocus_pulse_number=0
+            pulse=self.pulse, params=self.params, settings=self.settings, refocus_pulse_number=0,
+            b1_vals=self.data.b1_vals,
         )
 
         # built list of grad_pulse events, acquisition and timing
         self.gps_refocus = [gp_refocus_1]
         for r_idx in torch.arange(1, self.params.etl):
             gp_refocus = GradPulse.prep_grad_pulse_refocus(
-                pulse=self.pulse, params=self.params, settings=self.settings, refocus_pulse_number=r_idx
+                pulse=self.pulse, params=self.params, settings=self.settings, refocus_pulse_number=r_idx,
+                b1_vals=self.data.b1_vals,
             )
             self.gps_refocus.append(gp_refocus)
 

@@ -31,10 +31,13 @@ def pulse_calibration_integral(
     if not torch.is_tensor(b1_vals):
         b1_vals = torch.from_numpy(b1_vals)
     # calculate with applied actual flip angle
-    rf_pulse.set_flip_angle(flip_angle_rad=flip_angle_deg / 180 * torch.pi)
-
-    b1_pulse = torch.from_numpy(rf_pulse.amplitude) * torch.exp(
-        1j * (torch.from_numpy(rf_pulse.phase) + phase)
+    rf_pulse.set_flip_angle(flip_angle_rad=flip_angle_deg / 180 * np.pi)
+    # set phase in rad
+    phase_rad = phase / 180 * np.pi
+    rf_amplitude = torch.from_numpy(rf_pulse.amplitude.copy())
+    rf_phase = torch.from_numpy(rf_pulse.phase.copy())
+    b1_pulse = rf_amplitude * torch.exp(
+        1j * (rf_phase + phase_rad)
     )
     b1_pulse_calibrated = b1_pulse[None, :] * b1_vals[:, None]
     return b1_pulse_calibrated

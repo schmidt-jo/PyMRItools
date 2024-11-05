@@ -64,7 +64,7 @@ class RFPulse(Serializable):
         # calculate flip angle
         flip_angle_normalized_shape = np.sum(np.abs(normalized_shape * gamma_pi)) * delta_t_us * 1e-6
         # set to new flip angle
-        self.amplitude = flip_angle_rad / flip_angle_normalized_shape * normalized_shape
+        self.amplitude = np.asarray(flip_angle_rad / flip_angle_normalized_shape * normalized_shape)
 
     @classmethod
     def load_from_txt(cls, f_name: typing.Union[str, plib.Path],

@@ -149,7 +149,9 @@ class GradPulse:
 
 
     @classmethod
-    def prep_grad_pulse_excitation(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings):
+    def prep_grad_pulse_excitation(
+            cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings,
+            b1_vals: torch.Tensor):
         """
         Prepare a slice selective Excitation Gradient Pulse
         :params pulse: RFPulse object / shape to set in the GradPulse object
@@ -166,7 +168,7 @@ class GradPulse:
         rf_pulse = functions.pulse_calibration_integral(
             rf_pulse=pulse,
             flip_angle_deg=params.excitation_angle, phase=params.excitation_phase,
-            b1_vals=settings.b1_list,
+            b1_vals=b1_vals
         )
 
         log_module.debug(f"\t PULSE + GRAD")
@@ -202,8 +204,9 @@ class GradPulse:
         return grad_pulse
 
     @classmethod
-    def prep_grad_pulse_refocus(cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings,
-                                refocus_pulse_number: int, force_sym_spoil: bool = False):
+    def prep_grad_pulse_refocus(
+            cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings, b1_vals:torch.Tensor,
+            refocus_pulse_number: int, force_sym_spoil: bool = False):
         """
         Prepare a slice selective Refocusing Gradient Pulse
         :params pulse: RFPulse object / shape to set in the GradPulse object
@@ -220,7 +223,7 @@ class GradPulse:
         rf_pulse = functions.pulse_calibration_integral(
             rf_pulse=pulse,
             flip_angle_deg=params.refocus_angle[refocus_pulse_number], phase=params.refocus_phase[refocus_pulse_number],
-            b1_vals=settings.b1_list,
+            b1_vals=b1_vals,
         )
 
         log_module.debug(f"\t PULSE + GRAD")

@@ -1,0 +1,29 @@
+program: vfa_mese.py
+name: mese_etl7
+project: mese_pulse_train_optimization
+method: bayes
+metric:
+  goal: minimize
+  name: validation_loss
+parameters:
+  fa_1:
+    min: 60.0
+    max: 140.0
+  fa_2:
+    min: 60.0
+    max: 140.0
+  fa_3:
+    min: 60.0
+    max: 140.0
+  fa_4:
+    min: 60.0
+    max: 140.0
+  fa_5:
+    min: 60.0
+    max: 140.0
+  fa_6:
+    min: 60.0
+    max: 140.0
+  fa_7:
+    min: 60.0
+    max: 140.0
