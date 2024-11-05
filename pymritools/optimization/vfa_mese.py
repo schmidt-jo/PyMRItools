@@ -35,7 +35,8 @@ def main():
         t2_list=[
             [1, 50, 10], [50, 200, 25], [200, 500, 100]
         ],
-        b1_list=[[0.3, 1.7, 0.1]]
+        b1_list=[[0.3, 1.7, 0.1]],
+        visualize=False
     )
     # sim_settings.display()
 
