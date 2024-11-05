@@ -1,10 +1,10 @@
-program: vfa_mese.py
+program: ./pymritools/optimization/vfa_mese.py
 name: mese_etl7
 project: mese_pulse_train_optimization
 method: bayes
 metric:
   goal: minimize
-  name: validation_loss
+  name: loss
 parameters:
   fa_1:
     min: 60.0
