@@ -171,7 +171,9 @@ def load_pulseq_rd(
     num_coils = data_mdbs[-1].mdh.UsedChannels
 
     log_module.debug(f"allocate img arrays")
-    etl = sampling_config.df_sampling_pattern["echo_number"].unique().max() + 1
+    etl = sampling_config.df_sampling_pattern.filter(
+        pl.col("acquisition") != "noise_scan"
+    )["echo_number"].unique().max() + 1
 
     # build image array
     # x is rl, y is pa
