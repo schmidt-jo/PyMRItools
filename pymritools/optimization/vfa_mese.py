@@ -37,25 +37,26 @@ def main():
             [1, 50, 10], [50, 200, 25], [200, 500, 100]
         ],
         b1_list=[[0.3, 1.7, 0.1]],
+        gpu_device=wandb.config.gpud,
         visualize=False
     )
     # sim_settings.display()
 
     params = EmcParameters(
-        etl=7, esp=7.37, bw=350,
-        duration_excitation=2000, gradient_excitation_rephase=-21.1,
+        etl=7, esp=7.37, bw=350, gradient_excitation=-32.21,
+        duration_excitation=2000, gradient_excitation_rephase=-23.324,
         duration_excitation_rephase=380,
-        gradient_refocus=-17.17, duration_refocus=2500,
-        gradient_crush=-42.3, duration_crush=1000,
+        gradient_refocus=-17.179, duration_refocus=2500,
+        gradient_crush=-42.274, duration_crush=1000,
     )
 
     # here we need to plug in the actual FAs
-    fas = [
-        wandb.config.fa_1, wandb.config.fa_2, wandb.config.fa_3,
-        wandb.config.fa_4, wandb.config.fa_5, wandb.config.fa_6,
-        wandb.config.fa_7
-    ]
-    # fas = torch.randint(low=60, high=140, size=(7,))
+    # fas = [
+    #     wandb.config.fa_1, wandb.config.fa_2, wandb.config.fa_3,
+    #     wandb.config.fa_4, wandb.config.fa_5, wandb.config.fa_6,
+    #     wandb.config.fa_7
+    # ]
+    fas = torch.randint(low=60, high=140, size=(7,))
     params.refocus_angle = fas
 
     # build sim object
