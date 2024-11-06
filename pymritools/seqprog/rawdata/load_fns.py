@@ -346,16 +346,17 @@ def load_siemens_rd(
     trs = np.array(hdr["MeasYaps"]["alTR"]) * 1e-6
     fa = np.array(hdr["MeasYaps"]["adFlipAngleDegree"])
     # get dimensions
-    n_slice = int(hdr["Config"]["NParMeas"])
+    n_slice = max(int(hdr["Config"]["NParMeas"]), int(hdr["Config"]["NSlcMeas"]))
     n_phase = int(hdr["Config"]["NLinMeas"])
     n_read = int(data_mdbs[-1].mdh.SamplesInScan)
     n_echoes = int(hdr["Config"]["NEcoMeas"])
+    slice_pos = []
     for mdb in tqdm.tqdm(data_mdbs):
         if mdb.cEco > n_echoes:
             msg = f"found echo counter extending set number of echoes"
             log_module.error(msg)
             raise ValueError(msg)
-        if mdb.cPar > n_slice:
+        if mdb.cPar > n_slice or mdb.cSlc > n_slice:
             msg = f"found slice counter extending set number of slices"
             log_module.error(msg)
             raise ValueError(msg)
@@ -363,6 +364,11 @@ def load_siemens_rd(
             msg = f"found phase counter extending set number of phases"
             log_module.error(msg)
             raise ValueError(msg)
+        if mdb.mdh.SliceData.SlicePos not in slice_pos:
+            slice_pos.append(mdb.mdh.SliceData.SlicePos)
+    slice_pos_array = np.array([[sp.Cor, sp.Sag, sp.Tra] for sp in slice_pos])
+    slice_pos_sort = np.sort(np.sum(slice_pos_array, axis=-1))
+
     os_factor = 2
 
     log_module.debug(f"allocate img arrays")
@@ -389,9 +395,12 @@ def load_siemens_rd(
             continue
         else:
             phase = mdb.cLin
-            slice = mdb.cPar
+            slice_num = max(mdb.cPar, mdb.cSlc)
+            mmss = mdb.mdh.SliceData.SlicePos
+            sli_p = np.sum(np.array([mmss.Sag, mmss.Cor, mmss.Tra]), axis=-1)
+            sli = np.where(slice_pos_sort == sli_p)[0]
             echo = mdb.cEco
-            k_space[:, phase, slice, :, echo] = mdb.data.T
+            k_space[:, phase, sli, :, echo] = mdb.data.T
     # save noise scans separately, used later
     noise_scans = np.array(noise_scans)
     k_sampling_mask = (np.abs(k_space) > 1e-9).astype(int)
@@ -415,8 +424,8 @@ def load_siemens_rd(
     k_space *= k_sampling_mask
 
     # correct gradient directions - at the moment we have reversed z dir
-    k_space = np.flip(k_space, axis=0)
-    k_sampling_mask = np.flip(k_sampling_mask, axis=0)
+    k_space = np.flip(k_space, axis=(0, 1))
+    k_sampling_mask = np.flip(k_sampling_mask, axis=(0, 1))
 
     log_module.info(f"Extract geometry & affine information")
     # this is very dependent on the geom object from pulseq, can change with different pulseg.dll on scanner,
