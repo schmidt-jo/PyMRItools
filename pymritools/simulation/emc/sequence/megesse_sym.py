@@ -49,7 +49,7 @@ class MEGESSE(Simulation):
         k = kernels["excitation"]
         # build grad pulse
         self.gp_excitation = GradPulse.prep_from_pulseq_kernel(
-            kernel=k, name="excitation", settings=self.settings, b1s=self.data.b1_vals, flip_angle_rad=torch.pi/2,
+            kernel=k, name="excitation", device=self.device, b1s=self.data.b1_vals, flip_angle_rad=torch.pi/2,
         )
         # fill params info
         self.params.duration_excitation = k.rf.t_duration_s * 1e6
@@ -59,7 +59,7 @@ class MEGESSE(Simulation):
         k = kernels["refocus"]
         self.gps_refocus = [
             GradPulse.prep_from_pulseq_kernel(
-                kernel=k, name="refocus", pulse_number=rfi, settings=self.settings, b1s=self.data.b1_vals,
+                kernel=k, name="refocus", pulse_number=rfi, device=self.device, b1s=self.data.b1_vals,
                 flip_angle_rad=140 / 180 * torch.pi
             ) for rfi in range(self.rf_etl)
         ]

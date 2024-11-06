@@ -85,8 +85,8 @@ class GradPulse:
 
     @classmethod
     def prep_from_pulseq_kernel(
-            cls, kernel: Kernel, name: str, b1s: torch.Tensor, settings: EmcSimSettings,
-            flip_angle_rad: float,
+            cls, kernel: Kernel, name: str, b1s: torch.Tensor,
+            flip_angle_rad: float, device: torch.device = torch.get_default_device(),
             pulse_number: int = 0, dt_set_sampling_steps_us: int = 5
     ):
 
@@ -94,10 +94,6 @@ class GradPulse:
         def convert_gradient(grad: torch.Tensor):
             return 1e-3 / physical_constants["proton gyromag. ratio in MHz/T"][0] * grad
 
-        if settings.use_gpu and torch.cuda.is_available():
-            device = torch.device(f"cuda:{settings.gpu_device}")
-        else:
-            device = torch.device("cpu")
         # we want to extract pulse and slice gradient and interpolate for all time steps,
         # since the kernel object defines gradients only on few points
         # get the pulse data
@@ -138,7 +134,7 @@ class GradPulse:
         instance = cls(
             pulse_type=name, pulse_number=pulse_number, num_sampling_points=num_samples,
             dt_sampling_steps_us=dt_set_sampling_steps_us,
-            duration_us=np.max([kernel.rf.t_duration_s, kernel.grad_slice.t_duration_s])
+            duration_us=1e6*np.max([kernel.rf.t_duration_s, kernel.grad_slice.t_duration_s])
         )
         instance.data_grad = gz_amp
         instance.data_pulse_x = pulse.real
