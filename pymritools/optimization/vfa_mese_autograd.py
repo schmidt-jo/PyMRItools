@@ -7,9 +7,11 @@ import pathlib as plib
 import pickle
 import json
 
+import polars as pl
 import torch
 import tqdm
 from scipy.constants import physical_constants
+import plotly.graph_objects as go
 
 from pymritools.config.emc import EmcSimSettings, EmcParameters, SimulationData
 from pymritools.simulation.emc.core.blocks import GradPulse
@@ -39,12 +41,12 @@ def main():
     # only fill the needed ones
     params = EmcParameters(
         etl=7, esp=7.37, bw=350,
-        sample_number=1000, length_z=0.005,
+        sample_number=500, length_z=0.005,
         acquisition_number=1
     )
     settings = EmcSimSettings(
-        t2_list=[[10, 100, 2], [100, 1000, 25]],
-        b1_list=[[0.3, 1.7, 0.1]],
+        t2_list=[[10, 100, 25], [100, 1000, 100]],
+        b1_list=[[0.3, 1.7, 0.25]],
     )
     sim_data = SimulationData(
         params=params, settings=settings, device=device
@@ -60,7 +62,7 @@ def main():
     # excitation
     gp_excitation = GradPulse.prep_from_pulseq_kernel(
         kernel=kernels["excitation"], name="excitation", b1s=sim_data.b1_vals, device=device,
-        flip_angle_rad=torch.pi/2
+        flip_angle_rad=torch.pi/2, dt_set_sampling_steps_us=10
     )
     # get the data
     pulse_excitation = gp_excitation.data_pulse_x + 1j * gp_excitation.data_pulse_y
@@ -71,7 +73,7 @@ def main():
     # ref 1
     gp_refocus_1 = GradPulse.prep_from_pulseq_kernel(
         kernel=kernels["refocus_1"], name="refocus_1", b1s=sim_data.b1_vals, device=device,
-        flip_angle_rad=2/3*torch.pi
+        flip_angle_rad=torch.pi, dt_set_sampling_steps_us=10
     )
     # get the data
     pulse_ref1 = gp_refocus_1.data_pulse_x + 1j * gp_refocus_1.data_pulse_y
@@ -82,7 +84,7 @@ def main():
     # refs
     gp_refocus = GradPulse.prep_from_pulseq_kernel(
         kernel=kernels["refocus"], name="refocus", b1s=sim_data.b1_vals, device=device,
-        flip_angle_rad=2/3*torch.pi
+        flip_angle_rad=torch.pi, dt_set_sampling_steps_us=10
     )
     # get the data
     pulse_ref = gp_refocus.data_pulse_x + 1j * gp_refocus.data_pulse_y
@@ -149,6 +151,15 @@ def main():
     p_e_fa_norm_shape = torch.sum(torch.abs(p_e_normalized_shape * gamma_pi), dim=-1) * dt_excitation_us * 1e-6
     pulse_excitation = fa_excitation / p_e_fa_norm_shape[:, None] * sim_data.b1_vals[:, None] * p_e_normalized_shape
 
+    # calculate the excitation already, is unchanged for the sim
+    sim_data_exci = propagate_gradient_pulse_relax(
+        pulse_x=pulse_excitation.real, pulse_y=pulse_excitation.imag, grad=grad_excitation_z,
+        sim_data=sim_data, dt_s=dt_excitation_us*1e-6
+    )
+    # propagate relaxation til ref 1
+    sim_data_exci = propagate_matrix_mag_vector(
+        relax_exc_ref1, sim_data=sim_data_exci
+    )
 
     # here we plug the actual flip angles
     fas = torch.randint(low=60, high=140, size=(7,)).to(torch.float64) / 180.0
@@ -166,9 +177,14 @@ def main():
     pulse_ref = fa_ref / p_ref_fa_norm_shape[:, None] * sim_data.b1_vals[:, None] * p_ref_normalized_shape
 
     logging.info(f"Start optimization")
+    # here we plug the actual flip angles
+    fas = torch.randint(low=60, high=140, size=(7,)).to(torch.float64) / 180.0
+    # and make them a factor - if we normalize the pulses to fa pi = 180 degrees, we can just multiply with fas
+    fas.requires_grad_(True)
+
     # iterate
     losses = []
-    max_num_iter = 10
+    max_num_iter = 100
     bar = tqdm.trange(max_num_iter)
     for _ in bar:
         sim_data = SimulationData(
@@ -184,9 +200,9 @@ def main():
             relax_exc_ref1, sim_data=sim_data_exci
         )
         # do ref 1
-        pulse_ref1 *= fas[0]
+        pulse_r1 = pulse_ref1.clone() * fas[0]
         sim_data = propagate_gradient_pulse_relax(
-            pulse_x=pulse_ref1.real, pulse_y=pulse_ref1.imag, grad=grad_ref1_z,
+            pulse_x=pulse_r1.real, pulse_y=pulse_r1.imag, grad=grad_ref1_z,
             sim_data=sim_data_exci, dt_s=dt_ref1_us*1e-6
         )
         # relax delay
@@ -203,7 +219,7 @@ def main():
             sim_data = propagate_matrix_mag_vector(
                 propagation_matrix=relax_ref_acq, sim_data=sim_data
             )
-            pulse = pulse_ref * fas[idx_rf]
+            pulse = pulse_ref.clone() * fas[idx_rf]
             # do rf
             sim_data = propagate_gradient_pulse_relax(
                 pulse_x=pulse.real, pulse_y=pulse.imag, grad=grad_ref_z,
@@ -222,20 +238,40 @@ def main():
 
         # compute losses
         sar = torch.sqrt(torch.sum(torch.pi * fas**2))
-        snr = torch.linalg.norm(sim_data.signal_mag, dim=-1).flatten().mean()
+        snr = 10 * torch.linalg.norm(sim_data.signal_mag, dim=-1).flatten().sum() / sim_data.total_num_sim
         # minimize sar, maximize snr, with a minimizing total loss
         loss = sar - snr
         loss.backward()
         with torch.no_grad():
-            fas -= fas.grad * 0.4
+            fas.data.sub_(.1*fas.grad.data)
 
         fas.grad.zero_()
-        # optim.step()
-        # optim.zero_grad()
-        pr = {"loss": loss.item(), "sar": sar.item(), "snr": snr.item(), "fas": fas.detach().clone().tolist()}
+        pr = {
+            "loss": f"{loss.item():.4f}", "sar": f"{sar.item():.4f}", "snr": f"{snr.item():.4f}",
+        }
+        for i, f in enumerate(fas):
+            pr.__setitem__(f"f_{i+1}", f"{f*180:.1f}")
         bar.postfix = pr
         losses.append(pr)
-
+    losses = pl.DataFrame(losses)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            y=losses["snr"], name="snr"
+        )
+    )
+    fig.add_trace(
+        go.Scattergl(
+            y=losses["sar"], name="snr"
+        )
+    )
+    fig.add_trace(
+        go.Scattergl(
+            y=losses["loss"], name="snr"
+        )
+    )
+    path_fig = plib.Path("/data/pt_np-jschmidt/data/03_sequence_dev/mese_pulse_train_optimization/optimization/")
+    fig.write_html(path_fig.joinpath("optimization_losses").with_suffix(".html").as_posix())
 
 
 if __name__ == '__main__':

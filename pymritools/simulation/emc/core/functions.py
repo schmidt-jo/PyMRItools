@@ -39,7 +39,7 @@ def pulse_calibration_integral(
     b1_pulse = rf_amplitude * torch.exp(
         1j * (rf_phase + phase_rad)
     )
-    b1_pulse_calibrated = b1_pulse[None, :] * b1_vals[:, None]
+    b1_pulse_calibrated = b1_pulse[None, :].to(b1_vals.device) * b1_vals[:, None]
     return b1_pulse_calibrated
 
 
