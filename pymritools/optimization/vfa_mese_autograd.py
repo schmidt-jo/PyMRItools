@@ -34,7 +34,7 @@ def main():
 
     # hardcode some of the path and parameters
     path = plib.Path(
-        "/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/2024-11-05_optimization_testing/mese_vfa/"
+        "/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/2024-11-06_mese_megesse/mese_acc-4_min_spoil/"
     )
     gamma_pi = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6 * 2 * torch.pi
 
@@ -54,7 +54,7 @@ def main():
 
     # get blocks from kernel files
     with open(
-            path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_kernels").with_suffix(".pkl").as_posix(), "rb"
+            path.joinpath("mese_v1p0_acc-4p0_res-0p70-0p70-0p70_kernels").with_suffix(".pkl").as_posix(), "rb"
     ) as j_file:
         kernels = pickle.load(j_file)
 
@@ -94,7 +94,7 @@ def main():
 
     # get tes
     with open(
-        path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_te").with_suffix(".json").as_posix(), "r"
+        path.joinpath("mese_v1p0_acc-4p0_res-0p70-0p70-0p70_te").with_suffix(".json").as_posix(), "r"
     ) as j_file:
         tes_us = 1e3 * torch.tensor(json.load(j_file))
 
@@ -161,10 +161,7 @@ def main():
         relax_exc_ref1, sim_data=sim_data_exci
     )
 
-    # here we plug the actual flip angles
-    fas = torch.randint(low=60, high=140, size=(7,)).to(torch.float64) / 180.0
     # and make them a factor - if we normalize the pulses to fa pi = 180 degrees, we can just multiply with fas
-    fas = fas.clone().requires_grad_(True)
     # normalize the shapes s.th. we only need to multiply with fa
     fa_ref1 = torch.pi
     p_ref1_normalized_shape = pulse_ref1 / torch.linalg.norm(torch.abs(pulse_ref1), dim=-1, keepdim=True)
@@ -178,15 +175,25 @@ def main():
 
     logging.info(f"Start optimization")
     # here we plug the actual flip angles
-    fas = torch.randint(low=60, high=140, size=(7,)).to(torch.float64) / 180.0
+    fa_1 = torch.full((1,), 140.0/180.0, requires_grad=True, device=device)
+    fa_2 = torch.full((1,), 140.0/180.0, requires_grad=True, device=device)
+    fa_3 = torch.full((1,), 140.0/180.0, requires_grad=True, device=device)
+    fa_4 = torch.full((1,), 140.0/180.0, requires_grad=True, device=device)
+    fa_5 = torch.full((1,), 140.0/180.0, requires_grad=True, device=device)
+    fa_6 = torch.full((1,), 140.0/180.0, requires_grad=True, device=device)
+    fa_7 = torch.full((1,), 140.0/180.0, requires_grad=True, device=device)
+    fas = torch.full((7,), 140.0/180.0)
+    last_fas = fas.clone()
     # and make them a factor - if we normalize the pulses to fa pi = 180 degrees, we can just multiply with fas
-    fas.requires_grad_(True)
 
     # iterate
     losses = []
     max_num_iter = 100
+    conv_count = 0
     bar = tqdm.trange(max_num_iter)
-    for _ in bar:
+    for idx in bar:
+        l_rate = 0.05 if idx < 10 else 0.01
+
         sim_data = SimulationData(
             params=params, settings=settings, device=device
         )
@@ -200,7 +207,7 @@ def main():
             relax_exc_ref1, sim_data=sim_data_exci
         )
         # do ref 1
-        pulse_r1 = pulse_ref1.clone() * fas[0]
+        pulse_r1 = pulse_ref1.clone() * fa_1
         sim_data = propagate_gradient_pulse_relax(
             pulse_x=pulse_r1.real, pulse_y=pulse_r1.imag, grad=grad_ref1_z,
             sim_data=sim_data_exci, dt_s=dt_ref1_us*1e-6
@@ -219,7 +226,19 @@ def main():
             sim_data = propagate_matrix_mag_vector(
                 propagation_matrix=relax_ref_acq, sim_data=sim_data
             )
-            pulse = pulse_ref.clone() * fas[idx_rf]
+            if idx_rf == 1:
+                fa = fa_2
+            elif idx_rf == 2:
+                fa = fa_3
+            elif idx_rf == 3:
+                fa = fa_4
+            elif idx_rf == 4:
+                fa = fa_5
+            elif idx_rf == 5:
+                fa = fa_6
+            elif idx_rf == 6:
+                fa = fa_7
+            pulse = pulse_ref.clone() * fa
             # do rf
             sim_data = propagate_gradient_pulse_relax(
                 pulse_x=pulse.real, pulse_y=pulse.imag, grad=grad_ref_z,
@@ -237,22 +256,51 @@ def main():
             )
 
         # compute losses
-        sar = torch.sqrt(torch.sum(torch.pi * fas**2))
-        snr = 10 * torch.linalg.norm(sim_data.signal_mag, dim=-1).flatten().sum() / sim_data.total_num_sim
+        sar = torch.sqrt(
+            (torch.pi * fa_1)**2 + (torch.pi * fa_2)**2 + (torch.pi * fa_3)**2 +
+            (torch.pi * fa_4)**2 + (torch.pi * fa_5)**2 + (torch.pi * fa_6)**2 + (torch.pi * fa_7)**2
+        )
+        snr = torch.linalg.norm(sim_data.signal_mag, dim=-1).flatten().sum() / sim_data.total_num_sim
         # minimize sar, maximize snr, with a minimizing total loss
-        loss = sar - snr
+        loss = sar - 20 * snr
         loss.backward()
         with torch.no_grad():
-            fas.data.sub_(.1*fas.grad.data)
+            fa_1.data.sub_(l_rate*fa_1.grad.data)
+            fa_2.data.sub_(l_rate*fa_2.grad.data)
+            fa_3.data.sub_(l_rate*fa_3.grad.data)
+            fa_4.data.sub_(l_rate*fa_4.grad.data)
+            fa_5.data.sub_(l_rate*fa_5.grad.data)
+            fa_6.data.sub_(l_rate*fa_6.grad.data)
+            fa_7.data.sub_(l_rate*fa_7.grad.data)
 
-        fas.grad.zero_()
+        fa_1.grad.zero_()
+        fa_2.grad.zero_()
+        fa_3.grad.zero_()
+        fa_4.grad.zero_()
+        fa_5.grad.zero_()
+        fa_6.grad.zero_()
+        fa_7.grad.zero_()
+        fas = torch.tensor([
+            fa_1.detach().clone(), fa_2.detach().clone(), fa_3.detach().clone(), fa_4.detach().clone(),
+            fa_5.detach().clone(), fa_6.detach().clone(), fa_7.detach().clone()
+        ])
+        convergence = torch.linalg.norm(fas - last_fas)
+        last_fas = fas.detach().clone()
+
         pr = {
             "loss": f"{loss.item():.4f}", "sar": f"{sar.item():.4f}", "snr": f"{snr.item():.4f}",
+            "convergence": f"{convergence:.4f}"
         }
         for i, f in enumerate(fas):
             pr.__setitem__(f"f_{i+1}", f"{f*180:.1f}")
         bar.postfix = pr
         losses.append(pr)
+        if convergence < 1e-3:
+            conv_count += 1
+            if conv_count > 3:
+                logging.info(f"reached convergence at iteration {idx}")
+                break
+
     losses = pl.DataFrame(losses)
     fig = go.Figure()
     fig.add_trace(
@@ -262,16 +310,17 @@ def main():
     )
     fig.add_trace(
         go.Scattergl(
-            y=losses["sar"], name="snr"
+            y=losses["sar"], name="sar"
         )
     )
     fig.add_trace(
         go.Scattergl(
-            y=losses["loss"], name="snr"
+            y=losses["loss"], name="loss"
         )
     )
     path_fig = plib.Path("/data/pt_np-jschmidt/data/03_sequence_dev/mese_pulse_train_optimization/optimization/")
     fig.write_html(path_fig.joinpath("optimization_losses").with_suffix(".html").as_posix())
+    losses.write_json(path_fig.joinpath("losses_df").with_suffix(".json").as_posix())
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 program: ./pymritools/optimization/vfa_mese.py
 name: mese_etl7_grid
 project: mese_pulse_train_optimization
-method: grid
+method: random
 metric:
   goal: minimize
   name: loss
