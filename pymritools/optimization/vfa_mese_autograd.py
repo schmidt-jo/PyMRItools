@@ -149,15 +149,6 @@ def main():
     p_e_fa_norm_shape = torch.sum(torch.abs(p_e_normalized_shape * gamma_pi), dim=-1) * dt_excitation_us * 1e-6
     pulse_excitation = fa_excitation / p_e_fa_norm_shape[:, None] * sim_data.b1_vals[:, None] * p_e_normalized_shape
 
-    # calculate the excitation already, is unchanged for the sim
-    sim_data_exci = propagate_gradient_pulse_relax(
-        pulse_x=pulse_excitation.real, pulse_y=pulse_excitation.imag, grad=grad_excitation_z,
-        sim_data=sim_data, dt_s=dt_excitation_us*1e-6
-    )
-    # propagate relaxation til ref 1
-    sim_data_exci = propagate_matrix_mag_vector(
-        relax_exc_ref1, sim_data=sim_data_exci
-    )
 
     # here we plug the actual flip angles
     fas = torch.randint(low=60, high=140, size=(7,)).to(torch.float64) / 180.0
@@ -180,6 +171,18 @@ def main():
     max_num_iter = 10
     bar = tqdm.trange(max_num_iter)
     for _ in bar:
+        sim_data = SimulationData(
+            params=params, settings=settings, device=device
+        )
+        # calculate the excitation already, is unchanged for the sim
+        sim_data_exci = propagate_gradient_pulse_relax(
+            pulse_x=pulse_excitation.real, pulse_y=pulse_excitation.imag, grad=grad_excitation_z,
+            sim_data=sim_data, dt_s=dt_excitation_us*1e-6
+        )
+        # propagate relaxation til ref 1
+        sim_data_exci = propagate_matrix_mag_vector(
+            relax_exc_ref1, sim_data=sim_data_exci
+        )
         # do ref 1
         pulse_ref1 *= fas[0]
         sim_data = propagate_gradient_pulse_relax(
