@@ -1,31 +1,31 @@
 program: ./pymritools/optimization/vfa_mese.py
 name: mese_etl7_grid
 project: mese_pulse_train_optimization
-method: random
+method: bayes
 metric:
   goal: minimize
   name: loss
 parameters:
   fa_1:
-    min: 60
-    max: 140
+    min: 60.0
+    max: 140.0
   fa_2:
-    min: 60
-    max: 140
+    min: 60.0
+    max: 140.0
   fa_3:
-    min: 60
-    max: 140
+    min: 60.0
+    max: 140.0
   fa_4:
-    min: 60
-    max: 140
+    min: 60.0
+    max: 140.0
   fa_5:
-    min: 60
-    max: 140
+    min: 60.0
+    max: 140.0
   fa_6:
-    min: 60
-    max: 140
+    min: 60.0
+    max: 140.0
   fa_7:
-    min: 60
-    max: 140
+    min: 60.0
+    max: 140.0
   gpud:
     value: 1
