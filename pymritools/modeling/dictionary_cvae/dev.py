@@ -68,7 +68,7 @@ class Encoder(nn.Module):
         )
         self.mu = nn.Linear(in_features=2*num_params, out_features=num_params)
         self.log_var = nn.Linear(in_features=2*num_params, out_features=num_params)
-        self.bounds_r2_r2p_b1: torch.Tensor = torch.tensor([50, 30, 1.6])
+
 
     def forward(self, x):
         # insert channels
@@ -76,10 +76,7 @@ class Encoder(nn.Module):
         inp_x = self.encoder(x)
         mu = nn.Sigmoid()(self.mu(inp_x))   # mean bigger 0 up to 1
         log_var = self.log_var(inp_x)
-        # we want to hit the upper bounds
-        mu = mu * self.bounds_r2_r2p_b1[None, :]
-        sigma = (torch.exp(0.5 * log_var) + 1e-9) * self.bounds_r2_r2p_b1[None, :]
-        return mu, sigma
+        return mu, log_var
 
 
 class CVAE(nn.Module):
@@ -87,14 +84,30 @@ class CVAE(nn.Module):
         super().__init__()
         self.encoder = Encoder(etl=etl)
         self.decoder = EMC(etl=etl)
+        self.bounds_r2_r2p_b1: torch.Tensor = torch.tensor([50, 30, 1.6])
+
+
+    @staticmethod
+    def reparametrize(mu, log_var):
+        std = torch.exp(0.5 * log_var) + 1e-9
+        eps = torch.randn_like(std)
+        return eps * std + mu
 
     def forward(self, x):
-        params_mu, params_sigma = self.encoder.forward(x)
+        params_mu, params_log_var = self.encoder.forward(x)
         # sample from normal
+        params_draw = self.reparametrize(params_mu, params_log_var)
+        # scale accordingly
         # params_draw = Normal(loc=params_mu, scale=params_sigma).rsample()
-        curves = self.decoder.forward(params_mu)
+        params_scaled = self.bounds_r2_r2p_b1[None, :] * params_draw
+        curves = self.decoder.forward(params_scaled)
         return curves
 
+    def predict(self, x):
+        params_mu, params_log_var = self.encoder.forward(x)
+
+        params_scaled = params_mu * self.bounds_r2_r2p_b1[None, :]
+        return params_scaled
 
 def main():
     logging.basicConfig(
@@ -129,7 +142,7 @@ def main():
     logging.info("train")
 
     cvae = CVAE(etl=etl)
-    optim = Adam(params=cvae.parameters(), lr=1e-2)
+    optim = Adam(params=cvae.parameters(), lr=1e-3)
     batch_size = 50000
     max_num_iter = 500
     losses = []
@@ -144,15 +157,14 @@ def main():
         curves /= torch.linalg.norm(curves, dim=-1, keepdim=True)
 
         predicted_curves = cvae.forward(curves)
-        normed_curves = predicted_curves / torch.linalg.norm(predicted_curves, dim=-1, keepdim=True)
-        loss = nn.MSELoss()(curves, normed_curves)
+        loss = nn.MSELoss()(curves, predicted_curves)
         loss.backward()
 
         optim.step()
         optim.zero_grad()
 
         if i % 20 == 0:
-            bar.postfix(f"loss: {loss.item():.5f}  [{i:d}/{max_num_iter}]")
+            bar.postfix = f"loss: {loss.item():.5f}  [{i:d}/{max_num_iter}]"
         losses.append(loss.item())
     fig = go.Figure()
     fig.add_trace(
@@ -176,9 +188,7 @@ def main():
     curves /= torch.linalg.norm(curves, dim=-1, keepdim=True)
 
     # the prediction is only done by encoder of cvae
-    mu, sigma = cvae.encoder.forward(curves)
-    mu = mu.detach()
-    sigma = sigma.detach()
+    mu = cvae.predict(curves).detach()
 
     # plot
     names = ["r2", "r2p", "b1"]
@@ -193,14 +203,14 @@ def main():
         for idx_p in range(3):
             fig.add_trace(
                 go.Scattergl(
-                    y=[0, 1], x=[x[idx_s, idx_p], x[idx_s, idx_p]], name=names[idx_p], showlegend=False,
+                    y=[0, 1], x=[x[idx_s, idx_p], x[idx_s, idx_p]], name='set', showlegend=False,
                     line=dict(color=colors[0])
                 ),
                 row=idx_s+1, col=1 + idx_p
             )
             fig.add_trace(
                 go.Scattergl(
-                    y=[0, 1], x=[mu[idx_s, idx_p], mu[idx_s, idx_p]], name=names[idx_p], showlegend=False,
+                    y=[0, 1], x=[mu[idx_s, idx_p], mu[idx_s, idx_p]], name="predict", showlegend=False,
                     line=dict(color=colors[1])
                 ),
                 row=idx_s+1, col=1 + idx_p
