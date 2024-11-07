@@ -70,14 +70,15 @@ def denoise(settings: DenoiseSettingsMPK):
     # move read dim back
     filtered_k = torch.movedim(filtered_k, 0, read_dir)
 
+    p_name = plib.Path(settings.in_k_space).absolute().stem
     # save
     if settings.visualize:
         # do quick naive fft rsos recon
         img = fft(filtered_k, img_to_k=False, axes=(0, 1))
         img = root_sum_of_squares(img, dim_channel=-2)
-        nifti_save(img, img_aff=affine, path_to_dir=settings.out_path, file_name="filt_naive_rsos_recon")
+        nifti_save(img, img_aff=affine, path_to_dir=settings.out_path, file_name=f"filt_mpk_{p_name}_naive_rsos_recon")
 
-    torch_save(filtered_k, path_to_file=path_out, file_name='filtered_k-space')
+    torch_save(filtered_k, path_to_file=path_out, file_name=f'filt_mpk_{p_name}')
 
 
 def main():
