@@ -117,67 +117,71 @@ def main():
     r2_bounds = 50.0
     s0_bounds = 100.0
     emc = EMC(etl=etl, device=device)
-    # decoder = Decoder(etl=etl)
-    # params = decoder.forward(sig)
-    # print(params)
-    logging.info("train")
 
-    cvae = CVAE(etl=etl, num_params=2, device=device)
-    # enc = Encoder(etl=8, num_params=2, device=device)
-    batch_size = 100000
-    max_num_iter = 5000
     # create a bunch of curves
+    batch_size = 100000
+
     r2_s0_b = torch.tensor([r2_bounds, s0_bounds]).to(device)[None, :]
     x = torch.rand((batch_size, 2), device=device) * r2_s0_b
     curves = emc.forward(x)
+
+    # decoder = Decoder(etl=etl)
+    # params = decoder.forward(sig)
+    # print(params)
+
+    logging.info("train cvae")
+
+    cvae = CVAE(etl=etl, num_params=2, device=device)
+    # enc = Encoder(etl=8, num_params=2, device=device)
+    max_num_iter = 5000
     losses = []
     bar = tqdm.trange(max_num_iter)
-
-    logging.info(cvae)
-    optim = Adam(params=cvae.parameters(), lr=1e-3, weight_decay=1e-5)
-
-    for i in bar:
-        predicted_curves, predicted_params, predicted_params_log_var = cvae.forward(curves)
-
-        loss_curves = torch.linalg.norm(curves - predicted_curves, dim=-1)
-        loss_curves = torch.mean(loss_curves)
-
-        # loss_params = nn.MSELoss()(predicted_params, x)
-        # loss_params = torch.clamp(
-        #     torch.tensor([i], device=device) / 1000, 0, 1
-        loss_dist = nn.GaussianNLLLoss(eps=1e-9)(predicted_params, x, torch.exp(predicted_params_log_var))
-        # loss_kl = - 0.5 * torch.mean(1 + enc_log_var - torch.square(enc_mu) - torch.exp(enc_log_var))
-        loss = loss_curves + loss_dist
-        loss.backward()
-
-        optim.step()
-        optim.zero_grad()
-        # f = torch.linspace(20,0.05, max_num_iter)
-        # with torch.no_grad():
-        #     r2_s0.sub_(100*r2_s0.grad)
-
-        # r2_s0.grad.zero_()
-
-        if i > 50 and i % 20 == 0:
-            bar.postfix = (
-                f"loss: {loss.item():.5f} :: loss curves: {loss_curves.item():.5f} :: "
-                f"loss params: {loss_dist.item():.5f} :: [{i:d}/{max_num_iter}]"
-            )
-        losses.append(loss.detach().item())
-        if i > 500 and loss.item() > 1e5 or torch.isnan(loss):
-            logging.error("training fault (nans or exploding loss).")
-            raise ValueError("training fault (nans or exploding loss).")
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scattergl(y=losses)
-    )
-    fig_path = plib.Path(__name__).parent.absolute()
-    file_name = fig_path.joinpath("test_losses").with_suffix(".html")
-    print(f"write file: {file_name}")
-    fig.write_html(file_name.as_posix())
-
-    logging.info("predict")
-    # create some parameter sets
+    #
+    # logging.info(cvae)
+    # optim = Adam(params=cvae.parameters(), lr=1e-3, weight_decay=1e-5)
+    #
+    # for i in bar:
+    #     predicted_curves, predicted_params, predicted_params_log_var = cvae.forward(curves)
+    #
+    #     loss_curves = torch.linalg.norm(curves - predicted_curves, dim=-1)
+    #     loss_curves = torch.mean(loss_curves)
+    #
+    #     # loss_params = nn.MSELoss()(predicted_params, x)
+    #     # loss_params = torch.clamp(
+    #     #     torch.tensor([i], device=device) / 1000, 0, 1
+    #     loss_dist = nn.GaussianNLLLoss(eps=1e-9)(predicted_params, x, torch.exp(predicted_params_log_var))
+    #     # loss_kl = - 0.5 * torch.mean(1 + enc_log_var - torch.square(enc_mu) - torch.exp(enc_log_var))
+    #     loss = loss_curves + loss_dist
+    #     loss.backward()
+    #
+    #     optim.step()
+    #     optim.zero_grad()
+    #     # f = torch.linspace(20,0.05, max_num_iter)
+    #     # with torch.no_grad():
+    #     #     r2_s0.sub_(100*r2_s0.grad)
+    #
+    #     # r2_s0.grad.zero_()
+    #
+    #     if i > 50 and i % 20 == 0:
+    #         bar.postfix = (
+    #             f"loss: {loss.item():.5f} :: loss curves: {loss_curves.item():.5f} :: "
+    #             f"loss params: {loss_dist.item():.5f} :: [{i:d}/{max_num_iter}]"
+    #         )
+    #     losses.append(loss.detach().item())
+    #     if i > 500 and loss.item() > 1e5 or torch.isnan(loss):
+    #         logging.error("training fault (nans or exploding loss).")
+    #         raise ValueError("training fault (nans or exploding loss).")
+    # fig = go.Figure()
+    # fig.add_trace(
+    #     go.Scattergl(y=losses)
+    # )
+    # fig_path = plib.Path(__name__).parent.absolute()
+    # file_name = fig_path.joinpath("test_losses").with_suffix(".html")
+    # print(f"write file: {file_name}")
+    # fig.write_html(file_name.as_posix())
+    #
+    # logging.info("predict")
+    # # create some parameter sets
     num_sets = 5
     x = torch.zeros((num_sets, 2), device=device)
     x[:, 0] = torch.rand(size=(num_sets,), device=device) * r2_bounds
@@ -186,7 +190,30 @@ def main():
     curves = emc.forward(x)
 
     # the prediction is only done by encoder of cvae
-    params, log_var = cvae.predict(curves)
+    # params, log_var = cvae.predict(curves)
+
+    logging.info("train emc")
+    params_bp = torch.full_like(x, 0.5, device=device) * r2_s0_b
+    params_bp.requires_grad_(True)
+    num_iter = 1000
+    factor = np.linspace(0.5, 0.01, num_iter)
+    bar = tqdm.trange(num_iter)
+    for i in bar:
+        sig = emc.forward(params_bp)
+        loss = torch.linalg.norm(sig - curves, dim=-1)
+        loss = torch.sum(loss)
+
+        loss.backward()
+
+        with torch.no_grad():
+            params_bp.sub_(params_bp.grad * 0.1)
+
+        params_bp.grad.zero_()
+
+        logging.info(f"loss: {loss.item():.5f} :: [{i:d}/{num_iter}]")
+
+    rmse = torch.sqrt(torch.mean((params_bp - x) ** 2))
+    logging.info(f"rmse: {rmse.item():.5f}")
 
     # plot
     names = ["r2", "s0", "b1"]
@@ -199,35 +226,43 @@ def main():
 
     x = x.detach().cpu()
     # mu = mu.detach().cpu()
-    sigma = torch.exp(log_var).detach().cpu()
-    r2_s0 = params.detach().cpu()
+    # sigma = torch.exp(log_var).detach().cpu()
+    # r2_s0 = params.detach().cpu()
     for idx_s in range(num_sets):
         for idx_p in range(2):
             val = x[idx_s, idx_p].item()
             fig.add_trace(
                 go.Bar(
                     y=[0, 1, 0], x=[val-2, val, val+2], name='set', showlegend=False,
-                    marker=dict(color=colors[0])
+                    marker=dict(color=colors[0]), width=1
                 ),
                 row=idx_s+1, col=1 + idx_p
             )
-            val = r2_s0[idx_s, idx_p].item()
+            val = params_bp[idx_s, idx_p].item()
             fig.add_trace(
                 go.Bar(
-                    y=[0, 1, 0], x=[val-2, val, val+2], name="predict", showlegend=False,
-                    marker=dict(color=colors[1])
+                    y=[0, 1, 0], x=[val-2, val, val+2], name='bp', showlegend=False,
+                    marker=dict(color=colors[2]), width=1
                 ),
                 row=idx_s+1, col=1 + idx_p
             )
-            ax = torch.linspace(0, 100, 200)
-            dist = Normal(loc=val, scale=sigma[idx_s, idx_p]).log_prob(ax)
-            dist = torch.exp(dist)
-            dist /= torch.max(dist)
-
-            fig.add_trace(
-                go.Scattergl(x=ax, y=dist, name=f"{names[idx_p]} estimation", line=dict(color=colors[1]), showlegend=False),
-                row=idx_s+1, col=1+idx_p
-            )
+            # val = r2_s0[idx_s, idx_p].item()
+            # fig.add_trace(
+            #     go.Bar(
+            #         y=[0, 1, 0], x=[val-2, val, val+2], name="predict", showlegend=False,
+            #         marker=dict(color=colors[1]), width=1
+            #     ),
+            #     row=idx_s+1, col=1 + idx_p
+            # )
+            # ax = torch.linspace(0, 100, 200)
+            # dist = Normal(loc=val, scale=sigma[idx_s, idx_p]).log_prob(ax)
+            # dist = torch.exp(dist)
+            # dist /= torch.max(dist)
+            #
+            # fig.add_trace(
+            #     go.Scattergl(x=ax, y=dist, name=f"{names[idx_p]} estimation", line=dict(color=colors[1]), showlegend=False),
+            #     row=idx_s+1, col=1+idx_p
+            # )
     fig_path = plib.Path(__name__).parent.absolute()
     file_name = fig_path.joinpath("test_predict").with_suffix(".html")
     print(f"write file: {file_name}")
