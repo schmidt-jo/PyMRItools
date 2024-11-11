@@ -294,7 +294,7 @@ class DE:
                 last_conv_idx = idx
                 conv_counter += 1
             if idx % update_bar == 0:
-                bar.postfix = f"convergence: {convergence:.5f}"
+                bar.postfix = f"convergence: {convergence:.6f}"
         return best_agent
 
 

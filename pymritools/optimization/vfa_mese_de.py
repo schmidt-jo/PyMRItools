@@ -79,7 +79,7 @@ def main():
             sar = torch.sqrt(torch.sum((fa / 180 * torch.pi)**2))
             snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean()
             # minimize sar, maximize snr, with a minimizing total loss
-            losses[idx_fa] = sar - snr
+            losses[idx_fa] = sar - 5 * snr
         losses = torch.reshape(losses, shape[:-1])
         return losses
 
