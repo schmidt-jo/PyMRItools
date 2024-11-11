@@ -7,12 +7,12 @@ path_to_pymritools = plib.Path(__name__).parent.parent.absolute()
 sys.path.append(path_to_pymritools.as_posix())
 
 import torch
-import wandb
 
 from pymritools.config.emc import EmcSimSettings, EmcParameters
 from pymritools.simulation.emc.sequence.mese import MESE
 from pymritools.utils.algorithms import DE
 
+logging.getLogger('emc').setLevel(logging.DEBUG)
 
 def main():
     # setup logging
@@ -33,14 +33,14 @@ def main():
         # te_file=path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_te").with_suffix(".json").as_posix(),
         # pulse_file="/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/gauss.json",
         t2_list=[
-            333.3333333333333, 276.32626188695747, 229.0686090252582,
-            189.89301734278376, 157.41728292229982, 130.49558803896213,
-            108.17807410664028, 89.67732850805452, 74.34060288791818,
-            61.62678270732355, 51.08729549290354, 42.35028418040533,
-            35.107487152265264, 29.10336206708955, 24.126069745024587,
-            20.0, 16.363636363636363, 13.846153846153845, 12.0,
-            10.588235294117647, 9.473684210526315, 8.571428571428573,
-            7.826086956521739, 7.2, 6.666666666666667
+            333.3333333333333,229.0686090252582,
+            189.89301734278376, 130.49558803896213,
+            108.17807410664028, 74.34060288791818,
+            61.62678270732355, 42.35028418040533,
+            35.107487152265264, 24.126069745024587,
+            20.0, 13.846153846153845, 12.0,
+            10.588235294117647, 8.571428571428573,
+            7.826086956521739, 6.666666666666667
         ],
         b1_list=[[0.3, 1.7, 0.1]],
         # gpu_device=wandb.config.gpud,
@@ -54,6 +54,7 @@ def main():
         duration_excitation_rephase=380,
         gradient_refocus=-17.179, duration_refocus=2500,
         gradient_crush=-42.274, duration_crush=1000,
+        sample_number=500
     )
 
     # setup fas
@@ -79,6 +80,7 @@ def main():
         fas = bounds[0] + torch.diff(bounds) * x
         # for each fa compute
         for idx_fa, fa in enumerate(fas):
+            logging.info(f"computing for population: {idx_fa+1} / {de.population_size}")
             params.refocus_angle = fa.tolist()
 
             # build sim object
@@ -86,7 +88,7 @@ def main():
             mese.simulate()
 
             # compute losses
-            sar = torch.sqrt(torch.sum((torch.tensor(fas) / 180 * torch.pi)**2))
+            sar = torch.sqrt(torch.sum((fa / 180 * torch.pi)**2))
             snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean()
             # minimize sar, maximize snr, with a minimizing total loss
             losses[idx_fa] = sar - snr

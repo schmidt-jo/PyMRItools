@@ -267,7 +267,7 @@ class DE:
             better_fitness = fitness_y < fitness_agents
             # update agents
             agents = torch.where(
-                condition=better_fitness.unsqueeze(-1),
+                condition=better_fitness.unsqueeze(-1).to(device=self.device),
                 input=y,
                 other=agents
             )
