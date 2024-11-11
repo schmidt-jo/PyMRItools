@@ -15,7 +15,6 @@ import torch
 
 import plotly.graph_objects as go
 import plotly.subplots as psub
-import plotly.colors as plc
 
 log_module = logging.getLogger(__name__)
 
