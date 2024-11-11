@@ -23,24 +23,15 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # set some R2s
+    r2 = 3 * torch.exp(0.15 * torch.arange(1, 31))
+    t2 = 1e3 / r2
+
     # set some params
     sim_settings = EmcSimSettings(
         out_path=path.joinpath("optim_sim").as_posix(),
-        # kernel_file=path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_kernels").with_suffix(".pkl").as_posix(),
-        # te_file=path.joinpath("mese_v1p0_acc-3p0_res-0p70-0p70-0p70_te").with_suffix(".json").as_posix(),
-        # pulse_file="/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/gauss.json",
-        t2_list=[
-            333.3333333333333,229.0686090252582,
-            189.89301734278376, 130.49558803896213,
-            108.17807410664028, 74.34060288791818,
-            61.62678270732355, 42.35028418040533,
-            35.107487152265264, 24.126069745024587,
-            20.0, 13.846153846153845, 12.0,
-            10.588235294117647, 8.571428571428573,
-            7.826086956521739, 6.666666666666667
-        ],
-        b1_list=[[0.3, 1.7, 0.1]],
-        # gpu_device=wandb.config.gpud,
+        t2_list=t2.tolist(),
+        b1_list=[[0.3, 1.7, 0.05]],
         visualize=False
     )
     # sim_settings.display()
@@ -51,7 +42,7 @@ def main():
         duration_excitation_rephase=380,
         gradient_refocus=-17.179, duration_refocus=2500,
         gradient_crush=-42.274, duration_crush=1000,
-        sample_number=500
+        sample_number=1000
     )
 
     # setup fas
