@@ -222,9 +222,8 @@ class DE:
         # calculate the fitness / loss per agent -> agents should find optimal params
         fitness_agents = self.func(agents)
 
-        # get best agent within population to calculate convergence later
-        agents_min = torch.min(fitness_agents, dim=-1)
-        last_best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
+        # get max loss within population to calculate convergence later
+        last_max_loss = torch.max(fitness_agents, dim=-1)
 
         # start iteration per batch
         conv_counter = 0
@@ -245,7 +244,7 @@ class DE:
                 device=self.device
             )
             r_index = torch.randint(
-                low=0, high=self.data_dim, size=(self.data_dim, self.population_size),
+                low=0, high=self.param_dim, size=(self.data_dim, self.population_size),
                 device=self.device
             ).unsqueeze(-1)
 
@@ -281,9 +280,10 @@ class DE:
             # get best agents within population
             agents_min = torch.min(fitness_agents, dim=-1)
             best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
+            max_loss = torch.max(fitness_agents, dim=-1)
             # calculate convergence as max difference between best agent to last iteration.
-            convergence = torch.max(torch.linalg.norm(best_agent - last_best_agent, dim=-1))
-            last_best_agent = best_agent
+            convergence = torch.linalg.norm(max_loss - last_max_loss, dim=-1)
+            last_max_loss = max_loss
             # ToDo: think about reducing the number of agents to process based on convergence criterion.
             # i.e. exclude converged agents from future iterations
 
