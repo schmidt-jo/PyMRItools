@@ -55,7 +55,7 @@ def pulseq_rd_to_torch(config: RD):
     k_space, k_sampling_mask, aff, noise_scans, echoes_bu, echoes_bd = load_pulseq_rd(
         pulseq_config=pulseq, sampling_config=sampling,
         data_mdbs=data_mdbs, geometry=geometry, hdr=hdr,
-        device=device
+        use_gpu=config.use_gpu, gpu_device=config.gpu_device
     )
 
     log_module.info("Saving")

@@ -157,9 +157,11 @@ def get_affine(
 def load_pulseq_rd(
         pulseq_config: PulseqParameters2D, sampling_config: Sampling,
         data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, split_read_polarity: bool = True,
-        device: torch.device = torch.device("cpu")):
-    if device != torch.device("cpu") and not torch.cuda.is_available():
-        device = torch.device("cpu")
+        use_gpu: bool = True, gpu_device: int = 0):
+    if torch.cuda.is_available() and use_gpu:
+        device = torch.device(f'cuda:{gpu_device}')
+    else:
+        device = torch.device('cpu')
     log_module.info(f"setup device")
 
     log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
@@ -275,17 +277,29 @@ def load_pulseq_rd(
     # # fft bandpass filter for oversampling removal not consistent
     # # with undersampled in the 0 filled regions data, remove artifacts
     # k_space *= k_sampling_mask[:, :, None, None, :]
-
-    # decorrelate channels
     if noise_scans is not None:
-        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv, optimize=True)
-        noise_scans = np.einsum("imn, lm -> iln", noise_scans, psi_l_inv, optimize=True)
+        psi_l_inv = torch.from_numpy(
+            get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
+        ).to(device=device, dtype=torch.complex128)
+        noise_scans = torch.einsum(
+            "imn, lm -> iln",
+            torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex128),
+            psi_l_inv
+        )
+    log_module.info(f"remove oversampling")
 
-    # remove oversampling, use gpu if set
-    k_space = remove_oversampling(
-        data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
-    )
+    k_space_rm_os = np.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
+    # do some batched processing slice wise use gpu if available
+    for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
+        batch_k = torch.from_numpy(k_space[:, :, idx_slice]).to(device=device, dtype=torch.complex128)
+        if noise_scans is not None:
+            batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv)
+        # remove oversampling, use gpu if set
+        batch_rmos = remove_oversampling(
+            data=batch_k, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+        )
+        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu().numpy()
+    k_sampling_mask = k_sampling_mask[::os_factor]
 
     # fft bandpass filter for oversampling removal not consistent
     # with undersampled in the 0 filled regions data, remove artifacts
@@ -384,7 +398,7 @@ def load_siemens_rd(
 
     # allocate space
     k_space = np.zeros(
-        (n_read, n_phase, n_slice, num_coils, n_echoes),
+        (n_read * os_factor, n_phase, n_slice, num_coils, n_echoes),
         dtype=complex
     )
     noise_scans = []
@@ -408,14 +422,23 @@ def load_siemens_rd(
 
     # decorrelate channels
     if noise_scans is not None:
-        psi_l_inv = get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-        k_space = np.einsum("ijkmn, lm -> ijkln", k_space, psi_l_inv, optimize=True)
-        noise_scans = np.einsum("imn, lm -> iln", noise_scans, psi_l_inv, optimize=True)
+        psi_l_inv = torch.from_numpy(
+            get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
+        ).to(device)
+        noise_scans = torch.einsum("imn, lm -> iln", torch.from_numpy(noise_scans).to(device), psi_l_inv)
 
-    # remove oversampling, use gpu if set
-    k_space = remove_oversampling(
-        data=k_space, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
-    )
+    k_space_rm_os = np.zeros((n_read, n_phase, n_slice, num_coils, n_echoes), dtype=k_space.dtype)
+    # do some batched processing slice wise use gpu if available
+    for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
+        batch_k = torch.from_numpy(k_space[:, :, idx_slice]).to(device)
+        if noise_scans is not None:
+            batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv)
+        # remove oversampling, use gpu if set
+        batch_rmos = remove_oversampling(
+            data=batch_k, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+        )
+        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu().numpy()
+
     k_sampling_mask = k_sampling_mask[::os_factor]
 
     # fft bandpass filter for oversampling removal not consistent

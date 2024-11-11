@@ -10,7 +10,7 @@ log_module = logging.getLogger(__name__)
 
 def remove_oversampling(data: np.ndarray | torch.Tensor, data_input_sampled_in_time: bool = True,
                         read_dir: int = 0, os_factor: int = 2):
-    log_module.info(f"remove oversampling")
+    log_module.debug(f"remove oversampling")
     # get read direction dimension
     nx = data.shape[read_dir]
 
