@@ -299,12 +299,11 @@ def load_pulseq_rd(
             data=batch_k, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
         )
         k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu().numpy()
-    k_sampling_mask = k_sampling_mask[::os_factor]
 
     # fft bandpass filter for oversampling removal not consistent
     # with undersampled in the 0 filled regions data, remove artifacts
     # extend mask to full dims
-    k_space *= k_sampling_mask[:, :, None, None, :]
+    k_space = k_space_rm_os * k_sampling_mask[:, :, None, None, :]
 
     # correct gradient directions - at the moment we have reversed z dir
     k_space = np.flip(k_space, axis=2)
