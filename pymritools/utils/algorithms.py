@@ -289,12 +289,12 @@ class DE:
 
             if convergence < self.conv_tol:
                 if conv_counter > 10 and last_conv_idx == idx - 1:
-                    bar.postfix = f"converged at iteration: {idx} :: conv: {convergence:.5f}"
+                    bar.postfix = f"converged at iteration: {idx} :: conv: {convergence:.6f}"
                     break
                 last_conv_idx = idx
                 conv_counter += 1
             if idx % update_bar == 0:
                 bar.postfix = f"convergence: {convergence:.5f}"
-        return best_agent.cpu()
+        return best_agent
 
 

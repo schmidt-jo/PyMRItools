@@ -1,18 +1,15 @@
 import json
 import logging
 import pathlib as plib
-import sys
-
-path_to_pymritools = plib.Path(__name__).parent.parent.absolute()
-sys.path.append(path_to_pymritools.as_posix())
-
 import torch
 
 from pymritools.config.emc import EmcSimSettings, EmcParameters
 from pymritools.simulation.emc.sequence.mese import MESE
 from pymritools.utils.algorithms import DE
 
-logging.getLogger('emc').setLevel(logging.DEBUG)
+logging.getLogger('pymritools.simulation.emc.core').setLevel(logging.WARNING)
+logging.getLogger('pymritools.simulation.emc.sequence.mese').setLevel(logging.WARNING)
+logging.getLogger('pymritools.simulation.emc.sequence.base_sequence').setLevel(logging.WARNING)
 
 def main():
     # setup logging
@@ -104,7 +101,7 @@ def main():
     path = plib.Path(__name__).absolute().parent.joinpath("de_optim_fa").with_suffix(".json")
     logging.info(f"Save file: {path}")
     with open(path, "w") as f:
-        json.dump(optim_fa.tolist(), f)
+        json.dump(optim_fa.cpu().tolist(), f)
 
 
 if __name__ == '__main__':
