@@ -180,3 +180,121 @@ def randomized_svd(
         u_matrix = torch.movedim(v_temp, -1, -2)
 
     return u_matrix, s, vh
+
+
+class DE:
+    """ Differential evolution """
+    def __init__(self, param_dim: int, data_dim: int, population_size: int = 10,
+                 p_crossover: float = 0.9, differential_weight: float = 0.8,
+                 max_num_iter: int = 1000, conv_tol: float = 1e-4,
+                 device: torch.device = torch.get_default_device()):
+        # set parameter dimensions and bounds
+        self.param_dim: int = param_dim
+        self.data_dim: int = data_dim
+
+        # algorithm vars
+        self.device: torch.device = device
+
+        self.population_size: int = population_size
+        self.p_crossover: float = p_crossover
+        self.differential_weight: float = differential_weight
+
+        self.max_num_iter: int = max_num_iter
+        self.conv_tol: float = conv_tol
+
+        # functions
+        self.func = NotImplemented
+        self.func_forward = None
+
+    def set_fitness_function(self, func):
+        """ set function to calculate fitness of agents."""
+        self.func = func
+
+    def optimize(self):
+        """ find minimum of fittness function. """
+        # initialize agents -> parents und 3 random selected per parent a, b and c
+        # batch everything, assume dims [b, num_params]
+        agents = torch.rand(
+            (self.data_dim, self.population_size, self.param_dim),
+            device=self.device
+        )
+
+        # calculate the fitness / loss per agent -> agents should find optimal params
+        fitness_agents = self.func(agents)
+
+        # get best agent within population to calculate convergence later
+        agents_min = torch.min(fitness_agents, dim=-1)
+        last_best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
+
+        # start iteration per batch
+        conv_counter = 0
+        last_conv_idx = 0
+
+        # get batch, push to device
+        bar = tqdm.trange(self.max_num_iter, desc="DE optimization")
+        update_bar = int(self.max_num_iter / 20)
+        for idx in bar:
+            a, b, c = torch.rand(
+                (3, self.data_dim, self.population_size, self.param_dim),
+                device=self.device
+            )
+
+            # create random numbers and indices for each dims
+            r_p = torch.rand(
+                (self.data_dim, self.population_size, self.param_dim),
+                device=self.device
+            )
+            r_index = torch.randint(
+                low=0, high=self.data_dim, size=(self.data_dim, self.population_size),
+                device=self.device
+            ).unsqueeze(-1)
+
+            # select components to mutate
+            mask_crossover = r_p < self.p_crossover
+            mask_indices = torch.arange(self.param_dim, device=self.device)[None, None] == r_index
+            mutation_condition = mask_crossover | mask_indices
+            # calculate new candidates for the condition
+            y = torch.where(
+                condition=mutation_condition,
+                input=a + self.differential_weight * (b - c),
+                other=agents
+            )
+
+            # calculate fitness of new candidates
+            fitness_y = self.func(y)
+
+            # check for improvement and update
+            better_fitness = fitness_y < fitness_agents
+            # update agents
+            agents = torch.where(
+                condition=better_fitness.unsqueeze(-1),
+                input=y,
+                other=agents
+            )
+            # update fitness
+            fitness_agents = torch.where(
+                condition=better_fitness,
+                input=fitness_y,
+                other=fitness_agents
+            )
+
+            # get best agents within population
+            agents_min = torch.min(fitness_agents, dim=-1)
+            best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
+            # calculate convergence as max difference between best agent to last iteration.
+            convergence = torch.max(torch.linalg.norm(best_agent - last_best_agent, dim=-1))
+            last_best_agent = best_agent
+            # ToDo: think about reducing the number of agents to process based on convergence criterion.
+            # i.e. exclude converged agents from future iterations
+
+            if convergence < self.conv_tol:
+                if conv_counter > 10 and last_conv_idx == idx - 1:
+                    bar.postfix = f"converged at iteration: {idx} :: conv: {convergence:.5f}"
+                    break
+                last_conv_idx = idx
+                conv_counter += 1
+            if idx % update_bar == 0:
+                bar.postfix = f"convergence: {convergence:.5f}"
+        return best_agent.cpu()
+
+
