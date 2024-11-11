@@ -50,7 +50,7 @@ def main():
     de = DE(
         param_dim=6,
         data_dim=1,
-        population_size=2,
+        population_size=10,
         p_crossover=0.9,
         differential_weight=0.8,
         max_num_iter=100,
