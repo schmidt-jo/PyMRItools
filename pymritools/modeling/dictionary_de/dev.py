@@ -12,14 +12,12 @@ import pathlib as plib
 import tqdm
 import numpy as np
 import torch
-import torch.nn as nn
-from scipy.fft import ifftshift
-from torch.optim import Adam, SGD
-from torch.distributions import Normal
 
 import plotly.graph_objects as go
 import plotly.subplots as psub
 import plotly.colors as plc
+
+log_module = logging.getLogger(__name__)
 
 
 class EMC:
@@ -39,144 +37,118 @@ class EMC:
 
 
 class DE:
-    def __init__(self, param_dim: int, param_bounds: torch.Tensor, population_size: int = 10,
+    def __init__(self, param_dim: int, data_dim: int, population_size: int = 10,
                  p_crossover: float = 0.9, differential_weight: float = 0.8,
+                 max_num_iter: int = 1000, conv_tol: float = 1e-4,
                  device: torch.device = torch.get_default_device()):
         # set parameter dimensions and bounds
-        self.dim: int = param_dim
-        self.bounds: torch.Tensor = param_bounds
+        self.param_dim: int = param_dim
+        self.data_dim: int = data_dim
 
+        # algorithm vars
         self.device: torch.device = device
-        # set vars
+
         self.population_size: int = population_size
         self.p_crossover: float = p_crossover
         self.differential_weight: float = differential_weight
-        # initialize agents
-        self.agents = torch.rand((self.population_size, self.dim), device=device) * self.bounds[None]
+
+        self.max_num_iter: int = max_num_iter
+        self.conv_tol: float = conv_tol
+
+        # functions
         self.func = NotImplemented
+        self.func_forward = None
 
     def set_fitness_function(self, func):
+        """ set function to calculate fitness of agents."""
         self.func = func
 
-    def optimize(self, y):
-        # initialize agents - parents and 3 random picks per parent a, b and c
-        shape = self.agents.shape
-        curves_agents = emc.forward(torch.reshape(agents, (-1, shape[-1])))
-        curves_agents = torch.reshape(curves_agents, (*shape[:-1], -1))
-        fitness_agents = torch.linalg.norm(curves_agents - curves, dim=-1)
-
-        for idx in tqdm.trange(1000):
-            y = torch.zeros_like(agents)
-            a = torch.rand((population_size, 2), device=device) * r2_s0_b
-            b = torch.rand((population_size, 2), device=device) * r2_s0_b
-            c = torch.rand((population_size, 2), device=device) * r2_s0_b
-            # for each dim pick randomly uniform distributed number and index
-            r_p = torch.rand((population_size, 2), device=device)
-            r_index = torch.randint(low=0, high=2, size=(population_size,), device=device)
-            for idx_p in range(population_size):
-                # check per dim
-                for idx_n in range(2):
-                    if r_index[idx_p] == idx_n or r_p[idx_p, idx_n] < p_crossover:
-                        y[idx_p, idx_n] = a[idx_p, idx_n] + differential_weight * (b[idx_p, idx_n] - c[idx_p, idx_n])
-                    else:
-                        y[idx_p, idx_n] = agents[idx_p, idx_n]
-            curves_y = emc.forward(y)
-            fitness_y = torch.linalg.norm(curves_y - curves, dim=-1)
-
-            for idx_p in range(population_size):
-                if fitness_y[idx_p] < fitness_agents[idx_p]:
-                    agents[idx_p] = y[idx_p]
-                    fitness_agents[idx_p] = fitness_y[idx_p]
-            # print(f"loss agents: {torch.mean(fitness_agents).item():.3f}")
-            idx_min = torch.min(fitness_agents, dim=-1).indices
-            best_agent = agents[idx_min]
-            loss = torch.mean(torch.abs(best_agent - x))
-            if loss.item() < 0.3:
-                print(f"loss to start param: {loss.item():.5f} found candidate")
-                break
-
-
-def ai_vectorized_suggestion():
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    etl = 8
-    emc = EMC(etl=etl, device=device)
-    # Parameter des Algorithmus
-    population_size = 10
-    p_crossover = 0.9
-    differential_weight = 0.8
-    num_dimensions = 2
-
-    bounds_r2_s0 = torch.tensor([80, 200], device=device)
-    batch_dim = 1000
-    x = torch.rand((batch_dim, num_dimensions), device=device) * bounds_r2_s0[None]
-    curves = emc.forward(x)
-    # for now we have a batch dimension and for x the num parameters and for curves the number of echoes
-    # dims: x [b, 2], curves [b, etl]
-
-    # initialize agents -> parents und 3 random selected per parent a, b and c
-    # batch everything
-    agents = torch.rand((batch_dim, population_size, num_dimensions), device=device) * bounds_r2_s0[None, None]
-    shape_agents = agents.shape
-    # calculate the fitness / loss per agent -> agents should find optimal params,
-    # hence we need to calculate the curves for forward model, need to put in correct shape and back
-    curves_agents = torch.reshape(
-        emc.forward(torch.reshape(agents, (-1, num_dimensions))),
-        (batch_dim, population_size, etl)
-    )
-    fitness_agents = torch.linalg.norm(curves_agents - curves[:, None, :], dim=-1)
-
-    num_iter = 3000
-    fig = psub.make_subplots(
-        rows=6, cols=2, shared_xaxes=True, shared_yaxes=True,
-    )
-    plot_count = 0
-    for idx in tqdm.trange(num_iter):
-        a, b, c = torch.rand((3, batch_dim, population_size, num_dimensions), device=device) * bounds_r2_s0[None, None]
-
-        # Zufällig verteilte Zahlen und Indizes pro Dimension und Agent
-        r_p = torch.rand((batch_dim, population_size, num_dimensions), device=device)
-        r_index = torch.randint(low=0, high=num_dimensions, size=(batch_dim, population_size,), device=device).unsqueeze(-1)
-
-        # Vektorisierte Auswahl der zu mutierenden Komponenten
-        mask_crossover = r_p < p_crossover
-        mask_indices = torch.arange(num_dimensions, device=device)[None, None] == r_index
-        mutation_condition = mask_crossover | mask_indices
-        y = torch.where(mutation_condition, a + differential_weight * (b - c), agents)
-
-        curves_y = torch.reshape(
-            emc.forward(torch.reshape(y, (-1, num_dimensions))),
-            (batch_dim, population_size, etl)
+    def optimize(self):
+        """ find minimum of fittness function. """
+        # initialize agents -> parents und 3 random selected per parent a, b and c
+        # batch everything, assume dims [b, num_params]
+        agents = torch.rand(
+            (self.data_dim, self.population_size, self.param_dim),
+            device=self.device
         )
-        fitness_y = torch.linalg.norm(curves_y - curves[:, None, :], dim=-1)
 
-        # Aktualisiere Agenten und Fitnesswerte bei Verbesserung
-        better_fitness = fitness_y < fitness_agents
-        agents = torch.where(better_fitness.unsqueeze(-1), y, agents)
-        fitness_agents = torch.where(better_fitness, fitness_y, fitness_agents)
+        # calculate the fitness / loss per agent -> agents should find optimal params
+        fitness_agents = self.func(agents)
 
-        # Überprüfen des besten Agenten und gegebenenfalls Abbruch
+        # get best agent within population to calculate convergence later
         agents_min = torch.min(fitness_agents, dim=-1)
-        best_agent = agents[torch.arange(batch_dim), agents_min.indices]
-        loss = torch.max(torch.mean(torch.abs(best_agent - x), dim=-1))
+        last_best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
 
-        if loss.item() < 0.3:
-            print(f"Loss to start param: {loss.item():.5f} found candidate")
-            break
+        # start iteration per batch
+        conv_counter = 0
+        last_conv_idx = 0
 
-        if idx in [0, 100, 200, 500, 1000, 2000]:
-            plot_count +=1
-            for idx_c in range(2):
-                fig.add_trace(
-                    go.Scatter(
-                        x=x[:, idx_c].cpu().numpy(), y=best_agent[:, idx_c].cpu().numpy(),
-                        mode="markers"
-                    ),
-                    row=plot_count, col=1+idx_c
-                )
-    print(f"Best candidate: \n{best_agent.tolist()}")
-    print(f"vs x: \n{torch.squeeze(x).tolist()}")
-    fig_name = plib.Path(__name__).absolute().parent.joinpath("de_iterations").with_suffix(".html")
-    fig.write_html(fig_name.as_posix())
+        # get batch, push to device
+        bar = tqdm.trange(self.max_num_iter, desc="DE optimization")
+        update_bar = int(self.max_num_iter / 20)
+        for idx in bar:
+            a, b, c = torch.rand(
+                (3, self.data_dim, self.population_size, self.param_dim),
+                device=self.device
+            )
+
+            # create random numbers and indices for each dims
+            r_p = torch.rand(
+                (self.data_dim, self.population_size, self.param_dim),
+                device=self.device
+            )
+            r_index = torch.randint(
+                low=0, high=self.data_dim, size=(self.data_dim, self.population_size),
+                device=self.device
+            ).unsqueeze(-1)
+
+            # select components to mutate
+            mask_crossover = r_p < self.p_crossover
+            mask_indices = torch.arange(self.param_dim, device=self.device)[None, None] == r_index
+            mutation_condition = mask_crossover | mask_indices
+            # calculate new candidates for the condition
+            y = torch.where(
+                condition=mutation_condition,
+                input=a + self.differential_weight * (b - c),
+                other=agents
+            )
+
+            # calculate fitness of new candidates
+            fitness_y = self.func(y)
+
+            # check for improvement and update
+            better_fitness = fitness_y < fitness_agents
+            # update agents
+            agents = torch.where(
+                condition=better_fitness.unsqueeze(-1),
+                input=y,
+                other=agents
+            )
+            # update fitness
+            fitness_agents = torch.where(
+                condition=better_fitness,
+                input=fitness_y,
+                other=fitness_agents
+            )
+
+            # get best agents within population
+            agents_min = torch.min(fitness_agents, dim=-1)
+            best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
+            # calculate convergence as max difference between best agent to last iteration.
+            convergence = torch.max(torch.linalg.norm(best_agent - last_best_agent, dim=-1))
+            last_best_agent = best_agent
+            # ToDo: think about reducing the number of agents to process based on convergence criterion.
+            # i.e. exclude converged agents from future iterations
+
+            if convergence < self.conv_tol:
+                if conv_counter > 10 and last_conv_idx == idx - 1:
+                    bar.postfix = f"converged at iteration: {idx} :: conv: {convergence:.5f}"
+                    break
+                last_conv_idx = idx
+                conv_counter += 1
+            if idx % update_bar == 0:
+                bar.postfix = f"convergence: {convergence:.5f}"
+        return best_agent.cpu()
 
 
 def main():
@@ -186,69 +158,67 @@ def main():
     )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f"using device : {device}")
-    ai_vectorized_suggestion()
+    bounds = torch.tensor([80, 200], device=device)
+    batch_size = 1000
+    de = DE(
+        param_dim=2,
+        data_dim=batch_size,
+        population_size=10,
+        p_crossover=0.9,
+        differential_weight=0.8,
+        max_num_iter=1000,
+        conv_tol=1e-6,
+        device=device
+    )
+    emc = EMC(etl=8, device=device)
+    # create some params
+    num_params = 10000
+    x = torch.rand((num_params, 2), device=device) * bounds[None]
+    # create some curves
+    curves = emc.forward(x)
 
-    # etl = 8
-    # # check curve creation
-    # r2_bounds = 50.0
-    # s0_bounds = 100.0
-    # emc = EMC(etl=etl, esp_ms=9.0, device=device)
-    #
-    # # create a bunch of curves
-    # num_curves = 1
-    #
-    # r2_s0_b = torch.tensor([r2_bounds, s0_bounds]).to(device)
-    # x = torch.rand((num_curves, 2), device=device) * r2_s0_b
-    # curves = emc.forward(x)
-    #
-    # # de algorithm
-    # population_size = 10
-    # p_crossover = 0.9
-    # differential_weight = 0.8
-    #
-    # # initialize agents - parents and 3 random picks per parent a, b and c
-    # agents = torch.rand((population_size, 2), device=device) * r2_s0_b[None]
-    # shape = agents.shape
-    # curves_agents = emc.forward(torch.reshape(agents, (-1, shape[-1])))
-    # curves_agents = torch.reshape(curves_agents, (*shape[:-1], -1))
-    # fitness_agents = torch.linalg.norm(curves_agents - curves, dim=-1)
-    #
-    # for idx in tqdm.trange(1000):
-    #     y = torch.zeros_like(agents)
-    #     a = torch.rand((population_size, 2), device=device) * r2_s0_b
-    #     b = torch.rand((population_size, 2), device=device) * r2_s0_b
-    #     c = torch.rand((population_size, 2), device=device) * r2_s0_b
-    #     # for each dim pick randomly uniform distributed number and index
-    #     r_p = torch.rand((population_size, 2), device=device)
-    #     r_index = torch.randint(low=0, high=2, size=(population_size,), device=device)
-    #     for idx_p in range(population_size):
-    #         # check per dim
-    #         for idx_n in range(2):
-    #             if r_index[idx_p] == idx_n or r_p[idx_p, idx_n] < p_crossover:
-    #                 y[idx_p, idx_n] = a[idx_p, idx_n] + differential_weight * (b[idx_p, idx_n] - c[idx_p, idx_n])
-    #             else:
-    #                 y[idx_p, idx_n] = agents[idx_p, idx_n]
-    #     curves_y = emc.forward(y)
-    #     fitness_y = torch.linalg.norm(curves_y - curves, dim=-1)
-    #
-    #     for idx_p in range(population_size):
-    #         if fitness_y[idx_p] < fitness_agents[idx_p]:
-    #             agents[idx_p] = y[idx_p]
-    #             fitness_agents[idx_p] = fitness_y[idx_p]
-    #     # print(f"loss agents: {torch.mean(fitness_agents).item():.3f}")
-    #     idx_min = torch.min(fitness_agents, dim=-1).indices
-    #     best_agent = agents[idx_min]
-    #     loss = torch.mean(torch.abs(best_agent - x))
-    #     if loss.item() < 0.3:
-    #         print(f"loss to start param: {loss.item():.5f} found candidate")
-    #         break
-    #
-    # print(f"best candidate: {best_agent.tolist()}, vs x: {torch.squeeze(x).tolist()}")
-    #
-    # # fig_path = plib.Path(__name__).parent.absolute()
-    # # file_name = fig_path.joinpath("test_predict").with_suffix(".html")
-    # # print(f"write file: {file_name}")
-    # # fig.write_html(file_name.as_posix())
+    # allocate
+    fit_params = torch.zeros_like(x)
+    # batch processing
+    num_batches = int(np.ceil(num_params / batch_size))
+    for idx_b in range(num_batches):
+        log_module.info(f"Process batch: {idx_b + 1} / {num_batches}")
+        start = idx_b * batch_size
+        end = np.min([(idx_b + 1) * batch_size, num_params])
+        batch_size = end - start
+
+        # set loss function dependent on the parameter batch
+        b_curves = curves[start:end]
+        def loss_func(x_dim_param):
+            # assume dims [batch, population, params]
+            shape = x_dim_param.shape
+            x_in = torch.reshape(x_dim_param, (-1, shape[-1])) * bounds[None]
+            x_dim_etl = emc.forward(x_in)
+            x_dim_etl = torch.reshape(x_dim_etl, (*shape[:-1], -1))
+            return torch.linalg.norm(b_curves[:, None] - x_dim_etl, dim=-1)
+
+        de.set_fitness_function(loss_func)
+        fit_params[start:end] = de.optimize()
+    # put into correct scale
+    fit_params = fit_params * bounds[None]
+    selection = torch.randint(low=0, high=num_params, size=(20,))
+    gt = x[selection].cpu()
+    fit = fit_params[selection].cpu()
+    log_module.info(f"gold standard params:\n {gt}")
+    log_module.info(f"fit params:\n {fit}")
+
+    fig = psub.make_subplots(rows=2, cols=1)
+    fig.add_trace(
+        go.Scattergl(x=x[:, 0].cpu(), y=fit_params[:, 0].cpu(), mode='markers', name='gold standard'),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scattergl(x=x[:, 1].cpu(), y=fit_params[:, 1].cpu(), mode='markers', name='fit params'),
+        row=2, col=1
+    )
+    fig_path = plib.Path(__name__).absolute().parent.joinpath("de_result").with_suffix(".html")
+    fig.write_html(fig_path.as_posix())
+
 
 if __name__ == '__main__':
     main()
