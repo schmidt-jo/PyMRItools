@@ -38,10 +38,6 @@ class Settings(BaseClass):
         alias="-ps", default=False,
         help="toggle processing of middle slize and not whole volume, eg. for testing LORAKS parameters."
     )
-    flavour: str = field(
-        choices=["AC-LORAKS"], alias="-f", default="AC-LORAKS",
-        help=f"LORAKS flavour. Implementation of different LORAKS variations. (not full availability yet)"
-    )
     radius: int = field(
         alias="-r", default=3,
         help="Loraks neighborhood radius."
@@ -72,9 +68,5 @@ class Settings(BaseClass):
     batch_size: int = field(
         alias="-b", default=4,
         help="Batch size for gpu computation. Reduce if out of memory."
-    )
-    use_wandb: bool = field(
-        alias="-wb", default=False,
-        help="Use wandb logging or optimization features."
     )
     

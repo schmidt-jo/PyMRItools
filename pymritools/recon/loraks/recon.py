@@ -76,7 +76,7 @@ def recon(settings: PyLoraksConfig, mode: str):
     k_space, sampling_mask, affine = load_data(settings=settings)
 
     log_module.info(f"___ Loraks Reconstruction ___")
-    log_module.info(f"{settings.flavour}; Radius - {settings.radius}; ")
+    log_module.info(f"Radius - {settings.radius}; ")
     log_module.info(
         f"Rank C - {settings.c_rank}; Lambda C - {settings.c_lambda}; "
         f"Rank S - {settings.s_rank}; Lambda S - {settings.s_lambda}; "
