@@ -32,7 +32,7 @@ def distribution_mp(
     shape_sig = sigma.shape
     shape_x = x.shape
     shape = (*shape_sig, *shape_x)
-    result = torch.zeros(shape)
+    result = torch.zeros(shape, dtype=x.dtype, device=x.device)
 
     # cast to shape of sigma and x
     sigma = sigma.unsqueeze(-1).expand(*shape_sig, *shape_x)
@@ -165,7 +165,7 @@ def matched_filter_noise_removal(
     # take some percentage bigger than biggest eigenvalue
     noise_s_max = 1.2 * torch.max(s_lam)
     # build some axis for which we calculate the mp - distribution
-    noise_ax = torch.linspace(0, noise_s_max, settings.noise_histogram_depth)
+    noise_ax = torch.linspace(0, noise_s_max, settings.noise_histogram_depth, device=device, dtype=s_lam.dtype)
 
     gamma = m / n
     # get biggest and lowest s to approximate noise characteristics from
@@ -206,7 +206,7 @@ def matched_filter_noise_removal(
         for idx_c, p in enumerate(p_weight):
             fig.add_trace(
                 go.Scattergl(
-                    x=noise_ax, y=p_noise[idx_c],
+                    x=noise_ax.cpu().numpy(), y=p_noise[idx_c].cpu().numpy(),
                     marker=dict(color=colors[idx_c]), name=f"channel-{idx_c + 1}",
                     showlegend=True
                 ),
@@ -214,7 +214,7 @@ def matched_filter_noise_removal(
             )
             fig.add_trace(
                 go.Scattergl(
-                    x=noise_ax, y=p.cpu().numpy(),
+                    x=noise_ax.cpu().numpy(), y=p.cpu().numpy(),
                     marker=dict(color=colors[idx_c]),
                     name=f"weighting function, ch-{idx_c + 1}", showlegend=False
                 ),
@@ -331,7 +331,7 @@ def matched_filter_noise_removal(
                     pc /= torch.max(pc)
                     fig.add_trace(
                         go.Scattergl(
-                            x=noise_ax, y=pc,
+                            x=noise_ax.cpu().numpy(), y=pc.cpu().numpy(),
                             fill="tozeroy", line=dict(color=colors[4], width=2), opacity=0.5,
                             legendgroup=4, showlegend=showlegend,
                             name=f"Noise MP distribution"
@@ -344,17 +344,18 @@ def matched_filter_noise_removal(
                     bin_mid = bins[1:] - torch.diff(bins) / 2
                     fig.add_trace(
                         go.Bar(
-                            x=bin_mid[bin_mid < 50], y=hist[bin_mid < 50], name="histogram of singular values",
+                            x=bin_mid[bin_mid < 50].cpu().numpy(), y=hist[bin_mid < 50].cpu().numpy(),
+                            name="histogram of singular values",
                             marker=dict(color=colors[3]), legendgroup=2, showlegend=showlegend
                         ),
                         row=idx_c + 1, col=2
                     )
                     fig.add_trace(
                         go.Scatter(
-                            x=eigv[eigv < 50],
+                            x=eigv[eigv < 50].cpu().numpy(),
                             y=torch.clamp(
                                 w[eigv < 50] + torch.randn_like(eigv[eigv < 50]) * 0.02 + 0.05, 0, 1
-                            ),
+                            ).cpu().numpy(),
                             name="singular values", mode="markers",
                             marker=dict(color=colors[5]), legendgroup=2, showlegend=showlegend
                         ),

@@ -218,12 +218,13 @@ class DE:
             (self.data_dim, self.population_size, self.param_dim),
             device=self.device
         )
+        ba = []
 
         # calculate the fitness / loss per agent -> agents should find optimal params
         fitness_agents = self.func(agents)
 
         # get max loss within population to calculate convergence later
-        last_max_loss = torch.max(fitness_agents, dim=-1)
+        # last_max_loss = torch.max(fitness_agents, dim=-1).values
 
         # start iteration per batch
         conv_counter = 0
@@ -231,7 +232,7 @@ class DE:
 
         # get batch, push to device
         bar = tqdm.trange(self.max_num_iter, desc="DE optimization")
-        update_bar = int(self.max_num_iter / 20)
+        update_bar = max(int(self.max_num_iter / 20), 1)
         for idx in bar:
             a, b, c = torch.rand(
                 (3, self.data_dim, self.population_size, self.param_dim),
@@ -280,13 +281,12 @@ class DE:
             # get best agents within population
             agents_min = torch.min(fitness_agents, dim=-1)
             best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
-            max_loss = torch.max(fitness_agents, dim=-1)
             # calculate convergence as max difference between best agent to last iteration.
-            convergence = torch.linalg.norm(max_loss - last_max_loss, dim=-1)
-            last_max_loss = max_loss
+            convergence = torch.linalg.norm(torch.max(fitness_agents, dim=-1).values)
             # ToDo: think about reducing the number of agents to process based on convergence criterion.
             # i.e. exclude converged agents from future iterations
 
+            ba.append(best_agent)
             if convergence < self.conv_tol:
                 if conv_counter > 10 and last_conv_idx == idx - 1:
                     bar.postfix = f"converged at iteration: {idx} :: conv: {convergence:.6f}"
@@ -295,6 +295,6 @@ class DE:
                 conv_counter += 1
             if idx % update_bar == 0:
                 bar.postfix = f"convergence: {convergence:.6f}"
-        return best_agent
+        return best_agent, ba
 
 

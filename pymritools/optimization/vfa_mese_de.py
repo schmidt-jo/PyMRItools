@@ -1,7 +1,11 @@
 import json
 import logging
 import pathlib as plib
+
 import torch
+import numpy as np
+import plotly.graph_objects as go
+import plotly.colors as plc
 
 from pymritools.config.emc import EmcSimSettings, EmcParameters
 from pymritools.simulation.emc.sequence.mese import MESE
@@ -85,13 +89,27 @@ def main():
 
     de.set_fitness_function(loss_function)
 
-    optim_fa = de.optimize()
+    optim_fa, progress = de.optimize()
     optim_fa = bounds[0] + torch.diff(bounds) * optim_fa
 
+    path = plib.Path(__name__).absolute().parent
+
+    fig = go.Figure()
+    colors = plc.sample_colorscale("viridis", np.linspace(0, 1, len(progress)))
+    for idx_f, f in enumerate(progress):
+        f = bounds[0] + torch.diff(bounds) * f
+        # result has batch dim, just plot first one
+        fig.add_trace(
+            go.Scattergl(y=f[0].cpu().numpy(), line=dict(width=1), marker=dict(color=colors[idx_f]))
+        )
+    fig_path = path.joinpath("de_progress").with_suffix(".html")
+    logging.info(f"Save file: {fig_path}")
+    fig.write_html(fig_path.as_posix())
+
+    file_path = path.joinpath("de_optim_fa").with_suffix(".json")
     logging.info(f"optimized fa: {optim_fa}")
-    path = plib.Path(__name__).absolute().parent.joinpath("de_optim_fa").with_suffix(".json")
-    logging.info(f"Save file: {path}")
-    with open(path, "w") as f:
+    logging.info(f"Save file: {file_path}")
+    with open(file_path.as_posix(), "w") as f:
         json.dump(optim_fa.cpu().tolist(), f)
 
 
