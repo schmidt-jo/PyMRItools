@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from simple_parsing import field
-from pymritools.config.base import BaseClass
+from pymritools.config import BaseClass
 log_module = logging.getLogger(__name__)
 
 

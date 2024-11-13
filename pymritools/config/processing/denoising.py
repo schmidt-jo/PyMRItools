@@ -1,6 +1,6 @@
 from email.policy import default
 
-from pymritools.config.base import BaseClass
+from pymritools.config import BaseClass
 from dataclasses import dataclass
 import logging
 from simple_parsing import field
