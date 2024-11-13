@@ -3,11 +3,13 @@ estimate a low pass filtered very approximate coil sensitivity map and coil sens
 correlations from k_space or image input.
 Essentially we just divide the individual coils by a rSoS combined image and smooth the output.
 """
+import json
 import logging
 import pathlib as plib
 
 import torch
 import tqdm
+import plotly.graph_objects as go
 
 from pymritools.config.processing.coil_sens import CoilSensConfig
 from pymritools.config import setup_program_logging, setup_parser
@@ -92,6 +94,22 @@ def smap(settings: CoilSensConfig):
         # fill in
         smap[:, :, idx_z] = bd_smap_smoothed.cpu()
 
+    # want to calculate a covariance matrix of the individual coil sensitivities
+    cov = torch.cov(torch.reshape(smap, (-1, smap.shape[-1])).T)
+
+    # plot cov
+    fig = go.Figure()
+    fig.add_trace(
+        go.Heatmap(z=cov.cpu().numpy())
+    )
+    fig_name = path_out.joinpath("smap_cov_plot").with_suffix(".html")
+    log_module.info(f"Saving figure to {fig_name}")
+    fig.write_html(fig_name.as_posix())
+
+    file_path = path_out.joinpath("smap_cov").with_suffix(".json")
+    log_module.info(f"Saving covariance matrix to {file_path}")
+    with open(file_path.as_posix(), "w") as j_file:
+        json.dump(cov, j_file, indent=2)
     # save
     nifti_save(data=smap.to(torch.float32), img_aff=affine, path_to_dir=path_out, file_name="smap")
 
