@@ -85,3 +85,5 @@ cython_debug/
 
 /examples/raw_data/rd_file/
 /jupy_nbs/
+/optimization/
+/dev_sim/
