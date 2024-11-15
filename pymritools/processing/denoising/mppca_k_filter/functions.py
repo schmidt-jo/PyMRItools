@@ -35,7 +35,7 @@ def distribution_mp(
     result = torch.zeros(shape, dtype=x.dtype, device=x.device)
 
     # cast to shape of sigma and x
-    sigma = sigma.unsqueeze(-1).expand(*shape_sig, *shape_x)
+    sigma = sigma.unsqueeze(-1).expand(*shape_sig, *shape_x).to(x.device)
     x = x.unsqueeze(0).expand(*shape_sig, *shape_x)
 
     # calculate lambda boundaries
@@ -51,7 +51,7 @@ def distribution_mp(
             ) / (2 * torch.pi * gamma * x * sigma ** 2)
     )[mask]
     result /= torch.sum(result)
-    return torch.squeeze(result)
+    return result
 
 
 def find_approx_squared_matrix_form(shape_1d: tuple | int):
@@ -248,6 +248,7 @@ def matched_filter_noise_removal(
 
     # allocate output space
     k_space_filt = torch.zeros_like(k_space_lines_read_ph_sli_ch_t)
+    filtered_noise = torch.zeros_like(k_space_lines_read_ph_sli_ch_t)
 
     # batch svd
     num_batches = int(np.ceil(k_space_lines_read_ph_sli_ch_t.shape[0] / settings.batch_size))
@@ -279,11 +280,12 @@ def matched_filter_noise_removal(
         # normalize to previous signal levels - taking maximum of absolute value across channels
         # assign and move off GPU
         k_space_filt[start:end] = signal_filt.cpu()
+        filtered_noise[start:end] = (batch - signal_filt).cpu()
 
         if settings.visualize:
             fig_path = plib.Path(settings.out_path).absolute().joinpath("figs/")
             # pick 2 channels
-            channels = [5, 15]
+            channels = torch.randint(low=0, high=nch, size=(min(2, nch),))
             if idx_b % 100 == 0:
                 # quick visuals for reference
                 # get first line from batch and reshape to actual 1D line - same for filtered line
@@ -375,10 +377,14 @@ def matched_filter_noise_removal(
 
     # reshape - get matrix shuffled line back to an actual 1D line
     k_space_filt = torch.reshape(k_space_filt, (*k_space_filt.shape[:-2], -1))
+    filtered_noise = torch.reshape(filtered_noise, (*k_space_filt.shape[:-2], -1))
     # deflate batch dimensions
     k_space_filt = torch.reshape(k_space_filt, shape)
+    filtered_noise = torch.reshape(filtered_noise, shape)
     # move read dimension back to front
     k_space_filt = torch.swapaxes(k_space_filt, -1, 0)
+    filtered_noise = torch.swapaxes(filtered_noise, -1, 0)
     # remove 0 padding
     k_space_filt = k_space_filt[:nr]
-    return k_space_filt
+    filtered_noise = filtered_noise[:nr]
+    return k_space_filt, filtered_noise
