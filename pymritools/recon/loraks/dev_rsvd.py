@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape
 from pymritools.recon.loraks.operators import s_operator, s_adjoint_operator
-from pymritools.utils.algorithms import randomized_svd
+from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
 
 
 def main():
@@ -43,7 +43,7 @@ def main():
     rank = 400
     logging.info("randomized svd decomposition")
     # using rank as sampling size -> compression right to the truncated rank dimension
-    u_rsvd, s_rsvd, vh_rsvd = randomized_svd(matrix=s_matrix, sampling_size=rank)
+    u_rsvd, s_rsvd, vh_rsvd = subspace_orbit_randomized_svd(matrix=s_matrix, rank=rank)
 
     logging.info("svd decomposition")
     u_svd, s_svd, vh_svd = torch.linalg.svd(s_matrix, full_matrices=False)
