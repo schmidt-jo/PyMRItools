@@ -11,11 +11,15 @@ log_module = logging.getLogger(__name__)
 
 class MEGESSE(Sequence2D):
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
+        # set etl +1 to get different sampling scheme for first two GRE echoes
+        params.etl = params.etl + 1
         # init Base class
         super().__init__(
             config=config, specs=specs, params=params,
             create_excitation_kernel=False, create_refocus_1_kernel=False
         )
+        # set etl back
+        params.etl = params.etl - 1
 
         log_module.info(f"Init MEGESSE Sequence")
         # set number of GRE echoes beside SE
