@@ -17,7 +17,7 @@ def load_data(settings: PyLoraksConfig):
     k_space = torch_load(settings.in_k_space)
     affine = torch_load(settings.in_affine)
     if settings.in_sampling_mask:
-        sampling_pattern = torch.squeeze(torch_load(settings.in_sampling_mask))
+        sampling_pattern = torch_load(settings.in_sampling_mask)
     else:
         sampling_pattern = (torch.abs(k_space) > 1e-9)[:, :, 0, 0]
 
@@ -124,15 +124,17 @@ def recon(settings: PyLoraksConfig, mode: str):
 
     # loraks_recon_k = loraks_mag * torch.exp(1j * loraks_phase)
     if settings.process_slice:
-        loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
+        loraks_recon = loraks_recon[:, :, None, :]
 
     logging.info("FFT into image space")
     # fft into real space
     loraks_recon_img = fft(loraks_recon, img_to_k=False, axes=(0, 1))
 
     logging.info("rSoS channels")
+    dim_channel = -2 if len(loraks_recon.shape) == 4 else -1
+
     # for nii we rSoS combine channels
-    loraks_recon_mag = root_sum_of_squares(input_data=loraks_recon_img, dim_channel=-2)
+    loraks_recon_mag = root_sum_of_squares(input_data=loraks_recon_img, dim_channel=dim_channel)
 
     # ToDo Phase combination implementation
     # loraks_phase = torch.angle(loraks_recon_img)

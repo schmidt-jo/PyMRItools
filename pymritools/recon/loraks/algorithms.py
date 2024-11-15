@@ -70,8 +70,41 @@ def get_count_matrix(shape: tuple, indices: torch.Tensor, mode: str):
     return count_matrix
 
 
+def get_ac_region_from_sampling_pattern(sampling_mask_x_y_t: torch.Tensor):
+    """
+    Deduce the ac region in image space from the sampling pattern.
+    Assume this region is centered on the image space.
+    Assume this region is equal across all echoes.
+    """
+    # get dimensions
+    nx, ny, nt = sampling_mask_x_y_t.shape
+    # get center point
+    nx_c, ny_c = nx // 2, ny // 2
+    # init bounds assume at least 2 x 2 pixels (otherwise we would get None in first pass)
+    top = ny_c
+    bottom = ny_c - 1
+    left = nx_c - 1
+    right = nx_c
+
+    # Expand region from center outward, both directions simultaneously
+    for idx in range(max(nx_c, ny_c) - 1):
+        if idx < nx_c:
+            # check if where still within axis dims
+            if torch.sum(sampling_mask_x_y_t[left-1:right+1, bottom:top], dim=-1).min() == nt:
+                left -= 1
+                right += 1
+        if idx < ny_c:
+            if torch.sum(sampling_mask_x_y_t[left:right, bottom-1:top+1], dim=-1).min() == nt:
+                bottom -= 1
+                top += 1
+
+    shape = (right - left + 1, top - bottom + 1)
+    start = torch.tensor([left, bottom])
+    return start, shape
+
+
 def get_v_matrix_of_ac_subspace(
-        k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor, ac_indices: torch.Tensor, mode: str,
+        k_space_x_y_ch_t: torch.Tensor, ac_indices: torch.Tensor, mode: str,
         rank: int, use_eigh: bool = True
 ):
     if mode == "s":
@@ -83,7 +116,8 @@ def get_v_matrix_of_ac_subspace(
         log_module.error(err)
         raise ValueError(err)
     # find the V matrix for the ac subspaces
-    m_ac = op(k_space_x_y_ch_t=k_space_x_y_ch_t, indices=indices)[ac_indices]
+    # m_ac = op(k_space_x_y_ch_t=k_space_x_y_ch_t, indices=indices)[ac_indices]
+    m_ac = op(k_space_x_y_ch_t=k_space_x_y_ch_t, indices=ac_indices)
     if use_eigh:
         # via eigh
         eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
@@ -208,11 +242,14 @@ def ac_loraks(
         visualize: bool = True, path_visuals: str | plib.Path = "",
         device: torch.device = torch.get_default_device()):
     # __ One Time Calculations __
-    read_dir = deduce_read_direction(sampling_mask_x_y_t=sampling_mask_x_y_t)
 
-    # move read dir to front
-    k_space_x_y_z_ch_t = torch.movedim(k_space_x_y_z_ch_t, read_dir, 0)
-    sampling_mask_x_y_t = torch.movedim(sampling_mask_x_y_t, read_dir, 0)
+    img_ac_start, img_ac_shape = get_ac_region_from_sampling_pattern(sampling_mask_x_y_t=sampling_mask_x_y_t)
+    # find the indices to build LORAKS matrices for this particular shape
+    img_ac_indices = get_idx_2d_circular_neighborhood_patches_in_shape(
+        shape_2d=img_ac_shape, nb_radius=radius, device=torch.device("cpu")
+    )
+    # add the starting points of the AC region rectangle to the indices
+    img_ac_indices += img_ac_start[None, None]
 
     # get dimensions
     shape = k_space_x_y_z_ch_t.shape
@@ -221,40 +258,32 @@ def ac_loraks(
     # idx_slice = int(n_slice / 2)
     # k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_slice]
 
-    # get indices for operators
+    # get indices for operators on whole image to calculate the count matrix for reconstruction
     indices = get_idx_2d_circular_neighborhood_patches_in_shape(
         shape_2d=(n_read, n_phase), nb_radius=radius, device=torch.device("cpu")
     )
 
     plot_list = []
-    plot_names =[]
-    # check if C matrix is used and calculate + extract ac indices
+    plot_names = []
+    # check if C matrix is used and calculate count matrix
     if lambda_c > 1e-7:
         c_count_matrix = get_count_matrix(
             mode="c", indices=indices, shape=(n_read, n_phase, 1, n_echoes)
         )
-        c_ac = sampling_mask_x_y_t[indices[..., 0], indices[..., 1]].to(torch.int)
-        c_ac_idxs = torch.sum(c_ac, dim=(1, 2)) == c_ac.shape[1] * c_ac.shape[2]
         plot_list.append(c_count_matrix)
         plot_names.append("C")
     else:
         c_count_matrix = 0
-        c_ac_idxs = None
 
-    # check if S matrix is used and calculate + extract ac indices
+    # check if S matrix is used and calculate count matrix
     if lambda_s > 1e-7:
         s_count_matrix = get_count_matrix(
             mode="s", indices=indices, shape=(n_read, n_phase, 1, n_echoes)
         )
-        c_ac = sampling_mask_x_y_t[indices[..., 0], indices[..., 1]].to(torch.int)
-        s_ac_m = torch.flip(sampling_mask_x_y_t, dims=(0, 1))[indices[..., 0], indices[..., 1]].to(torch.int)
-        s_ac_idxs = (torch.sum(c_ac, dim=(1, 2)) + torch.sum(s_ac_m, dim=(1, 2))) == c_ac.shape[1] * c_ac.shape[2] * 2
-        s_ac_idxs = torch.tile(s_ac_idxs, dims=(2,))
         plot_list.append(s_count_matrix)
         plot_names.append("S")
     else:
         s_count_matrix = 0
-        s_ac_idxs = None
 
     aha = sampling_mask_x_y_t[:, :, None].to(torch.int) + lambda_c * c_count_matrix + lambda_s * s_count_matrix
 
@@ -266,23 +295,16 @@ def ac_loraks(
                 go.Heatmap(z=torch.abs(i)[:, :, 0, 0], showscale=False),
                 row=1, col=1 + idx_i
             )
-        ac_list = []
-        if "C" in plot_names:
-            # want to translate the indices into an image
-            c_ones_matrix = get_loraks_matrix_from_ones(shape=(n_read, n_phase, 1, n_echoes), indices=indices, mode="c")
-            c_ones_matrix[~c_ac_idxs] = 0
-            c_ac_img = c_adjoint_operator(c_ones_matrix, indices=indices, k_space_dims=(n_read, n_phase, 1, n_echoes))
-            ac_list.append(c_ac_img)
-        if "S" in plot_names:
-            s_ones_matrix = get_loraks_matrix_from_ones(shape=(n_read, n_phase, 1, n_echoes), indices=indices, mode="s")
-            s_ones_matrix[~s_ac_idxs] = 0
-            s_ac_img = s_adjoint_operator(s_ones_matrix, indices=indices, k_space_dims=(n_read, n_phase, 1, n_echoes))
-            ac_list.append(s_ac_img)
-        for idx_i, i in enumerate(ac_list):
-            fig.add_trace(
-                go.Heatmap(z=torch.abs(i)[:, :, 0, 0], showscale=False),
-                row=2, col=1 + idx_i
-            )
+        ac_region_plot = torch.zeros((n_read, n_phase))
+        ac_region_plot[
+            img_ac_start[0]:img_ac_start[0]+img_ac_shape[0],
+            img_ac_start[1]:img_ac_start[1]+img_ac_shape[1]
+        ] = 1
+
+        fig.add_trace(
+            go.Heatmap(z=ac_region_plot, showscale=False),
+            row=2, col=1
+        )
         if not path_visuals:
             path_visuals = plib.Path("./examples/recon/loraks")
         fig_name = path_visuals.joinpath('count-matrices_ac-region').with_suffix('.html')
@@ -291,7 +313,11 @@ def ac_loraks(
 
     for idx_s in range(n_slice):
         log_module.info(f"Processing slice :: {idx_s+1} / {n_slice}")
-        # __ need to batch. we can just permute and batch echoes
+        # __ need to batch. we can just permute and batch channels
+        # ToDo: implement multiple random permutations and average?
+        #  This way we are less prone to batching non sensitive channels for reconstruction?
+        #  Alternatively we could do a fft us recon, extract some crude sensitivity maps and
+        #  batch channels correlated in image space
         idxs_channels = torch.randperm(n_channels)
         num_batches = int(np.ceil(n_channels / batch_size_channels))
         batch_aha = aha.to(device)
@@ -302,13 +328,11 @@ def ac_loraks(
             batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, idxs_channels[start:end]].to(device)
 
             # __ per slice calculations
-            # ToDo: we know the ACS indices already, can we calculate this not with the full batch and masking afterwards,
-            # but the other way around. i.e. masking the k_space batch with the found AC region indices and
-            # then building c and s matrix?
             # __ for C
             if lambda_c > 1e-9:
                 vvc = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices, ac_indices=c_ac_idxs, mode="c", rank=rank_c
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t,
+                    ac_indices=img_ac_indices, mode="c", rank=rank_c
                 )
             else:
                 vvc = torch.zeros(1, device=device, dtype=torch.complex128)
@@ -316,7 +340,8 @@ def ac_loraks(
             # __ for S
             if lambda_s > 1e-9:
                 vvs = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, indices=indices, ac_indices=s_ac_idxs, mode="s", rank=rank_s
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t,
+                    ac_indices=img_ac_indices, mode="s", rank=rank_s
                 )
             else:
                 vvs = torch.zeros(1, device=device, dtype=torch.complex128)
@@ -339,8 +364,6 @@ def ac_loraks(
 
             k_space_x_y_z_ch_t[:, :, idx_s, idxs_channels[start:end]] = xmin.cpu()
 
-    # move read dir to back
-    k_space_x_y_z_ch_t = torch.movedim(k_space_x_y_z_ch_t, 0, read_dir)
     return k_space_x_y_z_ch_t
 
 
