@@ -39,7 +39,7 @@ def deduce_read_direction(sampling_mask_x_y_t):
 
 
 def get_loraks_matrix_from_ones(shape: tuple, indices: torch.Tensor, mode: str):
-    in_ones = torch.ones(shape, device=torch.device("cpu"), dtype=torch.complex128)
+    in_ones = torch.ones(shape, device=torch.device("cpu"), dtype=torch.complex64)
     if mode == "s":
         op = s_operator
     elif mode == "c":
@@ -265,6 +265,7 @@ def ac_loraks(
     img_ac_indices += img_ac_start[None, None]
 
     # get dimensions
+    k_space_x_y_z_ch_t = k_space_x_y_z_ch_t.to(torch.complex64)
     shape = k_space_x_y_z_ch_t.shape
     n_read, n_phase, n_slice, n_channels, n_echoes = shape
     # for now just pick middle slice
@@ -348,7 +349,7 @@ def ac_loraks(
                     ac_indices=img_ac_indices, mode="c", rank=rank_c
                 )
             else:
-                vvc = torch.zeros(1, device=device, dtype=torch.complex128)
+                vvc = torch.zeros(1, device=device, dtype=batch_k_space_x_y_ch_t.dtype)
 
             # __ for S
             if lambda_s > 1e-9:
@@ -357,7 +358,7 @@ def ac_loraks(
                     ac_indices=img_ac_indices, mode="s", rank=rank_s
                 )
             else:
-                vvs = torch.zeros(1, device=device, dtype=torch.complex128)
+                vvs = torch.zeros(1, device=device, dtype=batch_k_space_x_y_ch_t.dtype)
 
             # define optimization function
             def func_op(x):

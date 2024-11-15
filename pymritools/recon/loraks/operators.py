@@ -92,7 +92,8 @@ def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
     sim = msip_p_sim + sip_p_sim
 
     # build k_space
-    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=torch.complex128).to(s_matrix.device)
+    dtype = torch.complex128 if s_matrix.dtype == torch.float64 else torch.complex64
+    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=dtype).to(s_matrix.device)
     # # fill k_space
     log_module.debug(f"build k-space from s-matrix")
     nb = int(snb / 2)
