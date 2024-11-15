@@ -12,6 +12,7 @@ from pymritools.recon.loraks.operators import (
     s_operator, s_adjoint_operator
 )
 from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape
+from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
 from pymritools.utils.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def get_ac_region_from_sampling_pattern(sampling_mask_x_y_t: torch.Tensor):
 
 def get_v_matrix_of_ac_subspace(
         k_space_x_y_ch_t: torch.Tensor, ac_indices: torch.Tensor, mode: str,
-        rank: int, use_eigh: bool = True
+        rank: int, compute_mode: str = "eigh"
 ):
     if mode == "s":
         op = s_operator
@@ -118,7 +119,7 @@ def get_v_matrix_of_ac_subspace(
     # find the V matrix for the ac subspaces
     # m_ac = op(k_space_x_y_ch_t=k_space_x_y_ch_t, indices=indices)[ac_indices]
     m_ac = op(k_space_x_y_ch_t=k_space_x_y_ch_t, indices=ac_indices)
-    if use_eigh:
+    if compute_mode == "eigh":
         # via eigh
         eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
         m_ac_rank = eig_vals.shape[-1]
@@ -128,10 +129,22 @@ def get_v_matrix_of_ac_subspace(
         eig_vecs = eig_vecs[:, idxs]
         # v_sub_r = eig_vecs_r[:self.rank].to(self.device)
         v_sub = eig_vecs[:, :rank]
-    else:
+    elif compute_mode == "svd":
         _, s, v = torch.linalg.svd(m_ac, full_matrices=False)
         m_ac_rank = s.shape[-1]
         v_sub = v[:, :rank]
+    elif compute_mode == "rsvd":
+        m_ac_rank = min(m_ac.shape[-2:])
+        _, _, v = randomized_svd(matrix=m_ac, sampling_size=4*rank)
+        v_sub = v[:rank].conj().T
+    elif compute_mode == "sor-svd":
+        m_ac_rank = min(m_ac.shape[-2:])
+        _, _, v = subspace_orbit_randomized_svd(matrix=m_ac, rank=rank)
+        v_sub = v.conj().T
+    else:
+        err = f"compute mode {compute_mode} not implemented for AC subspace extraction"
+        log_module.error(err)
+        raise ValueError(err)
     if m_ac_rank < rank:
         err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
         log_module.error(err)
@@ -331,7 +344,7 @@ def ac_loraks(
             # __ for C
             if lambda_c > 1e-9:
                 vvc = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t,
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
                     ac_indices=img_ac_indices, mode="c", rank=rank_c
                 )
             else:
@@ -340,7 +353,7 @@ def ac_loraks(
             # __ for S
             if lambda_s > 1e-9:
                 vvs = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t,
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
                     ac_indices=img_ac_indices, mode="s", rank=rank_s
                 )
             else:

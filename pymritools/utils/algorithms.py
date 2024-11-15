@@ -182,6 +182,50 @@ def randomized_svd(
     return u_matrix, s, vh
 
 
+def subspace_orbit_randomized_svd(matrix: torch.Tensor, rank):
+    # adopted from Kaloorazi and Lamare (2018): 10.1109/TSP.2018.2853137
+    # output rank approximation
+    # get shape
+    m, n = matrix.shape[-2:]
+    l = 2 * rank
+    # want short side to be at back to sample across long side
+    if m < n:
+        matrix = torch.movedim(matrix, -2, -1)
+        transpose = True
+        m, n = n, m
+    else:
+        transpose = False
+
+    # 1) draw random matrices phi 1 and 2
+    omega = torch.randn(
+        (n, l),
+        dtype=matrix.dtype, device=matrix.device
+    )
+    # 2) compute t1 and t2
+    t1 = torch.matmul(matrix, omega)
+    t2 = torch.matmul(matrix.mT, t1)
+    # 3) compute qr decompositions
+    q1, _ = torch.linalg.qr(t1)
+    q2, _ = torch.linalg.qr(t2)
+    # 4) compute m
+    m = torch.matmul(
+        q1.mT, torch.matmul(matrix, q2)
+    )
+    u_k, s_k, v_k = torch.linalg.svd(m, full_matrices=False)
+    u_k = u_k[:, :rank]
+    s_k = s_k[:rank]
+    v_k = v_k[:rank]
+    a_1 = torch.matmul(q1, u_k)
+    a_2 = torch.matmul(q2, v_k.conj().T).mT
+    # a = torch.matmul(
+    #     torch.matmul(a_1, torch.diag_embed(s_k).to(a_1.dtype)),
+    #     a_2
+    # )
+    return a_1, s_k, a_2
+
+
+
+
 class DE:
     """ Differential evolution """
     def __init__(self, param_dim: int, data_dim: int, population_size: int = 10,
