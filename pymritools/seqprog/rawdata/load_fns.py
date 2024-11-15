@@ -296,7 +296,7 @@ def load_pulseq_rd(
             batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv)
         # remove oversampling, use gpu if set
         batch_rmos = remove_oversampling(
-            data=batch_k, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+            data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
         )
         k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu().numpy()
 
@@ -382,7 +382,7 @@ def load_siemens_rd(
     slice_pos_array = np.array([[sp.Cor, sp.Sag, sp.Tra] for sp in slice_pos])
     slice_pos_sort = np.sort(np.sum(slice_pos_array, axis=-1))
 
-    os_factor = 2
+    os_factor = 1 if bool(hdr["Meas"]["ucRemoveOversampling"]) else 2
 
     log_module.debug(f"allocate img arrays")
 
@@ -411,7 +411,7 @@ def load_siemens_rd(
             slice_num = max(mdb.cPar, mdb.cSlc)
             mmss = mdb.mdh.SliceData.SlicePos
             sli_p = np.sum(np.array([mmss.Sag, mmss.Cor, mmss.Tra]), axis=-1)
-            sli = np.where(slice_pos_sort == sli_p)[0]
+            sli = max(int(np.where(slice_pos_sort == sli_p)[0]), mdb.cPar)
             echo = mdb.cEco
             k_space[:, phase, sli, :, echo] = mdb.data.T
     # save noise scans separately, used later
@@ -423,10 +423,13 @@ def load_siemens_rd(
     if noise_scans is not None:
         psi_l_inv = torch.from_numpy(
             get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-        ).to(device)
-        noise_scans = torch.einsum("imn, lm -> iln", torch.from_numpy(noise_scans).to(device), psi_l_inv)
+        ).to(device=device, dtype=torch.complex128)
+        noise_scans = torch.einsum(
+            "imn, lm -> iln", torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex128),
+            psi_l_inv
+        )
 
-    k_space_rm_os = np.zeros((n_read, n_phase, n_slice, num_coils, n_echoes), dtype=k_space.dtype)
+    k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, n_echoes), dtype=torch.complex128)
     # do some batched processing slice wise use gpu if available
     for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
         batch_k = torch.from_numpy(k_space[:, :, idx_slice]).to(device)
@@ -434,19 +437,19 @@ def load_siemens_rd(
             batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv)
         # remove oversampling, use gpu if set
         batch_rmos = remove_oversampling(
-            data=batch_k, data_input_sampled_in_time=True, read_dir=0, os_factor=os_factor
+            data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
         )
-        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu().numpy()
-
+        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu()
+    k_space_rm_os = k_space_rm_os.numpy()
     k_sampling_mask = k_sampling_mask[::os_factor]
 
     # fft bandpass filter for oversampling removal not consistent
     # with undersampled in the 0 filled regions data, remove artifacts
     # extend mask to full dims
-    k_space *= k_sampling_mask
+    k_space_rm_os *= k_sampling_mask
 
     # correct gradient directions - at the moment we have reversed z dir
-    k_space = np.flip(k_space, axis=(0, 1))
+    k_space = np.flip(k_space_rm_os, axis=(0, 1))
     k_sampling_mask = np.flip(k_sampling_mask, axis=(0, 1))
 
     log_module.info(f"Extract geometry & affine information")
