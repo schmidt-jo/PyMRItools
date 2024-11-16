@@ -248,7 +248,6 @@ class DE:
 
         # functions
         self.func = NotImplemented
-        self.func_forward = None
 
     def set_fitness_function(self, func):
         """ set function to calculate fitness of agents."""
