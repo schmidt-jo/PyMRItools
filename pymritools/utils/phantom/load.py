@@ -1,11 +1,13 @@
 import pathlib as plib
 import logging
+
 from PIL import Image
 import numpy as np
 from scipy.ndimage import zoom
 import torch
+from scipy.io import savemat
 
-from pymritools.utils import fft
+from pymritools.utils import fft, gaussian_2d_kernel, torch_save
 
 log_module = logging.getLogger(__name__)
 
@@ -16,7 +18,8 @@ class SheppLogan:
         im = Image.open(path).convert("L")
         self._im = np.array(im, dtype=np.float32)
 
-    def get_2D_image(self, shape: tuple, as_torch_tensor: bool = True) -> np.ndarray | torch.Tensor:
+    def get_2D_image(self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None
+                     ) -> np.ndarray | torch.Tensor:
         im = self._im
         zero_mask = self._im == 0
         if np.sum(np.abs(np.array(shape[:2]) - np.array([400, 400]))) > 1e-3:
@@ -27,17 +30,32 @@ class SheppLogan:
         # normalize to max 1
         im /= max_img
         im[zero_mask] = 0
-        if as_torch_tensor:
-            im = torch.from_numpy(im)
+        im = torch.from_numpy(im)
+        # include fake coil sensitivities randomly set up
+        nx, ny = shape[:2]
+        if num_coils is not None:
+            coil_sens = torch.zeros((*shape, num_coils))
+            for i in range(num_coils):
+                center_x = torch.randint(low=int(nx / 12), high=int(11 * nx / 12), size=(1,))
+                center_y = torch.randint(low=int(ny / 12), high=int(11 * ny / 12), size=(1,))
+                gw = gaussian_2d_kernel(
+                    size_x=nx, size_y=ny,
+                    center_x=center_x.item(), center_y=center_y.item(), sigma=(40, 60)
+                )
+                gw /= torch.max(gw)
+                coil_sens[:, :, i] = gw
+            im = im[:, :, None] * coil_sens
+        if not as_torch_tensor:
+            im = im.numpy()
         return im
 
-    def get_2D_k_space(self, shape: tuple, as_torch_tensor: bool = True) -> np.ndarray | torch.Tensor:
-        im = self.get_2D_image(shape=shape, as_torch_tensor=as_torch_tensor)
+    def get_2D_k_space(self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None) -> np.ndarray | torch.Tensor:
+        im = self.get_2D_image(shape=shape, as_torch_tensor=as_torch_tensor, num_coils=num_coils)
         return fft(input_data=im, img_to_k=True, axes=(0, 1))
 
     def get_sub_sampled_k_space(
             self, shape: tuple, acceleration: int, ac_lines: int = 20, mode: str = "skip",
-            as_torch_tensor: bool = True) -> np.ndarray | torch.Tensor:
+            as_torch_tensor: bool = True, num_coils: int = None) -> np.ndarray | torch.Tensor:
         """
         Generate a sub-sampled k-space of Shepp Logan phantom.
         The sub-sampling has an autocalibration region, i.e. fully sampled central lines,
@@ -55,7 +73,7 @@ class SheppLogan:
         modes = ["skip", "weighted"]
         # allocate
         nx, ny = shape
-        k = np.zeros((nx, ny), dtype=np.complex128)
+        k = np.zeros((nx, ny), dtype=np.complex128) if num_coils is None else np.zeros((nx, ny, num_coils), dtype=np.complex128)
         y_center = int(ny / 2)
         # calculate upper and lower edges of ac region
         y_l = y_center - int(ac_lines / 2)
@@ -98,12 +116,32 @@ class SheppLogan:
             err = f"Mode {mode} not supported, should be one of: {modes}"
             log_module.error(err)
             raise ValueError(err)
-        k[:, indices] = self.get_2D_k_space(shape=shape, as_torch_tensor=False)[:, indices]
+        k[:, indices] = self.get_2D_k_space(shape=shape, as_torch_tensor=False, num_coils=num_coils)[:, indices]
         if as_torch_tensor:
             return torch.from_numpy(k)
         return k
 
-    # ToDo: can implement coil sensitivities as well
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+    k_us = SheppLogan().get_sub_sampled_k_space(
+        shape=(256, 256), acceleration=2, ac_lines=30, mode="weighted", as_torch_tensor=True
+    )
+    k_us_cs = SheppLogan().get_sub_sampled_k_space(
+        shape=(256, 256), acceleration=2, ac_lines=30, mode="weighted", as_torch_tensor=True, num_coils=32
+    )
+    path = plib.Path("./test_data/loraks").absolute()
+    path.mkdir(exist_ok=True, parents=True)
+    mat_file_name = path.joinpath("phantom").with_suffix(".mat")
+    logging.info(f"Write file: {mat_file_name.as_posix()}")
+    savemat(
+        mat_file_name.as_posix(),
+        {"k_us": k_us.numpy(), "k_us_cs": k_us_cs.numpy()}
+    )
+    torch_save(data=k_us, path_to_file=path, file_name="phantom_k_us.pt")
+    torch_save(data=k_us_cs, path_to_file=path, file_name="phantom_k_us_cs.pt")
 
 
 
+if __name__ == '__main__':
+    main()
