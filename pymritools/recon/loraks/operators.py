@@ -16,7 +16,7 @@ from pymritools.utils import (
 log_module = logging.getLogger(__name__)
 
 
-def c_operator(k_space: torch.Tensor, c_mapping: torch.Tensor, device=None):
+def c_operator(k_space: torch.Tensor, c_mapping: torch.Tensor):
     """
     Maps from k-space with shape (nx, ny, nc, nt) into the neighborhood-representation
     :param k_space: k-space with shape (nx, ny, nc, nt)
