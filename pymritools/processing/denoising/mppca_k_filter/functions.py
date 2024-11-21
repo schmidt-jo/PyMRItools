@@ -27,6 +27,8 @@ def distribution_mp(
         x = torch.tensor(x)
     if not torch.is_tensor(sigma):
         sigma = torch.tensor(sigma)
+    if len(sigma.shape) == 0:
+        sigma = sigma.unsqueeze(0)
 
     # allocate output
     shape_sig = sigma.shape
@@ -84,6 +86,9 @@ def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Te
     Returns:
     torch.Tensor: Interpolated values with shape [batch, a, b]
     """
+    while len(x.shape) < 3:
+        # in case there is no batch dim we fill
+        x = x.unsqueeze(0)
     batch, a, b = x.shape
     # find closest upper adjacent indices of x in xp, then the next lower one
     indices = torch.searchsorted(xp, x.view(-1, b))
