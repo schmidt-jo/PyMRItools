@@ -5,8 +5,9 @@ from PIL import Image
 import numpy as np
 from scipy.ndimage import zoom
 import torch
+from scipy.io import savemat
 
-from pymritools.utils import fft, gaussian_2d_kernel
+from pymritools.utils import fft, gaussian_2d_kernel, torch_save
 
 log_module = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class SheppLogan:
         # normalize to max 1
         im /= max_img
         im[zero_mask] = 0
+        im = torch.from_numpy(im)
         # include fake coil sensitivities randomly set up
         nx, ny = shape[:2]
         if num_coils is not None:
@@ -42,7 +44,7 @@ class SheppLogan:
                 )
                 gw /= torch.max(gw)
                 coil_sens[:, :, i] = gw
-            im = torch.from_numpy(im[:, :, None]) * coil_sens
+            im = im[:, :, None] * coil_sens
         if not as_torch_tensor:
             im = im.numpy()
         return im
@@ -53,7 +55,7 @@ class SheppLogan:
 
     def get_sub_sampled_k_space(
             self, shape: tuple, acceleration: int, ac_lines: int = 20, mode: str = "skip",
-            as_torch_tensor: bool = True) -> np.ndarray | torch.Tensor:
+            as_torch_tensor: bool = True, num_coils: int = None) -> np.ndarray | torch.Tensor:
         """
         Generate a sub-sampled k-space of Shepp Logan phantom.
         The sub-sampling has an autocalibration region, i.e. fully sampled central lines,
@@ -71,7 +73,7 @@ class SheppLogan:
         modes = ["skip", "weighted"]
         # allocate
         nx, ny = shape
-        k = np.zeros((nx, ny), dtype=np.complex128)
+        k = np.zeros((nx, ny), dtype=np.complex128) if num_coils is None else np.zeros((nx, ny, num_coils), dtype=np.complex128)
         y_center = int(ny / 2)
         # calculate upper and lower edges of ac region
         y_l = y_center - int(ac_lines / 2)
@@ -114,11 +116,32 @@ class SheppLogan:
             err = f"Mode {mode} not supported, should be one of: {modes}"
             log_module.error(err)
             raise ValueError(err)
-        k[:, indices] = self.get_2D_k_space(shape=shape, as_torch_tensor=False)[:, indices]
+        k[:, indices] = self.get_2D_k_space(shape=shape, as_torch_tensor=False, num_coils=num_coils)[:, indices]
         if as_torch_tensor:
             return torch.from_numpy(k)
         return k
 
 
+def main():
+    logging.basicConfig(level=logging.INFO)
+    k_us = SheppLogan().get_sub_sampled_k_space(
+        shape=(256, 256), acceleration=2, ac_lines=30, mode="weighted", as_torch_tensor=True
+    )
+    k_us_cs = SheppLogan().get_sub_sampled_k_space(
+        shape=(256, 256), acceleration=2, ac_lines=30, mode="weighted", as_torch_tensor=True, num_coils=32
+    )
+    path = plib.Path("./test_data/loraks").absolute()
+    path.mkdir(exist_ok=True, parents=True)
+    mat_file_name = path.joinpath("phantom").with_suffix(".mat")
+    logging.info(f"Write file: {mat_file_name.as_posix()}")
+    savemat(
+        mat_file_name.as_posix(),
+        {"k_us": k_us.numpy(), "k_us_cs": k_us_cs.numpy()}
+    )
+    torch_save(data=k_us, path_to_file=path, file_name="phantom_k_us.pt")
+    torch_save(data=k_us_cs, path_to_file=path, file_name="phantom_k_us_cs.pt")
 
 
+
+if __name__ == '__main__':
+    main()
