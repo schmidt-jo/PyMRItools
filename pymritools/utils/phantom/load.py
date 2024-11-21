@@ -1,11 +1,12 @@
 import pathlib as plib
 import logging
+
 from PIL import Image
 import numpy as np
 from scipy.ndimage import zoom
 import torch
 
-from pymritools.utils import fft
+from pymritools.utils import fft, gaussian_2d_kernel
 
 log_module = logging.getLogger(__name__)
 
@@ -16,7 +17,8 @@ class SheppLogan:
         im = Image.open(path).convert("L")
         self._im = np.array(im, dtype=np.float32)
 
-    def get_2D_image(self, shape: tuple, as_torch_tensor: bool = True) -> np.ndarray | torch.Tensor:
+    def get_2D_image(self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None
+                     ) -> np.ndarray | torch.Tensor:
         im = self._im
         zero_mask = self._im == 0
         if np.sum(np.abs(np.array(shape[:2]) - np.array([400, 400]))) > 1e-3:
@@ -27,12 +29,26 @@ class SheppLogan:
         # normalize to max 1
         im /= max_img
         im[zero_mask] = 0
-        if as_torch_tensor:
-            im = torch.from_numpy(im)
+        # include fake coil sensitivities randomly set up
+        nx, ny = shape[:2]
+        if num_coils is not None:
+            coil_sens = torch.zeros((*shape, num_coils))
+            for i in range(num_coils):
+                center_x = torch.randint(low=int(nx / 12), high=int(11 * nx / 12), size=(1,))
+                center_y = torch.randint(low=int(ny / 12), high=int(11 * ny / 12), size=(1,))
+                gw = gaussian_2d_kernel(
+                    size_x=nx, size_y=ny,
+                    center_x=center_x.item(), center_y=center_y.item(), sigma=(40, 60)
+                )
+                gw /= torch.max(gw)
+                coil_sens[:, :, i] = gw
+            im = torch.from_numpy(im[:, :, None]) * coil_sens
+        if not as_torch_tensor:
+            im = im.numpy()
         return im
 
-    def get_2D_k_space(self, shape: tuple, as_torch_tensor: bool = True) -> np.ndarray | torch.Tensor:
-        im = self.get_2D_image(shape=shape, as_torch_tensor=as_torch_tensor)
+    def get_2D_k_space(self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None) -> np.ndarray | torch.Tensor:
+        im = self.get_2D_image(shape=shape, as_torch_tensor=as_torch_tensor, num_coils=num_coils)
         return fft(input_data=im, img_to_k=True, axes=(0, 1))
 
     def get_sub_sampled_k_space(
@@ -103,7 +119,6 @@ class SheppLogan:
             return torch.from_numpy(k)
         return k
 
-    # ToDo: can implement coil sensitivities as well
 
 
 
