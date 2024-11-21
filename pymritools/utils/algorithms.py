@@ -221,6 +221,10 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, rank):
     #     torch.matmul(a_1, torch.diag_embed(s_k).to(a_1.dtype)),
     #     a_2
     # )
+    if transpose:
+        v_temp = a_2
+        vh = torch.movedim(s_k, -1, -2)
+        u_matrix = torch.movedim(a_1, -1, -2)
     return a_1, s_k, a_2
 
 
