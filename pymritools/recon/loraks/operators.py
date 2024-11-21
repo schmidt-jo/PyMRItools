@@ -16,18 +16,19 @@ from pymritools.utils import (
 log_module = logging.getLogger(__name__)
 
 
-def c_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
-    shape = k_space_x_y_ch_t.shape
-    # build combined 3rd dim
-    k_space_x_y_cht = torch.reshape(k_space_x_y_ch_t, (shape[0], shape[1], -1))
-    # extract from matrix
-    c_matrix = k_space_x_y_cht[indices[..., 0], indices[..., 1]]
-    # now we want the neighborhoods of individual t-ch info to be concatenated into the neighborhood axes.
-    c_matrix = torch.reshape(torch.movedim(c_matrix, -1, 1), (c_matrix.shape[0], -1))
-    return c_matrix
+def c_operator(k_space: torch.Tensor, c_mapping: torch.Tensor, device=None):
+    """
+    Maps from k-space with shape (nx, ny, nc, nt) into the neighborhood-representation
+    :param k_space: k-space with shape (nx, ny, nc, nt)
+    :param c_mapping: neighborhood mapping with shape (nb, 2)
+    :return: neighborhood representation with shape (nt, nb)
+    """
+    k_space = torch.flatten(k_space, 2)
+    return k_space[c_mapping[:, :, 0], c_mapping[:, :, 1]].permute(0,2,1).flatten(1)
 
 
-def c_adjoint_operator(c_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
+
+def c_adjoint_operator(c_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple, device=None):
     # Do we need to ensure dimensions? k-space in first, neighborhood / ch / t in second.
     # store shapes
     sm, sk = c_matrix.shape
