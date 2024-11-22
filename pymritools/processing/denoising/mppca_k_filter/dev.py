@@ -6,6 +6,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.subplots as psub
 import tqdm
+from click.core import batch
 
 from pymritools.utils.phantom import SheppLogan
 from pymritools.utils import fft, gaussian_2d_kernel, root_sum_of_squares
@@ -164,7 +165,7 @@ def denoise_mpk(snr: float, k_space: torch.Tensor):
     # denoise
     settings = DenoiseSettingsMPK(
         out_path="./examples/processing/denoising/results",
-        noise_mp_threshold=0.15, noise_mp_stretch=1.02
+        noise_mp_threshold=0.15, noise_mp_stretch=1.05, batch_size=300
     )
     plib.Path(settings.out_path).absolute().joinpath("figs").mkdir(exist_ok=True, parents=True)
 

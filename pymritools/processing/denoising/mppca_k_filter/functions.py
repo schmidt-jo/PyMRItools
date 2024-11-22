@@ -241,148 +241,169 @@ def matched_filter_noise_removal(
     shape = k_space_lines_read_ph_sli_ch_t.shape
     # flatten batch dims [batch dim, num_channels, num_samples readout]
     k_space_lines_read_ph_sli_ch_t = torch.reshape(k_space_lines_read_ph_sli_ch_t, (-1, *shape[-2:]))
+
     # find once again close to square form of the last dimension
     a = find_approx_squared_matrix_form(shape)
-    # and build matrix from line
-    k_space_lines_read_ph_sli_ch_t = torch.reshape(
-        k_space_lines_read_ph_sli_ch_t,
-        (*k_space_lines_read_ph_sli_ch_t.shape[:2], a, -1)
-    )
-    # save matrix dimensions
-    m, n = k_space_lines_read_ph_sli_ch_t.shape[-2:]
+
+    # we want to redo the following multiple times with shifted signal to deal with possible
+    # discontinuities introduced by the approach at the segment edges.
+    num_shifts = 10
+    shifts = np.linspace(0, a, num_shifts, endpoint=False).astype(int)
+    line_dim = torch.reshape(
+            k_space_lines_read_ph_sli_ch_t,
+            (*k_space_lines_read_ph_sli_ch_t.shape[:2], a, -1)
+        ).shape[-1]
 
     # allocate output space
-    k_space_filt = torch.zeros_like(k_space_lines_read_ph_sli_ch_t)
-    filtered_noise = torch.zeros_like(k_space_lines_read_ph_sli_ch_t)
+    k_space_filt = torch.zeros(
+        (num_shifts, *k_space_lines_read_ph_sli_ch_t.shape[:2], a, line_dim),
+        dtype=k_space_lines_read_ph_sli_ch_t.dtype
+    )
 
-    # batch svd
-    num_batches = int(np.ceil(k_space_lines_read_ph_sli_ch_t.shape[0] / settings.batch_size))
-    for idx_b in tqdm.trange(num_batches, desc="filter svd"):
-        # for idx_b in tqdm.trange(5, desc="filter svd"):
-        start = idx_b * settings.batch_size
-        end = min((idx_b + 1) * settings.batch_size, k_space_lines_read_ph_sli_ch_t.shape[0])
-        # send batch to GPU
-        batch = k_space_lines_read_ph_sli_ch_t[start:end].to(device)
-        # svd batch
-        u, s, v = torch.linalg.svd(
-            batch,
-            full_matrices=False
+    for idx_shift in tqdm.trange(num_shifts, desc="filter svd - shift"):
+        input_k_for_filter = torch.roll(k_space_lines_read_ph_sli_ch_t, shifts=-shifts[idx_shift], dims=-1)
+
+        # build matrix from line
+        input_k_for_filter = torch.reshape(
+            input_k_for_filter,
+            (*k_space_lines_read_ph_sli_ch_t.shape[:2], a, -1)
         )
-        # process batch (can do straight away with tensor on device)
-        # get eigenvalue from singular values
-        bs_eigv = s ** 2 / n
-        # can calculate the weighting for the whole batched singular values at once
-        weighting = interpolate(bs_eigv, xp=p_weight_ax, fp=p_weight)
-        # we could also try original idea: make histogram and find / correlate the noise
-        # MP-distribution in the histogram, then remove, for now we just weight
+        # save matrix dimensions
+        m, n = input_k_for_filter.shape[-2:]
 
-        # weight original singular values (not eigenvalues)
-        s_w = s * weighting
-        # reconstruct signal with filtered singular values, dims [batch, channel, m]
-        signal_filt = torch.matmul(
-            torch.einsum("iklm, ikm -> iklm", u, s_w.to(u.dtype)),
-            v)
-        # normalize to previous signal levels - taking maximum of absolute value across channels
-        # assign and move off GPU
-        k_space_filt[start:end] = signal_filt.cpu()
-        filtered_noise[start:end] = (batch - signal_filt).cpu()
+        # batch svd
+        num_batches = int(np.ceil(input_k_for_filter.shape[0] / settings.batch_size))
+        for idx_b in range(num_batches):
+            # for idx_b in tqdm.trange(5, desc="filter svd"):
+            start = idx_b * settings.batch_size
+            end = min((idx_b + 1) * settings.batch_size, input_k_for_filter.shape[0])
+            # send batch to GPU
+            batch = input_k_for_filter[start:end].to(device)
+            # svd batch
+            u, s, v = torch.linalg.svd(
+                batch,
+                full_matrices=False
+            )
+            # process batch (can do straight away with tensor on device)
+            # get eigenvalue from singular values
+            bs_eigv = s ** 2 / n
+            # can calculate the weighting for the whole batched singular values at once
+            weighting = interpolate(bs_eigv, xp=p_weight_ax, fp=p_weight)
+            # we could also try original idea: make histogram and find / correlate the noise
+            # MP-distribution in the histogram, then remove, for now we just weight
 
-        if settings.visualize:
-            fig_path = plib.Path(settings.out_path).absolute().joinpath("figs/")
-            # pick 2 channels
-            channels = torch.randint(low=0, high=nch, size=(min(2, nch),))
-            if idx_b % 100 == 0:
-                # quick visuals for reference
-                # get first line from batch and reshape to actual 1D line - same for filtered line
-                noisy_line = batch[0].reshape((batch.shape[1], -1)).cpu().numpy()
-                noisy_line_filt = k_space_filt[start].reshape((batch.shape[1], -1))
-                # want subplot showing histogram versus weighting function and k-space line w and w/o applied filter
-                fig = psub.make_subplots(
-                    rows=len(channels), cols=2,
-                    row_titles=[f"channel: {c}" for c in channels],
-                    shared_xaxes=True,
-                    vertical_spacing=0.03
-                )
-                colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, 6))
-                for idx_c, c in enumerate(channels):
-                    showlegend = True if idx_c == 0 else False
-                    # add magnitude and phase for each line
-                    fig.add_trace(
-                        go.Scattergl(
-                            y=np.abs(noisy_line[c]), marker=dict(color=colors[0]),
-                            name=f"noisy line mag", legendgroup=0, showlegend=showlegend
-                        ),
-                        row=1 + idx_c, col=1
+            # weight original singular values (not eigenvalues)
+            s_w = s * weighting
+            # reconstruct signal with filtered singular values, dims [batch, channel, m]
+            signal_filt = torch.matmul(
+                torch.einsum("iklm, ikm -> iklm", u, s_w.to(u.dtype)),
+                v)
+            # normalize to previous signal levels - taking maximum of absolute value across channels
+            # assign and move off GPU
+            k_space_filt[idx_shift, start:end] = signal_filt.cpu()
+
+            if settings.visualize and idx_shift == 0:
+                fig_path = plib.Path(settings.out_path).absolute().joinpath("figs/")
+                # pick 2 channels
+                channels = torch.randint(low=0, high=nch, size=(min(2, nch),))
+                if idx_b % 100 == 0:
+                    # quick visuals for reference
+                    # get first line from batch and reshape to actual 1D line - same for filtered line
+                    noisy_line = batch[0].reshape((batch.shape[1], -1)).cpu().numpy()
+                    noisy_line_filt = k_space_filt[idx_shift, start].reshape((batch.shape[1], -1))
+                    # want subplot showing histogram versus weighting function and k-space line w and w/o applied filter
+                    fig = psub.make_subplots(
+                        rows=len(channels), cols=2,
+                        row_titles=[f"channel: {c}" for c in channels],
+                        shared_xaxes=True,
+                        vertical_spacing=0.03
                     )
-                    fig.add_trace(
-                        go.Scattergl(
-                            y=np.abs(noisy_line_filt[c]), marker=dict(color=colors[1]),
-                            name=f"noisy line mag filtered", legendgroup=1, showlegend=showlegend
-                        ),
-                        row=1 + idx_c, col=1
-                    )
-                    # add histogram and weighting function
-                    eigv = bs_eigv[0, c].cpu()
-                    w = weighting[0, c].cpu()
-                    fig.add_trace(
-                        go.Scattergl(
-                            x=eigv[eigv < 50], y=w[eigv < 50], mode="lines",
-                            fill="tozeroy", line=dict(color=colors[2], width=2), opacity=0.5,
-                            legendgroup=3, showlegend=showlegend,
-                            name=f"weighting function of s.-vals."
-                        ),
-                        row=1 + idx_c, col=2
-                    )
-                    # noise mp distribution
-                    pc = p_noise[c]
-                    pc /= torch.max(pc)
-                    fig.add_trace(
-                        go.Scattergl(
-                            x=noise_ax.cpu().numpy(), y=pc.cpu().numpy(),
-                            fill="tozeroy", line=dict(color=colors[4], width=2), opacity=0.5,
-                            legendgroup=4, showlegend=showlegend,
-                            name=f"Noise MP distribution"
-                        ),
-                        row=1 + idx_c, col=2
-                    )
-                    # histogram
-                    hist, bins = torch.histogram(eigv, bins=100)
-                    hist /= torch.max(hist)
-                    bin_mid = bins[1:] - torch.diff(bins) / 2
-                    fig.add_trace(
-                        go.Bar(
-                            x=bin_mid[bin_mid < 50].cpu().numpy(), y=hist[bin_mid < 50].cpu().numpy(),
-                            name="histogram of singular values",
-                            marker=dict(color=colors[3]), legendgroup=2, showlegend=showlegend
-                        ),
-                        row=idx_c + 1, col=2
-                    )
-                    fig.add_trace(
-                        go.Scatter(
-                            x=eigv[eigv < 50].cpu().numpy(),
-                            y=torch.clamp(
-                                w[eigv < 50] + torch.randn_like(eigv[eigv < 50]) * 0.02 + 0.05, 0, 1
-                            ).cpu().numpy(),
-                            name="singular values", mode="markers",
-                            marker=dict(color=colors[5]), legendgroup=2, showlegend=showlegend
-                        ),
-                        row=idx_c + 1, col=2
-                    )
-                fig.update_yaxes(title="Intensity [a.u.]", row=1, col=1)
-                fig.update_yaxes(title="Intensity [a.u.]", row=2, col=1)
-                fig.update_yaxes(title="Occurrence / Weighting [a.u.]", row=1, col=2)
-                fig.update_yaxes(title="Occurrence / Weighting [a.u.]", row=2, col=2)
-                fig.update_xaxes(title="Sample Number", row=1, col=1)
-                fig.update_xaxes(title="Sample Number", row=2, col=1)
-                fig.update_xaxes(title="Singular Value", row=1, col=2)
-                fig.update_xaxes(title="Singular Value", row=2, col=2)
-                path = fig_path.joinpath(f"line_batch-{idx_b}_noise_filtering").with_suffix(".html")
-                log_module.info(f"write file: {path}")
-                fig.write_html(path.as_posix())
+                    colors = plc.sample_colorscale("Turbo", np.linspace(0.1, 0.9, 6))
+                    for idx_c, c in enumerate(channels):
+                        showlegend = True if idx_c == 0 else False
+                        # add magnitude and phase for each line
+                        fig.add_trace(
+                            go.Scattergl(
+                                y=np.abs(noisy_line[c]), marker=dict(color=colors[0]),
+                                name=f"noisy line mag", legendgroup=0, showlegend=showlegend
+                            ),
+                            row=1 + idx_c, col=1
+                        )
+                        fig.add_trace(
+                            go.Scattergl(
+                                y=np.abs(noisy_line_filt[c]), marker=dict(color=colors[1]),
+                                name=f"noisy line mag filtered", legendgroup=1, showlegend=showlegend
+                            ),
+                            row=1 + idx_c, col=1
+                        )
+                        # add histogram and weighting function
+                        eigv = bs_eigv[0, c].cpu()
+                        w = weighting[0, c].cpu()
+                        fig.add_trace(
+                            go.Scattergl(
+                                x=eigv[eigv < 50], y=w[eigv < 50], mode="lines",
+                                fill="tozeroy", line=dict(color=colors[2], width=2), opacity=0.5,
+                                legendgroup=3, showlegend=showlegend,
+                                name=f"weighting function of s.-vals."
+                            ),
+                            row=1 + idx_c, col=2
+                        )
+                        # noise mp distribution
+                        pc = p_noise[c]
+                        pc /= torch.max(pc)
+                        fig.add_trace(
+                            go.Scattergl(
+                                x=noise_ax.cpu().numpy(), y=pc.cpu().numpy(),
+                                fill="tozeroy", line=dict(color=colors[4], width=2), opacity=0.5,
+                                legendgroup=4, showlegend=showlegend,
+                                name=f"Noise MP distribution"
+                            ),
+                            row=1 + idx_c, col=2
+                        )
+                        # histogram
+                        hist, bins = torch.histogram(eigv, bins=100)
+                        hist /= torch.max(hist)
+                        bin_mid = bins[1:] - torch.diff(bins) / 2
+                        fig.add_trace(
+                            go.Bar(
+                                x=bin_mid[bin_mid < 50].cpu().numpy(), y=hist[bin_mid < 50].cpu().numpy(),
+                                name="histogram of singular values",
+                                marker=dict(color=colors[3]), legendgroup=2, showlegend=showlegend
+                            ),
+                            row=idx_c + 1, col=2
+                        )
+                        fig.add_trace(
+                            go.Scatter(
+                                x=eigv[eigv < 50].cpu().numpy(),
+                                y=torch.clamp(
+                                    w[eigv < 50] + torch.randn_like(eigv[eigv < 50]) * 0.02 + 0.05, 0, 1
+                                ).cpu().numpy(),
+                                name="singular values", mode="markers",
+                                marker=dict(color=colors[5]), legendgroup=2, showlegend=showlegend
+                            ),
+                            row=idx_c + 1, col=2
+                        )
+                    fig.update_yaxes(title="Intensity [a.u.]", row=1, col=1)
+                    fig.update_yaxes(title="Intensity [a.u.]", row=2, col=1)
+                    fig.update_yaxes(title="Occurrence / Weighting [a.u.]", row=1, col=2)
+                    fig.update_yaxes(title="Occurrence / Weighting [a.u.]", row=2, col=2)
+                    fig.update_xaxes(title="Sample Number", row=1, col=1)
+                    fig.update_xaxes(title="Sample Number", row=2, col=1)
+                    fig.update_xaxes(title="Singular Value", row=1, col=2)
+                    fig.update_xaxes(title="Singular Value", row=2, col=2)
+                    path = fig_path.joinpath(f"line_batch-{idx_b}_noise_filtering").with_suffix(".html")
+                    log_module.info(f"write file: {path}")
+                    fig.write_html(path.as_posix())
 
     # reshape - get matrix shuffled line back to an actual 1D line
     k_space_filt = torch.reshape(k_space_filt, (*k_space_filt.shape[:-2], -1))
-    filtered_noise = torch.reshape(filtered_noise, (*k_space_filt.shape[:-2], -1))
+    # redo shifts
+    for idx_shift in range(num_shifts):
+        k_space_filt[idx_shift] = torch.roll(k_space_filt[idx_shift], shifts=shifts[idx_shift], dims=-1)
+    # take mean acorss shift windows
+    k_space_filt = torch.mean(k_space_filt, dim=0)
+    filtered_noise = k_space_lines_read_ph_sli_ch_t - k_space_filt
+
     # deflate batch dimensions
     k_space_filt = torch.reshape(k_space_filt, shape)
     filtered_noise = torch.reshape(filtered_noise, shape)
