@@ -55,6 +55,7 @@ def denoise(settings: DenoiseSettingsMPK):
     input_filter = torch.movedim(k_space, read_dir, 0)
     nr, np, ns, nch, nt = input_filter.shape
     filtered_k = torch.zeros_like(input_filter)
+    filtered_noise = torch.zeros_like(input_filter)
 
     sampling_mask = torch.movedim(sampling_mask, read_dir, 0)
 
@@ -62,13 +63,16 @@ def denoise(settings: DenoiseSettingsMPK):
     input_filter = torch.reshape(input_filter[sampling_mask], (nr, -1, ns, nch, nt))
 
     # pass to function
-    filtered_k[sampling_mask] = matched_filter_noise_removal(
+    filt, noise = matched_filter_noise_removal(
         noise_data_n_ch_samp=noise_scans, k_space_lines_read_ph_sli_ch_t=input_filter,
         settings=settings
-    ).flatten()
+    )
+    filtered_k[sampling_mask] = filt.flatten()
+    filtered_noise[sampling_mask] = noise.flatten()
 
     # move read dim back
     filtered_k = torch.movedim(filtered_k, 0, read_dir)
+    filtered_noise = torch.movedim(filtered_noise, 0, read_dir)
 
     p_name = plib.Path(settings.in_k_space).absolute().stem
     # save
@@ -79,6 +83,7 @@ def denoise(settings: DenoiseSettingsMPK):
         nifti_save(img, img_aff=affine, path_to_dir=settings.out_path, file_name=f"filt_mpk_{p_name}_naive_rsos_recon")
 
     torch_save(filtered_k, path_to_file=path_out, file_name=f'filt_mpk_{p_name}')
+    torch_save(filtered_noise, path_to_file=path_out, file_name=f'filt_noise_mpk_{p_name}')
 
 
 def main():
