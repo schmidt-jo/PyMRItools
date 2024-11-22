@@ -80,8 +80,8 @@ def main():
 
     # give it some initialized gaussian shape having slice selective gz and spoiling
     sig = duration_pulse_us/4
-    rf_pulse[:duration_pulse_us] = 1 / np.sqrt(2 * np.pi * sig**2) * torch.exp(
-        -(torch.arange(duration_pulse_us) - duration_pulse_us/2)**2 / (2 * sig**2) + 1j * np.pi / 2
+    rf_pulse[:int(duration_pulse_us/dt_us)] = 1 / np.sqrt(2 * np.pi * sig**2) * torch.exp(
+        -(torch.arange(0, duration_pulse_us, dt_us) - duration_pulse_us/2)**2 / (2 * sig**2) + 1j * np.pi / 2
     )
     # normalize it to cause 90° excitation
     normalized_shape = rf_pulse / torch.linalg.norm(rf_pulse)
@@ -90,8 +90,8 @@ def main():
     # scale to wanted fa
     rf_pulse = fa_deg / 180 * torch.pi * normalized_shape / flip_angle_normalized_shape
     # give some value to gz
-    grad_z[:duration_pulse_us] = -12.0      # mT/m
-    grad_z[duration_pulse_us:] = -50.0        # mT/m
+    grad_z[:int(duration_pulse_us/dt_us)] = -12.0      # mT/m
+    grad_z[int(duration_pulse_us/dt_us):] = -50.0        # mT/m
 
     # calculate the excitation already, is unchanged for the sim
     sim_data_exci = propagate_gradient_pulse_relax(
