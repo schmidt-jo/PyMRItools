@@ -158,7 +158,7 @@ def main():
 
     # iterate
     losses = []
-    max_num_iter = 100
+    max_num_iter = 50
     conv_count = 0
     bar = tqdm.trange(max_num_iter)
     for idx in bar:
