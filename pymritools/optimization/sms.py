@@ -153,8 +153,7 @@ def main():
 
     logging.info(f"Start optimization")
     # here we plug the shapes
-    optim_pulse = rf_pulse.clone().requires_grad_(True)
-    optim_grad_z = grad_z.clone().requires_grad_(True)
+    optim_grad_pulse = torch.full((3, grad_z.shape[0]), 1.0, requires_grad=True, device=device)
 
     # iterate
     losses = []
@@ -169,32 +168,32 @@ def main():
         )
         # calculate the excitation already, is unchanged for the sim
         sim_data_exci = propagate_gradient_pulse_relax(
-            pulse_x=optim_pulse[None].real, pulse_y=optim_pulse[None].imag, grad=optim_grad_z,
+            pulse_x=optim_grad_pulse[0, None], pulse_y=optim_grad_pulse[1, None], grad=optim_grad_pulse[2],
             sim_data=sim_data, dt_s=dt_us * 1e-6
         )
 
         # compute losses
         excitation_profile = torch.squeeze(sim_data_exci.magnetization_propagation)
         mag_profile = torch.linalg.norm(excitation_profile[:, :2], dim=1)
-        phase_profile = torch.arctan(excitation_profile[:, 1] / excitation_profile[:, 0]) / torch.pi
+        phase_profile = torch.angle(excitation_profile[:, 0] + 1j * excitation_profile[:, 1]) / torch.pi
 
         loss_target_mag = torch.linalg.norm(mag_profile - target_shape_mag)
         loss_target_phase = torch.linalg.norm(phase_profile - target_shape_phase)
+        grad = torch.gradient(optim_grad_pulse)
+        loss_smoothness = torch.linalg.norm(grad[0]) + torch.linalg.norm(grad[1])
 
-        # minimize both distances, slight priority to magnetiozation
-        loss = 10 * loss_target_mag + loss_target_phase
+        # minimize both distances, slight priority to magnetization
+        loss = 10 * loss_target_mag + loss_target_phase + 0.001 * loss_smoothness
         loss.backward()
         with torch.no_grad():
-            optim_pulse.sub_(l_rate*optim_pulse.grad)
-            optim_grad_z.sub_(l_rate*optim_grad_z.grad)
+            optim_grad_pulse.sub_(l_rate*optim_grad_pulse.grad)
 
-        optim_pulse.grad.zero_()
-        optim_grad_z.grad.zero_()
-
+        optim_grad_pulse.grad.zero_()
 
         pr = {
             "loss": f"{loss.item():.4f}",
             "mag": f"{loss_target_mag.item():.4f}", "phase": f"{loss_target_phase.item():.4f}",
+            "smoothness": f"{loss_smoothness.item():.4f}"
 
         }
         bar.set_postfix(pr)
@@ -204,17 +203,22 @@ def main():
     fig = go.Figure()
     fig.add_trace(
         go.Scattergl(
-            y=losses["snr"], name="snr"
-        )
-    )
-    fig.add_trace(
-        go.Scattergl(
-            y=losses["sar"], name="sar"
-        )
-    )
-    fig.add_trace(
-        go.Scattergl(
             y=losses["loss"], name="loss"
+        )
+    )
+    fig.add_trace(
+        go.Scattergl(
+            y=losses["mag"], name="mag"
+        )
+    )
+    fig.add_trace(
+        go.Scattergl(
+            y=losses["phase"], name="phase"
+        )
+    )
+    fig.add_trace(
+        go.Scattergl(
+            y=losses["smoothness"], name="smoothness"
         )
     )
     # path_fig = plib.Path("/data/pt_np-jschmidt/data/03_sequence_dev/mese_pulse_train_optimization/optimization/")
