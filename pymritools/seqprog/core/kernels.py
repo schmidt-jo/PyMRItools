@@ -141,7 +141,8 @@ class Kernel:
             # using spoiling gradient defined by interface file
             spoiling_moment = params.grad_moment_slice_spoiling
         else:
-            spoiling_moment = 2e-7
+            # use tiny amount bc rounding errors
+            spoiling_moment = 0.0
         if pulse_file:
             log_module.info(f"rf -- loading rf from file: {pulse_file}")
             rf = events.RF.load_from_pypsi_pulse(

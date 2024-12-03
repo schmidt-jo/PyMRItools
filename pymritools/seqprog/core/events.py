@@ -220,7 +220,7 @@ class RF(Event):
         """
         # Detect the excitation peak; if i is a plateau take its center
         rf_max = np.max(np.abs(self.signal))
-        i_peak = np.where(np.abs(self.signal) >= rf_max * 0.99999)[0]
+        i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
         self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
 
     def plot(self):
@@ -434,60 +434,61 @@ class GRAD(Event):
         re_start_time = times[-1]
 
         # re / spoil moment
-        if np.abs(re_spoil_moment) > 1e-7:
-            if np.sign(re_spoil_moment) != np.sign(amplitude):
-                log_module.error(f"pre-phase / spoil pre -- slice select not optimized for opposite sign grads")
-                # we can adopt here also with doubling the ramp times in case we have opposite signs
-            re_spoil_moment += - 0.5 * rephase * areas[-1]
-            # very specific requirement jstmc sequence. adjust for ramp up of next slice selective gradient
-            re_spoil_moment -= adjust_ramp_area
-            areas.append(re_spoil_moment)
-            # (1) check if ramp to amplitude exceeds set area if using maximum slew, i.e. smallest possible area
-            grad_instance._calc_check_single_ramp_area_vs_set_area(
-                area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
-            )
+        # if np.abs(re_spoil_moment) > 1e-10: always build re-gradient to rephase slice selection,
+        # either with or without spoiling
+        # if np.sign(re_spoil_moment) != np.sign(amplitude):
+        #     log_module.error(f"pre-phase / spoil pre -- slice select not optimized for opposite sign grads")
+            # we can adopt here also with doubling the ramp times in case we have opposite signs
+        re_spoil_moment += - 0.5 * rephase * areas[-1]
+        # very specific requirement jstmc sequence. adjust for ramp up of next slice selective gradient
+        re_spoil_moment -= adjust_ramp_area
+        areas.append(re_spoil_moment)
+        # (1) check if ramp to amplitude exceeds set area if using maximum slew, i.e. smallest possible area
+        grad_instance._calc_check_single_ramp_area_vs_set_area(
+            area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
+        )
 
-            # (2) check if max grad and max slew already suffice in setting area
-            re_grad_amplitude, t_flat = grad_instance._calc_check_double_ramp_area_vs_set_area(
-                area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
-            )
+        # (2) check if max grad and max slew already suffice in setting area
+        re_grad_amplitude, t_flat = grad_instance._calc_check_double_ramp_area_vs_set_area(
+            area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
+        )
 
-            # (3) if we set times on gradient raster we might need to adopt gradient values
+        # (3) if we set times on gradient raster we might need to adopt gradient values
+        re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
+            area=re_spoil_moment, amplitude_to_set=re_grad_amplitude, amplitude_fixed=amplitude, t_flat=t_flat
+        )
+
+        # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
+        duration_re_grad = t_ru + t_rd + t_flat
+        if duration_re_grad < t_minimum_re_grad:
+            # stretch to minimum required time if we have such
+            # update amplitude
+            b = - system.max_slew * t_minimum_re_grad + amplitude
+            c = amplitude ** 2 + system.max_slew * re_spoil_moment
+            re_grad_amplitude = -b / 2 + max(
+                np.sqrt(b ** 2 - 4 * c), - np.sqrt(b ** 2 - 4 * c)
+            ) / 2
+            t_ru = grad_instance.set_on_raster(np.abs(re_grad_amplitude) / system.max_slew)
+            t_rd = grad_instance.set_on_raster(np.abs(re_grad_amplitude - amplitude) / system.max_grad)
+            t_flat = t_minimum_re_grad - t_ru - t_rd
             re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
-                area=re_spoil_moment, amplitude_to_set=re_grad_amplitude, amplitude_fixed=amplitude, t_flat=t_flat
+                area=re_spoil_moment, amplitude_to_set=re_grad_amplitude,
+                amplitude_fixed=amplitude, t_flat=t_flat
             )
 
-            # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
-            duration_re_grad = t_ru + t_rd + t_flat
-            if duration_re_grad < t_minimum_re_grad:
-                # stretch to minimum required time if we have such
-                # update amplitude
-                b = - system.max_slew * t_minimum_re_grad + amplitude
-                c = amplitude ** 2 + system.max_slew * re_spoil_moment
-                re_grad_amplitude = -b / 2 + max(
-                    np.sqrt(b ** 2 - 4 * c), - np.sqrt(b ** 2 - 4 * c)
-                ) / 2
-                t_ru = grad_instance.set_on_raster(np.abs(re_grad_amplitude) / system.max_slew)
-                t_rd = grad_instance.set_on_raster(np.abs(re_grad_amplitude - amplitude) / system.max_grad)
-                t_flat = t_minimum_re_grad - t_ru - t_rd
-                re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
-                    area=re_spoil_moment, amplitude_to_set=re_grad_amplitude,
-                    amplitude_fixed=amplitude, t_flat=t_flat
-                )
-
-            # (5) build gradient shape for re/spoil grad
-            times.append(times[-1] + t_rd)
+        # (5) build gradient shape for re/spoil grad
+        times.append(times[-1] + t_rd)
+        amps.append(re_grad_amplitude)
+        if t_flat > 1e-7:
             amps.append(re_grad_amplitude)
-            if t_flat > 1e-7:
-                amps.append(re_grad_amplitude)
-                times.append(times[-1] + t_flat)
-            times.append(times[-1] + t_ru)
-            amps.append(0.0)
-        else:
-            # ramp down only, no re moment
-            duration_re_grad = grad_instance.set_on_raster(np.abs(amplitude / system.max_slew))
-            times.append(times[-1] + duration_re_grad)
-            amps.append(0.0)
+            times.append(times[-1] + t_flat)
+        times.append(times[-1] + t_ru)
+        amps.append(0.0)
+        # else:
+        #     # ramp down only, no re moment
+        #     duration_re_grad = grad_instance.set_on_raster(np.abs(amplitude / system.max_slew))
+        #     times.append(times[-1] + duration_re_grad)
+        #     amps.append(0.0)
 
         # end of re gradient
         re_end_time = times[-1]
