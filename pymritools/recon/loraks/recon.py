@@ -122,16 +122,12 @@ def recon(settings: PyLoraksConfig, mode: str):
     # loraks_phase = torch.mean(loraks_phase, dim=-2)
     # loraks_mag = torch.abs(loraks_recon)
 
-    # loraks_recon_k = loraks_mag * torch.exp(1j * loraks_phase)
-    if settings.process_slice:
-        loraks_recon = loraks_recon[:, :, None, :]
-
     logging.info("FFT into image space")
     # fft into real space
     loraks_recon_img = fft(loraks_recon, img_to_k=False, axes=(0, 1))
 
     logging.info("rSoS channels")
-    dim_channel = -2 if len(loraks_recon.shape) == 4 else -1
+    dim_channel = -2
 
     # for nii we rSoS combine channels
     loraks_recon_mag = root_sum_of_squares(input_data=loraks_recon_img, dim_channel=dim_channel)

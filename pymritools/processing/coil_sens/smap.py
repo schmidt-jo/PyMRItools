@@ -95,7 +95,7 @@ def smap(settings: CoilSensConfig):
         smap[:, :, idx_z] = bd_smap_smoothed.cpu()
 
     # want to calculate a covariance matrix of the individual coil sensitivities
-    cov = torch.cov(torch.reshape(smap, (-1, smap.shape[-1])).T)
+    cov = torch.corrcoef(torch.reshape(smap, (-1, smap.shape[-1])).T)
 
     # plot cov
     fig = go.Figure()
@@ -109,7 +109,7 @@ def smap(settings: CoilSensConfig):
     file_path = path_out.joinpath("smap_cov").with_suffix(".json")
     log_module.info(f"Saving covariance matrix to {file_path}")
     with open(file_path.as_posix(), "w") as j_file:
-        json.dump(cov, j_file, indent=2)
+        json.dump(cov.tolist(), j_file, indent=2)
     # save
     nifti_save(data=smap.to(torch.float32), img_aff=affine, path_to_dir=path_out, file_name="smap")
 

@@ -160,7 +160,7 @@ def siemens_rd_to_torch(config: RD):
         # transform into image
         img = fft(k_space, img_to_k=False, axes=(0, 1))
         # do rSoS
-        img = root_sum_of_squares(img, dim_channel=-2)
+        img = np.squeeze(root_sum_of_squares(img, dim_channel=-2))
         # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
         nifti_save(data=k_sampling_mask.astype(float)[:, :, :, 0], img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")

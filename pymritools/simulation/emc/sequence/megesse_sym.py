@@ -8,7 +8,6 @@ import torch
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
-from pymritools.config.rf import RFPulse
 from pymritools.simulation.emc.sequence.base_sequence import Simulation
 from pymritools.simulation.emc.core import functions, GradPulse
 

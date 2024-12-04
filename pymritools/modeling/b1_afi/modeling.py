@@ -7,7 +7,7 @@ from simple_parsing import field
 from scipy.ndimage import gaussian_filter
 
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.config.base import BaseClass
+from pymritools.config.basic import BaseClass
 from pymritools.utils import nifti_load, nifti_save
 
 log_module = logging.getLogger(__name__)

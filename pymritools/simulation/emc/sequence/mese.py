@@ -81,7 +81,7 @@ class MESE(Simulation):
         log_module.info("__ Simulating MESE Sequence __")
         t_start = time.time()
         # --- starting sim matrix propagation --- #
-        log_module.debug("calculate matrix propagation")
+        log_module.info("calculate matrix propagators 1/4")
         # excitation
         self.data = functions.propagate_gradient_pulse_relax(
             pulse_x=self.gp_excitation.data_pulse_x,
@@ -94,14 +94,17 @@ class MESE(Simulation):
             self.set_magnetization_profile_snap(snap_name="excitation")
 
         # calculate timing matrices (there are only 3)
+        log_module.info("calculate matrix propagators 2/4")
         # first refocus
         mat_prop_ref1_pre_time = functions.matrix_propagation_relaxation_multidim(
             dt_s=self.sequence_timings.get_timing_s("pre_refocus_1"), sim_data=self.data
         )
+        log_module.info("calculate matrix propagators 3/4")
         mat_prop_ref1_post_time = functions.matrix_propagation_relaxation_multidim(
             dt_s=self.sequence_timings.get_timing_s(1), sim_data=self.data
         )
         # other refocus
+        log_module.info("calculate matrix propagators 4/4")
         mat_prop_ref_pre_post_time = functions.matrix_propagation_relaxation_multidim(
             dt_s=self.sequence_timings.get_timing_s("pre_post_refocus"), sim_data=self.data
         )
@@ -191,15 +194,17 @@ def main():
 
     settings = EmcSimSettings.from_cli(args=args.settings)
     settings.display()
-
-    params = args.params
+    if settings.emc_params_file:
+        params = EmcParameters.load(settings.emc_params_file)
+    else:
+        params = args.params
 
     try:
         simulate(settings=settings, params=params)
     except Exception as e:
         parser.print_usage()
         log_module.exception(e)
-    exit(-1)
+        exit(-1)
 
 
 if __name__ == '__main__':

@@ -11,10 +11,10 @@ class SimulationSettings(BaseClass):
     EMC - Bloch equation simulation settings
     """
     # files and config
-    # emc_params_file: str = field(
-    #     alias="-emc", default="./examples/simulation/emc/emc_params.json",
-    #     help="provide sequence event parameters"
-    # )
+    emc_params_file: str = field(
+        alias="-emc", default="./examples/simulation/emc/emc_params.json",
+        help="provide sequence event parameters"
+    )
     kernel_file: str = field(
         alias="-kernels", default="./examples/simulation/kernels/kernels",
         help="provide file to kernel dict., i.e. named sequence event blocks"
