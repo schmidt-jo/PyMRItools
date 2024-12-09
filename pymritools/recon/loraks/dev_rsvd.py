@@ -19,19 +19,16 @@ def main():
     path_out.mkdir(exist_ok=True, parents=True)
 
     shape = (256, 256)
+    num_coils = 8
+    num_echoes = 6
     logging.info("get SheppLogan phantom")
-    sl_img = SheppLogan().get_2D_image(shape=shape)
+    logging.info("add virtual coils")
+    sl_img = SheppLogan().get_2D_image(shape=shape, num_coils=num_coils)
 
-    logging.info("Build virtual coils and decay echoes")
-    coil_sens = torch.zeros((*shape, 4))
-    centers = [[80, 80], [80, 200], [200, 80], [200, 200]]
-    for i in range(4):
-        coil_sens[:, :, i] = gaussian_2d_kernel(size_x=shape[0], size_y=shape[1], center_x=centers[i][0],
-                                                center_y=centers[i][1], sigma=(80, 100))
-    # create coil images (multiplication in image space, convolution in k-space)
-    sl_img = sl_img[:, :, None] * coil_sens
+    logging.info("add decay echoes")
     # create decay echo images
-    sl_img = sl_img[:, :, :, None] * torch.exp(-20 * torch.arange(0.009, 0.08, 0.009))[None, None, None, :]
+    sl_img = sl_img[:, :, :, None] * torch.exp(-20 * torch.arange(1, 1 + num_echoes) * 0.009)[None, None, None, :]
+
     # back to k-space
     sl_k_cs = fft(sl_img, img_to_k=True, axes=(0, 1))
     shape = sl_k_cs.shape
@@ -44,7 +41,7 @@ def main():
     rank = 30
     logging.info("randomized svd decomposition")
     # using rank as sampling size -> compression right to the truncated rank dimension
-    u_rsvd, s_rsvd, vh_rsvd = randomized_svd(matrix=s_matrix, sampling_size=rank)
+    u_rsvd, s_rsvd, vh_rsvd = randomized_svd(matrix=s_matrix, sampling_size=rank, oversampling=int(rank / 2))
 
     logging.info("subspace orbit randomized svd decomposition")
     # using rank as sampling size -> compression right to the truncated rank dimension
