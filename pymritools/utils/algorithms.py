@@ -126,14 +126,14 @@ def chambolle_pock_tv(data: np.ndarray, lam, n_it=100):
 
 def randomized_svd(
         matrix: torch.Tensor, sampling_size: int,
-        power_projections: int = 0, oversampling_factor: int = 0):
+        power_projections: int = 0, oversampling: int = 0):
     """
     Function calculates a randomized Singular Value Decomposition (SVD) for a given matrix.
     The algorithm uses random projections and, if necessary, power iterations to improve the accuracy of the approximation
     :param matrix: Input tensor containing the data matrix to be decomposed. The tensor may have additional batch dimensions.
     :param sampling_size: Number of singular values and vectors to compute.
     :param power_projections: Number of power iterations to perform to improve the approximation quality.
-    :param oversampling_factor: Additional random vectors to sample to improve the robustness of the decomposition.
+    :param oversampling: Additional random vectors to sample to improve the robustness of the decomposition.
     :return: A tuple containing the left singular vectors (U), singular values (S), and right singular vectors (VH) of the input matrix.
     """
     # get matrix shape - ignore batch dims
@@ -151,7 +151,7 @@ def randomized_svd(
 
     # Generate a random Gaussian matrix
     sample_projection = torch.randn(
-        (n, sampling_size + oversampling_factor),
+        (n, sampling_size + oversampling),
         dtype=matrix.dtype, device=matrix.device
     )
 
@@ -172,14 +172,15 @@ def randomized_svd(
 
     # s, vh should be approximately the matrix s, vh of the svd from random matrix theory
     # we can get the left singular values by back projection
-    u_matrix = torch.matmul(q, u)
+    u_matrix = torch.matmul(q, u[..., :, :sampling_size])
+    vh = vh[..., :sampling_size, :]
 
     if transpose:
         v_temp = vh
         vh = torch.movedim(u_matrix, -1, -2)
         u_matrix = torch.movedim(v_temp, -1, -2)
 
-    return u_matrix, s, vh
+    return u_matrix, s[..., :sampling_size], vh
 
 
 def subspace_orbit_randomized_svd(matrix: torch.Tensor, rank):

@@ -159,7 +159,7 @@ def loraks(
         rank: int, lam: float,
         batch_size_echoes: int = 4,
         max_num_iter: int = 10, conv_tol: float = 1e-3,
-        data_consistency = 0.95,
+        data_consistency: float = 0.95,
         device: torch.device = torch.get_default_device()):
     # __ One Time Calculations __
     # get dimensions
@@ -168,6 +168,7 @@ def loraks(
     # for now just pick middle slice
     idx_slice = int(n_slice / 2)
     k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_slice]
+    slice_shape = k_space_x_y_ch_t.shape
 
     # get indices for operators
     indices = get_idx_2d_circular_neighborhood_patches_in_shape(
@@ -175,7 +176,7 @@ def loraks(
     )
 
     # only use S matrix for now - only calculate for relevant dims
-    count_matrix = get_count_matrix(shape=(n_read, n_phase, 1, n_echoes), indices=indices, mode="s")
+    count_matrix = get_count_matrix(shape=(n_read, n_phase, n_channels, n_echoes), indices=indices, mode="s")
     mask = count_matrix > 1e-7
 
     # calculate matrix dimensions
@@ -218,7 +219,7 @@ def loraks(
 
         # second part, calculate reconstructed k
         k_recon_loraks = s_adjoint_operator(
-            s_matrix=matrix_recon_loraks, indices=indices, k_space_dims=shape
+            s_matrix=matrix_recon_loraks, indices=indices, k_space_dims=slice_shape
         )
         k_recon_loraks[mask] /= count_matrix[mask]
 
@@ -230,7 +231,7 @@ def loraks(
         loss.backward()
 
         with torch.no_grad():
-            k -= k.grad * 0.4
+            k -= k.grad * 0.05
 
         k.grad.zero_()
         # optim.step()
@@ -238,7 +239,8 @@ def loraks(
         losses.append(loss.item())
 
         bar.postfix = (
-            f"loss 1: {loss_1.item():.2f} -- loss 2: {loss_2.item():.2f} -- total_loss: {loss.item():.2f} -- rank: {rank}"
+            f"loss 1: {loss_1.item():.2f} -- loss 2: {loss_2.item():.2f} -- "
+            f"total_loss: {loss.item():.2f} -- rank: {rank}"
         )
 
     return k[:, :, None]
@@ -332,14 +334,14 @@ def ac_loraks(
         #  This way we are less prone to batching non sensitive channels for reconstruction?
         #  Alternatively we could do a fft us recon, extract some crude sensitivity maps and
         #  batch channels correlated in image space
-        idxs_channels = torch.randperm(n_channels)
-        num_batches = int(np.ceil(n_channels / batch_size_channels))
-        batch_aha = aha.to(device)
+        # idxs_channels = torch.randperm(n_channels)
+        num_batches = int(np.ceil(n_echoes / batch_size_channels))
         iter_bar = tqdm.trange(num_batches, desc="batch_processing")
         for idx_b in iter_bar:
             start = idx_b * batch_size_channels
-            end = np.min([(idx_b + 1) * batch_size_channels, n_channels])
-            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, idxs_channels[start:end]].to(device)
+            end = np.min([(idx_b + 1) * batch_size_channels, n_echoes])
+            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, :, start:end].to(device)
+            batch_aha = aha[:, :, :, start:end].to(device)
 
             # __ per slice calculations
             # __ for C
@@ -376,7 +378,7 @@ def ac_loraks(
                 iter_bar=iter_bar
             )
 
-            k_space_x_y_z_ch_t[:, :, idx_s, idxs_channels[start:end]] = xmin.cpu()
+            k_space_x_y_z_ch_t[:, :, idx_s, :, start:end] = xmin.cpu()
 
     return k_space_x_y_z_ch_t
 
