@@ -16,15 +16,15 @@ from pymritools.utils import (
 log_module = logging.getLogger(__name__)
 
 
-def c_operator(k_space: torch.Tensor, c_mapping: torch.Tensor):
+def c_operator(k_space: torch.Tensor, indices: torch.Tensor):
     """
     Maps from k-space with shape (nx, ny, nc, nt) into the neighborhood-representation
     :param k_space: k-space with shape (nx, ny, nc, nt)
-    :param c_mapping: neighborhood mapping with shape (nb, 2)
+    :param indices: neighborhood mapping with shape (nb, 2)
     :return: neighborhood representation with shape (nt, nb)
     """
     k_space = torch.flatten(k_space, 2)
-    return k_space[c_mapping[:, :, 0], c_mapping[:, :, 1]].permute(0,2,1).flatten(1)
+    return k_space[indices[:, :, 0], indices[:, :, 1]].permute(0, 2, 1).flatten(1)
 
 
 
