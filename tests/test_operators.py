@@ -28,7 +28,7 @@ def test_k_space_to_c_matrix_and_back():
     # create sub - sampled phantom
     k_space_us = SheppLogan().get_sub_sampled_k_space(shape=shape, acceleration=2, ac_lines=30)
     # create c_matrix
-    c_matrix = c_operator(k_space=k_space_us[:, :, None, None], c_mapping=c_indices)
+    c_matrix = c_operator(k_space=k_space_us[:, :, None, None], indices=c_indices)
     # get backward mapping
     c_recon_k_space = c_adjoint_operator(c_matrix=c_matrix, indices=c_indices, k_space_dims=shape)
     c_recon_k_space[count_matrix>0] /= count_matrix[count_matrix>0]
