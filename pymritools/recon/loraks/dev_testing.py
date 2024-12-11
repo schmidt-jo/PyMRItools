@@ -11,13 +11,13 @@ from pymritools.utils.phantom import SheppLogan
 from pymritools.utils import fft, root_sum_of_squares
 import plotly.graph_objects as go
 import plotly.subplots as psub
-from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape
+from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape, get_idx_2d_square_neighborhood_patches_in_shape
 from pymritools.recon.loraks.operators import s_operator, s_adjoint_operator
 from pymritools.recon.loraks.algorithms import get_count_matrix
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
 
 
-def func_optim(k, indices, s_threshold, shape, count_matrix, mask, sl_us_k, sampling_mask, lam_s):
+def func_optim(k, indices, s_threshold, shape, count_matrix, mask, sl_us_k, sampling_mask, lam_s, rank):
     # get operator matrix
     matrix = s_operator(
         k_space_x_y_ch_t=k, indices=indices
@@ -26,7 +26,8 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, mask, sl_us_k, samp
     # do svd
     # we can use torch svd, or try the randomized version, see above
     u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
-    # u, s, vh = randomized_svd(matrix, sampling_size=svd_sampling_size, oversampling_factor=5, power_projections=2)
+    # u, s, vh = randomized_svd(matrix, sampling_size=rank, oversampling=2*rank)
+    # u, s, vh = subspace_orbit_randomized_svd(matrix, rank=rank)
 
     # threshold singular values
     s_r = s * s_threshold
@@ -53,6 +54,7 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, mask, sl_us_k, samp
 
     return loss_2 + lam_s * loss_1, loss_1, loss_2
 
+
 def main():
     # set output path
     path_out = plib.Path("./dev_sim/loraks").absolute()
@@ -78,21 +80,24 @@ def main():
     sampling_mask = (torch.abs(sl_us_k) > 1e-9)
 
     # set LORAKS parameters
-    radius = 3
-    rank = 40
+    radius = 5
+    rank = 30
     lam_s = 0.05
     max_num_iter = 100
     device = torch.device("cuda")
 
-    # lr = np.linspace(0.1, 0.005, max_num_iter)
+    lr = np.linspace(0.05, 0.001, max_num_iter)
     # __ One Time Calculations __
     # get dimensions
     shape = sl_us_k.shape
     n_read, n_phase, n_channels, n_echoes = shape
 
     # get indices for operators
-    indices = get_idx_2d_circular_neighborhood_patches_in_shape(
-        shape_2d=(n_read, n_phase), nb_radius=radius, device=torch.device("cpu")
+    # indices = get_idx_2d_circular_neighborhood_patches_in_shape(
+    #     shape_2d=(n_read, n_phase), nb_radius=radius, device=torch.device("cpu")
+    # )
+    indices = get_idx_2d_square_neighborhood_patches_in_shape(
+        shape_2d=(n_read, n_phase), nb_size=radius, device=torch.device("cpu")
     )
     # only use S matrix for now - only calculate for relevant dims
     count_matrix = get_count_matrix(shape=(n_read, n_phase, n_channels, n_echoes), indices=indices, mode="s").to(device)
@@ -133,55 +138,56 @@ def main():
     for i in bar:
         loss, loss_1, loss_2 = func_optim(
             k=k, indices=indices, s_threshold=s_threshold, shape=shape, count_matrix=count_matrix, mask=mask,
-            sl_us_k=sl_us_k, sampling_mask=sampling_mask, lam_s=lam_s
+            sl_us_k=sl_us_k, sampling_mask=sampling_mask, lam_s=lam_s, rank=rank
         )
         loss.backward()
 
         with torch.no_grad():
-            grads = k.grad
+            # grads = k.grad
             # at this stage we have the gradients g based on the current best guess (initially g_0).
             # to minimize the number of steps to take, aka conjugate gradient method we do a few things.
             # 1) compute search direction (Polak-Ribiere formula): beta_k = g_{k+1}^T  (g_{k+1} - g_k) / (g_k^T g_k)
             # 6) update search direction: d_{k+1} = -g_{k+1} + beta_k d_k
-            if i == 0:
-                # setting initial search direction d_0 = g_0
-                d_k = -grads
-                g_k = grads
-            else:
-                # compute conjugate gradient direction
-                # flatten the gradients
-                g_k_flat = g_k.view(-1)
-                g_k1_flat = grads.view(-1)
-                nom = torch.dot(g_k1_flat, g_k1_flat - g_k_flat)
-                denom = torch.dot(g_k_flat, g_k_flat)
-                beta = nom / denom if torch.abs(denom) > 1e-9 else 0.0
-
-                # update search direction
-                d_k = -grads + beta * d_k
-                g_k = grads
-
-            # 2) line search: find optimal step size a_k that minimizes the function along this step direction d_k.
-            # armijo sufficient decrease condition
-            c_a = 1e-2
-            alpha = 0.5
-            max_num_iter_line_search = 100
-            for iter_line_search in range(max_num_iter_line_search):
-                a, _, _ = func_optim(
-                    k=k + alpha * d_k, indices=indices, s_threshold=s_threshold, shape=shape,
-                    count_matrix=count_matrix, mask=mask, sl_us_k=sl_us_k, sampling_mask=sampling_mask, lam_s=lam_s
-                )
-                b = loss + c_a * alpha * torch.linalg.norm(g_k * d_k)
-                if a < b:
-                    break
-                alpha *= 0.4
+            # if i == 0:
+            #     # setting initial search direction d_0 = g_0
+            #     d_k = -grads
+            #     g_k = grads
+            # else:
+            #     # compute conjugate gradient direction
+            #     # flatten the gradients
+            #     g_k_flat = g_k.view(-1)
+            #     g_k1_flat = grads.view(-1)
+            #     nom = torch.dot(g_k1_flat, g_k1_flat - g_k_flat)
+            #     denom = torch.dot(g_k_flat, g_k_flat)
+            #     beta = nom / denom if torch.abs(denom) > 1e-9 else 0.0
+            #
+            #     # update search direction
+            #     d_k = -grads + beta * d_k
+            #     g_k = grads
+            #
+            # # 2) line search: find optimal step size a_k that minimizes the function along this step direction d_k.
+            # # armijo sufficient decrease condition
+            # c_a = 1e-2
+            # alpha = 0.5
+            # max_num_iter_line_search = 100
+            # for iter_line_search in range(max_num_iter_line_search):
+            #     a, _, _ = func_optim(
+            #         k=k + alpha * d_k, indices=indices, s_threshold=s_threshold, shape=shape,
+            #         count_matrix=count_matrix, mask=mask, sl_us_k=sl_us_k, sampling_mask=sampling_mask, lam_s=lam_s,
+            #         rank=rank
+            #     )
+            #     b = loss + c_a * alpha * torch.linalg.norm(g_k * d_k)
+            #     if a < b:
+            #         break
+            #     alpha *= 0.4
 
             # 3) update position: move to x_{k+1} = x_{k} + a_k d_k
-            k += alpha * d_k
+            k -= lr[i] * k.grad
             # 4) compute new gradient: g_{k+1} = nabla f(x_{k+1})
             #
             #
 
-            grads = torch.abs(grads)
+            grads = torch.abs(k.grad)
             conv = torch.linalg.norm(grads).cpu()
             grads = grads[:, :, 0, 0].cpu()
 
@@ -191,12 +197,12 @@ def main():
         # optim.zero_grad()
         losses.append(
             {"total": loss.item(), "data": loss_2.item(), "low rank": loss_1.item(),
-             "conv": conv.item(), "alpha": alpha}
+             "conv": conv.item()}
         )
 
         bar.postfix = (
             f"loss low rank: {1e3*loss_1.item():.2f} -- loss data: {1e3*loss_2.item():.2f} -- "
-            f"total_loss: {1e3*loss.item():.2f} -- conv : {conv.item()} -- alpha: {1e3*alpha} -- rank: {rank}"
+            f"total_loss: {1e3*loss.item():.2f} -- conv : {conv.item()} -- rank: {rank}"
         )
 
         if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int)):
