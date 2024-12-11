@@ -1,7 +1,11 @@
 import logging
+import pathlib as plib
+
 from abc import ABC, abstractmethod
 
 import torch
+import plotly.graph_objects as go
+import plotly.subplots as psub
 
 log_module = logging.getLogger(__name__)
 
@@ -70,7 +74,6 @@ def get_idx_2d_square_neighborhood_patches_in_shape(
     return grid
 
 
-
 def get_idx_2d_circular_neighborhood_patches_in_shape(
         shape_2d: tuple[int, int],
         nb_radius: int,
@@ -92,6 +95,50 @@ def get_idx_2d_circular_neighborhood_patches_in_shape(
     # build index grid
     grid = shape_grid[:, None, :] + nb_grid[None, :, :]
     return grid
+
+
+def get_flat_idx_circular_neighborhood_patches_in_shape(
+        shape_2d: tuple[int, int],
+        nb_radius: int,
+        device: torch.device = torch.get_default_device()) -> torch.Tensor:
+    """
+    Generates 1d indices of all circular patches within a flattened 2d shape (shape_2d) of neighboring voxels
+    in a neighborhood of radius nb_radius, on a 2d grid.
+    :param shape_2d: Shape of 2d grid.
+    :param nb_radius: Radius of the circular neighborhood.
+    :param device: Desired device of the returned tensor.
+    :return: Tensor with shape (#pts, 2) of x-y-points of the grid.
+    """
+    # build indices of grid for whole shape and neighborhoods
+    # dims: [nx ny, nb, 2]
+    index_grid = get_idx_2d_circular_neighborhood_patches_in_shape(
+        shape_2d=shape_2d, nb_radius=nb_radius, device=device
+    )
+    # flattened indices by easy computation
+    indices_1d = index_grid[:, :, 0] * shape_2d[1] + index_grid[:, :, 1]
+    return indices_1d
+
+
+def get_flat_idx_square_neighborhood_patches_in_shape(
+        shape_2d: tuple[int, int],
+        nb_size: int,
+        device: torch.device = torch.get_default_device()) -> torch.Tensor:
+    """
+    Generates 1d indices of all circular patches within a flattened 2d shape (shape_2d) of neighboring voxels
+    in a neighborhood of radius nb_radius, on a 2d grid.
+    :param shape_2d: Shape of 2d grid.
+    :param nb_size: side-length of the square neighborhood.
+    :param device: Desired device of the returned tensor.
+    :return: Tensor with shape (#pts, 2) of x-y-points of the grid.
+    """
+    # build indices of grid for whole shape and neighborhoods
+    # dims: [nx ny, nb, 2]
+    index_grid = get_idx_2d_square_neighborhood_patches_in_shape(
+        shape_2d=shape_2d, nb_size=nb_size, device=device
+    )
+    # flattened indices by easy computation
+    indices_1d = index_grid[:, :, 0] * shape_2d[1] + index_grid[:, :, 1]
+    return indices_1d
 
 
 def get_idx_2d_rectangular_neighborhood_patches_in_shape(
@@ -118,92 +165,67 @@ def get_idx_2d_rectangular_neighborhood_patches_in_shape(
     grid = shape_grid[:, None, :] + nb_grid[None, :, :]
     return grid
 
-# TODO: Remove? We don't want some complex class structure initially.
-class MatrixOperatorLowRank2D(ABC):
-    """
-    Base implementation of matrix operator,
-    We want to implement an operator for data [x, y, ch, t], that operates on 2d shapes.
-    ToDo: check batching of z-dims and most logic implementation for usecases (LORAKS and PCA Denoise)
-    Merging of channel and time data allows for complementary sampling schemes per echo and
-    is supposed to improve performance.
-    This is the common base class
-    """
-    def __init__(self, k_space_dims_x_y_ch_t: tuple, nb_radius: int = 3,
-                 device: torch.device = torch.get_default_device()):
-        # save params
-        self.radius: int = nb_radius
-        self.k_space_dims: tuple = self._expand_dims_to_x_y_ch_t(k_space_dims_x_y_ch_t)
-        self.device: torch.device = device
 
-        # calculate the shape for combined x-y and ch-t dims
-        self.reduced_k_space_dims = (
-            k_space_dims_x_y_ch_t[0] * k_space_dims_x_y_ch_t[1],  # xy
-            k_space_dims_x_y_ch_t[2] * k_space_dims_x_y_ch_t[3]  # ch - t
-        )
-        # need to build psp once with ones, such that we can extract it from the method
-        self.p_star_p: torch.Tensor = torch.ones(
-            (*self.k_space_dims[:2], self.reduced_k_space_dims[-1]), dtype=torch.int
-        )
-        self.neighborhood_indices: torch.Tensor = self._get_neighborhood_indices()
-        self.neighborhood_indices_pt_sym: torch.Tensor = self._get_neighborhood_indices_point_sym()
-        # update p_star_p, want this to be 2d + reduced last dim
-        self.p_star_p = torch.reshape(
-            torch.abs(self._get_p_star_p()), (*self.k_space_dims[:2], self.reduced_k_space_dims[-1])
-        )
+def dev():
+    # set path
+    path = plib.Path("dev_sim/mat_indexing").absolute()
 
-    @staticmethod
-    def _expand_dims_to_x_y_ch_t(in_data: torch.Tensor | tuple):
-        if torch.is_tensor(in_data):
-            shape = in_data.shape
-            while shape.__len__() < 4:
-                # want the dimensions to be [x, y, ch, t], assume to be lacking time and or channel information
-                in_data = in_data.unsqueeze(-1)
-                shape = in_data.shape
-        else:
-            while in_data.__len__() < 4:
-                # want the dimensions to be [x, y, ch, t], assume to be lacking time and or channel information
-                in_data = (*in_data, 1)
-            shape = in_data
-        if shape.__len__() > 4:
-            err = f"Operator only implemented for <= 4D data."
-            log_module.error(err)
-            raise AttributeError(err)
-        return in_data
+    # build 2d shape
+    nx, ny = (120, 100)
+    nb_size = 3
+    init_shape = torch.zeros((nx, ny))
+    # build 2d square and circular indices
+    ind_sq_2d = get_idx_2d_square_neighborhood_patches_in_shape(shape_2d=(nx, ny), nb_size=nb_size)
+    ind_circ_2d = get_idx_2d_circular_neighborhood_patches_in_shape(shape_2d=(nx, ny), nb_radius=nb_size)
 
-    @abstractmethod
-    def _get_neighborhood_indices(self) -> torch.Tensor:
-        raise NotImplementedError
+    # set first and random neighborhood to values
+    mat_sq_2d = init_shape.clone()
+    mat_sq_2d[ind_sq_2d[0, :, 0], ind_sq_2d[0, :, 1]] = 1
+    mat_sq_2d[ind_sq_2d[1000, :, 0], ind_sq_2d[1000, :, 1]] = 2
+    mat_circ_2d = init_shape.clone()
+    mat_circ_2d[ind_circ_2d[0, :, 0], ind_circ_2d[0, :, 1]] = 1
+    mat_circ_2d[ind_circ_2d[1000, :, 0], ind_circ_2d[1000, :, 1]] = 2
 
-    @abstractmethod
-    def _get_neighborhood_indices_point_sym(self) -> torch.Tensor:
-        raise NotImplementedError
+    # want to build flattened 1d indexing
+    ind_sq_1d = ind_sq_2d[:, :, 0] * ny + ind_sq_2d[:, :, 1]
+    ind_circ_1d = ind_circ_2d[:, :, 0] * ny + ind_circ_2d[:, :, 1]
 
-    @property
-    @abstractmethod
-    def neighborhood_size(self):
-        return NotImplementedError
+    # Use indices to set values
+    mat_sq_1d = init_shape.clone().view(-1)
+    mat_sq_1d[ind_sq_1d[0]] = 1
+    mat_sq_1d[ind_sq_1d[1000]] = 2
+    mat_circ_1d = init_shape.clone().view(-1)
+    mat_circ_1d[ind_circ_1d[0]] = 1
+    mat_circ_1d[ind_circ_1d[1000]] = 2
 
-    def operator(self, k_space_x_y_ch_t: torch.Tensor) -> torch.Tensor:
-        """ k-space input in 4d, [x, y, ch, t]"""
-        # check for correct data shape, expand if necessary
-        k_space_x_y_ch_t = self._expand_dims_to_x_y_ch_t(k_space_x_y_ch_t)
-        return self._operator(k_space_x_y_ch_t)
+    # reshape mat_1d for plotting
+    mat_sq_1d = mat_sq_1d.view(nx, ny)
+    mat_circ_1d = mat_circ_1d.view(nx, ny)
 
-    def operator_adjoint(self, x_matrix: torch.tensor) -> torch.tensor:
-        return torch.squeeze(self._adjoint(x_matrix=x_matrix))
+    # plot
+    fig = psub.make_subplots(
+        rows=2, cols=2,
+        row_titles=["2D indexing", "1D indexing"],
+        column_titles=["Square", "Circular"]
+    )
+    fig.add_trace(
+        go.Heatmap(z=mat_sq_2d), row=1, col=1
+    )
+    fig.add_trace(
+        go.Heatmap(z=mat_sq_1d), row=2, col=1
+    )
+    fig.add_trace(
+        go.Heatmap(z=mat_circ_2d), row=1, col=2
+    )
+    fig.add_trace(
+        go.Heatmap(z=mat_circ_1d), row=2, col=2
+    )
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    fig_name = path.joinpath("2d_indexing_nbs").with_suffix(".html")
+    print(f"write file: {fig_name}")
+    fig.write_html(fig_name)
 
-    @abstractmethod
-    def _operator(self, k_space: torch.tensor) -> torch.tensor:
-        """ to be implemented for each loraks type mode"""
-        raise NotImplementedError
 
-    @abstractmethod
-    def _adjoint(self, x_matrix: torch.tensor) -> torch.tensor:
-        raise NotImplementedError
-
-    def _get_p_star_p(self):
-        return self.operator_adjoint(
-            self.operator(
-                torch.ones(self.k_space_dims, dtype=torch.complex128)
-            )
-        )
+if __name__ == '__main__':
+    dev()
