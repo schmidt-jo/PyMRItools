@@ -46,7 +46,7 @@ def get_all_idx_nd_square_patches_in_nd_shape(size: int, direction: tuple[int, .
         Args:
             size: Size of the square patch.
             direction: Tuple indicating the direction in k-space, e.g., (0, 0, 1, 0, 1).
-            k_space_shape: Shape of the k-space, e.g., (echos, channels, nz, nx, ny).
+            k_space_shape: Shape of the k-space, e.g., (echos, channels, nz, ny, nx).
 
         Returns:
             torch.Tensor: Linear indices for all square patches.
