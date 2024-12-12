@@ -175,7 +175,7 @@ def dev():
     nb_size = 3
     init_shape = torch.zeros((nx, ny))
     # build 2d square and circular indices
-    ind_sq_2d = get_idx_2d_square_neighborhood_patches_in_shape(shape_2d=(nx, ny), nb_size=nb_size)
+    ind_sq_2d = get_idx_2d_square_neighborhood_patches_in_shape(shape_2d=(nx, ny), nb_size=nb_size+torch.sqrt(torch.pi))
     ind_circ_2d = get_idx_2d_circular_neighborhood_patches_in_shape(shape_2d=(nx, ny), nb_radius=nb_size)
 
     # set first and random neighborhood to values
