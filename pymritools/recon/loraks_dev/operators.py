@@ -36,8 +36,7 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor):
     )
 
 
-def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple,
-                       device=None, dtype=torch.complex64):
+def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
     # allocat
     dim = torch.prod(torch.tensor(k_space_dims))
 
@@ -52,11 +51,12 @@ def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
     sip = sip_p_sim - msip_p_sim
     sim = msip_p_sim + sip_p_sim
 
+    dtype = torch.complex64 if s_matrix.dtype == torch.float32 else torch.complex128
     # crucial index add usage of 1d indexing
-    adj_s_matrix_p = torch.zeros(dim, dtype=torch.complex128).index_add(
+    adj_s_matrix_p = torch.zeros(dim, dtype=dtype, device=s_matrix.device).index_add(
         0, indices.view(-1), (srp + 1j * sip).view(-1)
     )
-    adj_s_matrix_m = torch.zeros(dim, dtype=torch.complex128).index_add(
+    adj_s_matrix_m = torch.zeros(dim, dtype=dtype, device=s_matrix.device).index_add(
         0, indices.view(-1), (srm + 1j * sim).view(-1)
     )
 

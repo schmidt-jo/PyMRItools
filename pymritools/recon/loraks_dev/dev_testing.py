@@ -80,7 +80,7 @@ def main():
     rank = 30
     lam_s = 0.05
     max_num_iter = 100
-    device = torch.device("cpu")
+    device = torch.device("cuda")
     logging.info(f"Setup LORAKS: Rank - {rank}")
 
     # use adaptive learning rate
@@ -192,6 +192,9 @@ def main():
     sampling_mask = sampling_mask.to(device=device)
     # save us data for consistency term, send to device
     k_input = k_input.to(device)
+
+    # ensure device
+    count_matrix = count_matrix.to(device)
 
     # build s_threshold based on rank
     s_threshold = torch.ones(matrix_rank, dtype=torch.float32)
