@@ -23,16 +23,16 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_m
 
     # do svd
     # we can use torch svd, or try the randomized version, see above
-    u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
+    # u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
     # u, s, vh = randomized_svd(matrix, sampling_size=rank, oversampling=2*rank)
-    # u, s, vh = subspace_orbit_randomized_svd(matrix, rank=rank)
+    u, s, vh = subspace_orbit_randomized_svd(matrix, rank=rank)
 
     # threshold singular values
-    s_r = s * s_threshold
+    # s_r = s * s_threshold
 
     # reconstruct the low rank approximation
     matrix_recon_loraks = torch.matmul(
-        torch.matmul(u, torch.diag(s_r).to(u.dtype)),
+        torch.matmul(u, torch.diag(s).to(u.dtype)),
         vh
     )
     # first part of loss
@@ -77,14 +77,14 @@ def main():
 
     # set LORAKS parameters
     radius = 5
-    rank = 30
+    rank = 40
     lam_s = 0.05
     max_num_iter = 100
     device = torch.device("cuda")
     logging.info(f"Setup LORAKS: Rank - {rank}")
 
     # use adaptive learning rate
-    lr = np.linspace(0.05, 0.001, max_num_iter)
+    lr = np.linspace(0.01, 0.001, max_num_iter)
 
     # __ One Time Calculations __
     # get dimensions
@@ -186,7 +186,7 @@ def main():
     matrix_rank = torch.min(torch.tensor(s_matrix.shape)).item()
     # embed image in random image to ensure svd gradient stability
     k_init = torch.randn_like(k_input)
-    k_init *= 1e-3 * torch.max(torch.abs(k_input)) / torch.max(torch.abs(k_init))
+    k_init *= 1e-2 * torch.max(torch.abs(k_input)) / torch.max(torch.abs(k_init))
     k_init[sampling_mask] = k_input[sampling_mask]
     # want to multiply search candidates by sampling mask to compute data consistency term, cast to numbers
     sampling_mask = sampling_mask.to(device=device)
@@ -206,8 +206,8 @@ def main():
     # plot intermediates
     sl_us_img = fft(sl_us_k, img_to_k=False, axes=(0, 1))
     sl_us_img = root_sum_of_squares(sl_us_img, dim_channel=-3)
-    plot_k = [sl_us_k[:, :, 0, 0].cpu()]
-    plot_img = [sl_us_img[:, :, 0].cpu()]
+    plot_k = [sl_us_k[:, :, 0, 0, 0, 0].cpu()]
+    plot_img = [sl_us_img[:, :, 0, 0, 0].cpu()]
     plot_grads = [torch.zeros_like(plot_k[-1])]
 
     bar = tqdm.trange(max_num_iter, desc="Optimization")
@@ -246,12 +246,12 @@ def main():
             if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int)):
                 # some plotting intermediates
                 k_recon_loraks = k.clone().detach()
-                p_k = k_recon_loraks[:, :, :, 0].clone().detach().cpu()
+                p_k = k_recon_loraks[:, :, :, 0, 0].clone().detach().cpu()
                 img = fft(p_k, axes=(0, 1), img_to_k=False).cpu()
 
                 plot_k.append(p_k[:, :, 0])
                 plot_img.append(root_sum_of_squares(img, dim_channel=-1))
-                plot_grads.append(grads)
+                plot_grads.append(grads[:, :, 0])
 
     fig = psub.make_subplots(
         rows=3, cols=len(plot_k),
