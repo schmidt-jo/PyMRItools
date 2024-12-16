@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
 from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator, c_operator, c_adjoint_operator
-from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
+from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, cgd
 
 
 def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_mask, lam_s, rank):
@@ -53,6 +53,35 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_m
     return loss_2 + lam_s * loss_1, loss_1, loss_2
 
 
+def armijo_search(
+        loss_func, param, direction, grad,
+        learning_rate=1.0, beta=0.8, gamma: float = 0.5,
+        max_iter: int = 1000):
+    """Performs an Armijo Line Search
+    Args:
+        loss_func (callable): Function that computes the loss.
+        param (torch.Tensor): Parameter being optimized.
+        direction (torch.Tensor): search direction of the parameter change.
+        learning_rate (float, optional): Starting learning rate. Defaults to 1.0.
+        beta (float, optional): Parameter for Armijo condition. Defaults to 0.8.
+        gamma (float, optional): Learning rate reduction factor. Defaults to 0.8.
+    Returns:
+        float: Optimal learning rate.
+    """
+    lp = loss_func(param)
+    for i in range(max_iter):
+        new_param = param + learning_rate * direction
+        if loss_func(new_param) <= lp + beta * learning_rate * torch.linalg.norm(direction * grad):
+            break
+        learning_rate *= gamma
+    return learning_rate
+
+
+def angle_between(v1, v2):
+    cos_theta = torch.dot(v1, v2) / (torch.norm(v1) * torch.norm(v2))
+    theta = torch.acos(cos_theta)
+    return theta
+
 def main():
     # set output path
     path_out = plib.Path("./dev_sim/loraks").absolute()
@@ -79,7 +108,7 @@ def main():
     radius = 5
     rank = 40
     lam_s = 0.05
-    max_num_iter = 100
+    max_num_iter = 20
     device = torch.device("cuda")
     logging.info(f"Setup LORAKS: Rank - {rank}")
 
@@ -128,6 +157,7 @@ def main():
         size=radius, patch_direction=(0, 1, 1, 0, 0, 0), k_space_shape=k_input.shape,
         combination_direction=(0, 0, 0, 1, 1, 1)
     )
+    # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
 
     # now assume we picked a batch
     index_batch = indices[0]
@@ -138,7 +168,6 @@ def main():
     count_matrix[count_matrix == 0] = 1
 
     # test c mapping
-    # assume we picked a batch
     c_matrix = c_operator(k_space=k_input_batch, indices=index_batch)
     # adjoint
     k_recon_c = c_adjoint_operator(c_matrix=c_matrix, indices=index_batch, k_space_dims=k_input_batch.shape)
@@ -161,19 +190,20 @@ def main():
         rows=3, cols=3
     )
     count_matrix = count_matrix.view(k_input_batch.shape)
-    counts = [torch.ones_like(count_matrix[:,:,0,0,0]), count_matrix[:,:,0,0,0], count_matrix_s[:,:,0,0,0]]
-    for i, d in enumerate([k_input_batch[:,:,0,0,0], k_recon_c[:,:,0,0,0], k_recon_s[:,:,0,0,0]]):
+    counts = [torch.ones_like(count_matrix[:, :, 0, 0, 0]), count_matrix[:, :, 0, 0, 0], count_matrix_s[:, :, 0, 0, 0]]
+    for i, d in enumerate([k_input_batch[:, :, 0, 0, 0], k_recon_c[:, :, 0, 0, 0], k_recon_s[:, :, 0, 0, 0]]):
         fig.add_trace(
             go.Heatmap(z=torch.log(torch.abs(d)).numpy(), showscale=False),
-            row=1, col=i+1
+            row=1, col=i + 1
         )
         fig.add_trace(
-            go.Heatmap(z=(torch.log(torch.abs(d)) - torch.log(torch.abs(k_input_batch[:,:,0,0,0]))).numpy(), showscale=False),
-            row=3, col=i+1
+            go.Heatmap(z=(torch.log(torch.abs(d)) - torch.log(torch.abs(k_input_batch[:, :, 0, 0, 0]))).numpy(),
+                       showscale=False),
+            row=3, col=i + 1
         )
         fig.add_trace(
             go.Heatmap(z=counts[i].numpy(), showscale=False),
-            row=2, col=i+1
+            row=2, col=i + 1
         )
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
@@ -211,19 +241,60 @@ def main():
     plot_grads = [torch.zeros_like(plot_k[-1])]
 
     bar = tqdm.trange(max_num_iter, desc="Optimization")
+    # use page implementation - did it wrong but still smoothes the loss evolution :D
+    # p_t = 0.4
+
+    # use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
+    mu_1, mu_2 = 0.3, 0.6
+    gamma_1, gamma_2 = 0.5, 0.5
+
     for b in range(k_input.shape[0]):
         k = k_init[b].clone().to(device).requires_grad_(True)
         index_batch = indices[b].to(device)
         sampling_mask_batch = sampling_mask[b].to(device)
+        grad_last = torch.zeros_like(k)
+        def func(k):
+            loss, _, _ = func_optim(
+                k=k, indices=index_batch, s_threshold=s_threshold, shape=k.shape, count_matrix=count_matrix,
+                sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
+            )
+            return loss
+
         for i in bar:
+            # page_mask = torch.rand(k.shape) > p_t
+
             loss, loss_1, loss_2 = func_optim(
                 k=k, indices=index_batch, s_threshold=s_threshold, shape=k.shape, count_matrix=count_matrix,
                 sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
             )
             loss.backward()
+            grad = k.grad.clone()
+            if i == 0:
+                search_direction = -grad
+            else:
+                # get beta
+                cos_theta = torch.dot(search_direction.view(-1), grad.view(-1)) / (torch.norm(search_direction) * torch.norm(grad))
+                norms = torch.linalg.norm(grad) / torch.linalg.norm(search_direction)
+                beta_u = norms / (1 + 1e-9 + cos_theta)
+                beta_l = - norms / (1 + 1e-9 - cos_theta)
+                # sample beta from range
+                beta = (beta_u - beta_l) * torch.rand_like(beta_l) + beta_l
+                # compute new direction
+                search_direction = - grad + beta * search_direction
 
+            learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
+
+            # Use the optimal learning_rate to update parameters
             with torch.no_grad():
-                k -= lr[i] * k.grad
+
+                k += learning_rate * search_direction
+                # grad_update = k.grad
+                # page_mask = torch.rand(grad_update.shape) > p_t
+                # grad = grad_update - grad_last
+                # grad[page_mask] = grad_update[page_mask]
+                # k -= lr[i] * grad
+                # grad_last = grad_update
+
 
                 grads = torch.abs(k.grad)
                 conv = torch.linalg.norm(grads).cpu()
@@ -231,16 +302,14 @@ def main():
 
             k.grad.zero_()
 
-            # optim.step()
-            # optim.zero_grad()
             losses.append(
                 {"total": loss.item(), "data": loss_2.item(), "low rank": loss_1.item(),
                  "conv": conv.item()}
             )
 
             bar.postfix = (
-                f"loss low rank: {1e3*loss_1.item():.2f} -- loss data: {1e3*loss_2.item():.2f} -- "
-                f"total_loss: {1e3*loss.item():.2f} -- conv : {conv.item()} -- rank: {rank}"
+                f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
+                f"total_loss: {1e3 * loss.item():.2f} -- conv : {conv.item()} -- rank: {rank}"
             )
 
             if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int)):
@@ -259,15 +328,15 @@ def main():
     for i, pk in enumerate(plot_k):
         fig.add_trace(
             go.Heatmap(z=torch.abs(plot_img[i]).numpy(), showscale=False),
-            row=1, col=1+i
+            row=1, col=1 + i
         )
         fig.add_trace(
             go.Heatmap(z=torch.log(torch.abs(pk)).numpy(), showscale=False),
-            row=2, col=1+i
+            row=2, col=1 + i
         )
         fig.add_trace(
             go.Heatmap(z=torch.abs(plot_grads[i]).numpy(), showscale=False),
-            row=3, col=1+i
+            row=3, col=1 + i
         )
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
