@@ -55,8 +55,9 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_m
 
 def armijo_search(
         loss_func, param, direction, grad,
+        mu_1: float = 0.3, gamma_1: float = 1e-3,
         learning_rate=1.0, beta=0.8, gamma: float = 0.5,
-        max_iter: int = 1000):
+        max_iter: int = 20):
     """Performs an Armijo Line Search
     Args:
         loss_func (callable): Function that computes the loss.
@@ -71,7 +72,11 @@ def armijo_search(
     lp = loss_func(param)
     for i in range(max_iter):
         new_param = param + learning_rate * direction
-        if loss_func(new_param) <= lp + beta * learning_rate * torch.linalg.norm(direction * grad):
+        a = loss_func(new_param)
+        b = lp + mu_1 * learning_rate * torch.linalg.norm(direction * grad)
+        if a <= b and learning_rate > gamma_1:
+            break
+        if learning_rate < 1e-4:
             break
         learning_rate *= gamma
     return learning_rate
@@ -113,7 +118,7 @@ def main():
     logging.info(f"Setup LORAKS: Rank - {rank}")
 
     # use adaptive learning rate
-    lr = np.linspace(0.01, 0.001, max_num_iter)
+    lr = np.linspace(0.008, 0.0005, max_num_iter)
 
     # __ One Time Calculations __
     # get dimensions
@@ -242,11 +247,8 @@ def main():
 
     bar = tqdm.trange(max_num_iter, desc="Optimization")
     # use page implementation - did it wrong but still smoothes the loss evolution :D
+    # http://proceedings.mlr.press/v139/li21a/li21a.pdf
     # p_t = 0.4
-
-    # use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
-    mu_1, mu_2 = 0.3, 0.6
-    gamma_1, gamma_2 = 0.5, 0.5
 
     for b in range(k_input.shape[0]):
         k = k_init[b].clone().to(device).requires_grad_(True)
@@ -268,6 +270,7 @@ def main():
                 sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
             )
             loss.backward()
+            # use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
             grad = k.grad.clone()
             if i == 0:
                 search_direction = -grad
@@ -283,10 +286,11 @@ def main():
                 search_direction = - grad + beta * search_direction
 
             learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
+            # learning_rate = lr[i]
+            # search_direction = -k.grad
 
             # Use the optimal learning_rate to update parameters
             with torch.no_grad():
-
                 k += learning_rate * search_direction
                 # grad_update = k.grad
                 # page_mask = torch.rand(grad_update.shape) > p_t
@@ -294,7 +298,6 @@ def main():
                 # grad[page_mask] = grad_update[page_mask]
                 # k -= lr[i] * grad
                 # grad_last = grad_update
-
 
                 grads = torch.abs(k.grad)
                 conv = torch.linalg.norm(grads).cpu()
