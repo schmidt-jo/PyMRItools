@@ -39,17 +39,17 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_m
     # Enforce low-rank loss
     # first part of loss
     # calculate difference to low rank approx
-    # TODO: use Frobenius norm?
-    loss_1 = torch.linalg.norm(matrix - matrix_recon_loraks)
+    # TODO: use Frobenius norm? - default is frobenius norm apparently
+    loss_1 = torch.linalg.norm(matrix - matrix_recon_loraks, ord="fro")
 
     # second part, calculate reconstructed k
     # if not matrix_space:
     # TODO: here you should use matrix_recon_loraks?
-    k_recon_loraks = s_adjoint_operator(
-        s_matrix=matrix, indices=indices, k_space_dims=shape
-    )
-    k_recon_loraks /= count_matrix
-    loss_2 = torch.linalg.norm(k_recon_loraks[sampling_mask] - sl_us_k[sampling_mask])
+    # k_recon_loraks = s_adjoint_operator(
+    #     s_matrix=matrix_recon_loraks, indices=indices, k_space_dims=shape
+    # )
+    # k_recon_loraks /= count_matrix
+    loss_2 = torch.linalg.norm(k[sampling_mask] - sl_us_k[sampling_mask])
     # else:
     #     # take difference to sampled k for samples
     #     loss_2 = torch.linalg.norm(matrix * sampling_mask_matrix_space - matrix_us_k)
@@ -59,8 +59,8 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_m
 
 def armijo_search(
         loss_func, param, direction, grad,
-        mu_1: float = 0.3, gamma_1: float = 1e-3,
-        learning_rate=1.0, beta=0.8, gamma: float = 0.5,
+        mu_1: float = 0.5, gamma_1: float = 1e-3,
+        learning_rate=0.5, gamma: float = 0.5,
         max_iter: int = 20):
     """Performs an Armijo Line Search
     Args:
@@ -68,7 +68,6 @@ def armijo_search(
         param (torch.Tensor): Parameter being optimized.
         direction (torch.Tensor): search direction of the parameter change.
         learning_rate (float, optional): Starting learning rate. Defaults to 1.0.
-        beta (float, optional): Parameter for Armijo condition. Defaults to 0.8.
         gamma (float, optional): Learning rate reduction factor. Defaults to 0.8.
     Returns:
         float: Optimal learning rate.
@@ -85,11 +84,6 @@ def armijo_search(
         learning_rate *= gamma
     return learning_rate
 
-
-def angle_between(v1, v2):
-    cos_theta = torch.dot(v1, v2) / (torch.norm(v1) * torch.norm(v2))
-    theta = torch.acos(cos_theta)
-    return theta
 
 def main():
     # set output path
@@ -117,12 +111,13 @@ def main():
     radius = 5
     rank = 40
     lam_s = 0.05
-    max_num_iter = 20
+    max_num_iter = 200
     device = torch.device("cuda")
     logging.info(f"Setup LORAKS: Rank - {rank}")
 
     # use adaptive learning rate
-    lr = np.linspace(0.008, 0.0005, max_num_iter)
+    # lr = np.linspace(0.008, 0.0005, max_num_iter)
+    lr = torch.exp(-torch.arange(max_num_iter)/max_num_iter) * 5e-3
 
     # __ One Time Calculations __
     # get dimensions
@@ -248,50 +243,49 @@ def main():
     plot_k = [sl_us_k[:, :, 0, 0, 0, 0].cpu()]
     plot_img = [sl_us_img[:, :, 0, 0, 0].cpu()]
     plot_grads = [torch.zeros_like(plot_k[-1])]
+    plot_names = [0]
 
     bar = tqdm.trange(max_num_iter, desc="Optimization")
     # use page implementation - did it wrong but still smoothes the loss evolution :D
     # http://proceedings.mlr.press/v139/li21a/li21a.pdf
-    # p_t = 0.4
+    p_t = 0.4
 
     for b in range(k_input.shape[0]):
         k = k_init[b].clone().to(device).requires_grad_(True)
         index_batch = indices[b].to(device)
         sampling_mask_batch = sampling_mask[b].to(device)
         grad_last = torch.zeros_like(k)
-        def func(k):
-            loss, _, _ = func_optim(
-                k=k, indices=index_batch, s_threshold=s_threshold, shape=k.shape, count_matrix=count_matrix,
-                sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
-            )
-            return loss
+        # def func(k):
+        #     loss, _, _ = func_optim(
+        #         k=k, indices=index_batch, s_threshold=s_threshold, shape=k.shape, count_matrix=count_matrix,
+        #         sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
+        #     )
+        #     return loss
 
         for i in bar:
-            # page_mask = torch.rand(k.shape) > p_t
-
             loss, loss_1, loss_2 = func_optim(
                 k=k, indices=index_batch, s_threshold=s_threshold, shape=k.shape, count_matrix=count_matrix,
                 sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
             )
             loss.backward()
             # use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
-            grad = k.grad.clone()
-            if i == 0:
-                search_direction = -grad
-            else:
-                # get beta
-                cos_theta = torch.dot(search_direction.view(-1), grad.view(-1)) / (torch.norm(search_direction) * torch.norm(grad))
-                norms = torch.linalg.norm(grad) / torch.linalg.norm(search_direction)
-                beta_u = norms / (1 + 1e-9 + cos_theta)
-                beta_l = - norms / (1 + 1e-9 - cos_theta)
-                # sample beta from range
-                beta = (beta_u - beta_l) * torch.rand_like(beta_l) + beta_l
-                # compute new direction
-                search_direction = - grad + beta * search_direction
+            # grad = k.grad.clone()
+            # if i == 0:
+            #     search_direction = -grad
+            # else:
+                # # get beta
+                # cos_theta = torch.dot(search_direction.view(-1), grad.view(-1)) / (torch.norm(search_direction) * torch.norm(grad))
+                # norms = torch.linalg.norm(grad) / torch.linalg.norm(search_direction)
+                # beta_u = norms / (1 + 1e-9 + cos_theta)
+                # beta_l = - norms / (1 + 1e-9 - cos_theta)
+                # # sample beta from range
+                # beta = (beta_u - beta_l) * torch.rand_like(beta_l) + beta_l
+                # # compute new direction
+                # search_direction = - grad + beta * search_direction
 
-            learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
-            # learning_rate = lr[i]
-            # search_direction = -k.grad
+            # learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
+            learning_rate = lr[i]
+            search_direction = -k.grad
 
             # Use the optimal learning_rate to update parameters
             with torch.no_grad():
@@ -319,7 +313,7 @@ def main():
                 f"total_loss: {1e3 * loss.item():.2f} -- conv : {conv.item()} -- rank: {rank}"
             )
 
-            if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int)):
+            if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int)-1):
                 # some plotting intermediates
                 k_recon_loraks = k.clone().detach()
                 p_k = k_recon_loraks[:, :, :, 0, 0].clone().detach().cpu()
@@ -328,9 +322,11 @@ def main():
                 plot_k.append(p_k[:, :, 0])
                 plot_img.append(root_sum_of_squares(img, dim_channel=-1))
                 plot_grads.append(grads[:, :, 0])
+                plot_names.append(i+1)
 
     fig = psub.make_subplots(
         rows=3, cols=len(plot_k),
+        column_titles=plot_names
     )
     for i, pk in enumerate(plot_k):
         fig.add_trace(
