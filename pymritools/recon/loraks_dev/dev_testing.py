@@ -31,16 +31,20 @@ def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_m
     # s_r = s * s_threshold
 
     # reconstruct the low rank approximation
+    # u * s @ vh
     matrix_recon_loraks = torch.matmul(
         torch.matmul(u, torch.diag(s).to(u.dtype)),
         vh
     )
+    # Enforce low-rank loss
     # first part of loss
     # calculate difference to low rank approx
+    # TODO: use Frobenius norm?
     loss_1 = torch.linalg.norm(matrix - matrix_recon_loraks)
 
     # second part, calculate reconstructed k
     # if not matrix_space:
+    # TODO: here you should use matrix_recon_loraks?
     k_recon_loraks = s_adjoint_operator(
         s_matrix=matrix, indices=indices, k_space_dims=shape
     )

@@ -68,8 +68,8 @@ def test_low_rank_approximation(m: int, n: int, rank: int):
 
 
 def test_sor_svd_performance():
-    m = 2048
-    n = 128
-    rank = 5
+    m = 256*256
+    n = 25*64*4
+    rank = 10
     matrix = generate_low_rank_matrix(m, n, rank=rank)
     do_performance_test(subspace_orbit_randomized_svd_PS, matrix, rank)

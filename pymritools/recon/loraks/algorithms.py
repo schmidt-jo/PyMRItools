@@ -1,5 +1,6 @@
 import logging
 import pathlib as plib
+from typing import Union
 
 import tqdm
 import torch
@@ -254,7 +255,7 @@ def ac_loraks(
         rank_s: int, lambda_s: float,
         batch_size_channels: int = 16,
         max_num_iter: int = 10, conv_tol: float = 1e-3,
-        visualize: bool = True, path_visuals: str | plib.Path = "",
+        visualize: bool = True, path_visuals: Union[str, plib.Path] = "",
         device: torch.device = torch.get_default_device()):
     # __ One Time Calculations __
 
