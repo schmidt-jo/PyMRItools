@@ -1,5 +1,6 @@
 import pytest
 import torch
+import json
 
 from tests.utils import do_performance_test
 
@@ -18,6 +19,22 @@ def gold_standard_svd(matrix: torch.Tensor, rank: int) -> tuple[torch.Tensor, ..
     v_trunc = v[:rank, :].contiguous()
     return u_trunc, s_trunc, v_trunc
 
+def svd_error(original_matrix: torch.Tensor, u: torch.Tensor, sigma: torch.Tensor, vh: torch.Tensor) -> dict:
+    approx_matrix = (u * sigma) @ vh
+    frobenius_error = torch.norm(original_matrix - approx_matrix, p="fro")
+    spectral_error = torch.linalg.norm(original_matrix - approx_matrix, ord=2)
+    frobenius_relative_error = frobenius_error / torch.norm(original_matrix, p="fro")
+    spectral_relative_error = spectral_error / torch.linalg.norm(original_matrix, ord=2)
+    error_metrics = {
+        "Frobenius Norm Error": frobenius_error.item(),
+        "Spectral Norm Error": spectral_error.item(),
+        "Relative Frobenius Norm Error": frobenius_relative_error.item(),
+        "Relative Spectral Norm Error": spectral_relative_error.item(),
+    }
+    return error_metrics
+
+
+
 @pytest.mark.parametrize("m, n, rank", [
     (4096, 512, 10),  # Test case 1: Tall matrix
     (4096, 4096, 10),  # Test case 2: Square matrix
@@ -30,26 +47,24 @@ def test_low_rank_approximation(m: int, n: int, rank: int):
 
     # Compute the gold standard SVD solution
     u_gold, s_gold, v_gold = gold_standard_svd(matrix, rank)
-    approx_gold = (u_gold * s_gold) @ v_gold
 
     # Compute the low-rank approximation using Jochen's SOR_SVD implementation
     aj_1, sj_rand, aj_2 = subspace_orbit_randomized_svd(matrix, rank)
-    approxj_rand = (aj_1 * sj_rand) @ aj_2
 
     # Compute the low-rank approximation using our SOR_SVD implementation
     ap_1, sp_rand, ap_2 = subspace_orbit_randomized_svd_PS(matrix, rank)
-    approxp_rand = (ap_1 * sp_rand) @ ap_2
 
-    # Charlie says the Frobenius norm is commonly used to compare matrices because
-    # it is a natural and mathematically sound way to measure the "size" of the difference between two matrices.
-    error_gold = torch.norm(matrix - approx_gold, p="fro")
-    errorj_rand = torch.norm(approx_gold - approxj_rand, p="fro")
-    errorp_rand = torch.norm(approx_gold - approxp_rand, p="fro")
+    def pretty_print_dict(arg):
+        print(json.dumps(arg, indent=4, sort_keys=True))
 
     print(f"\nMatrix Size: {m}x{n}, Rank: {rank}")
-    print(f"Gold Standard Error: {error_gold.item():.6f}")
-    print(f"Jochen's randomized SVD Error: {errorj_rand.item():.6f}")
-    print(f"Patrick's randomized SVD Error: {errorp_rand.item():.6f}")
+    print(f"Gold Standard SVD Error:")
+    pretty_print_dict(svd_error(matrix, u_gold, s_gold, v_gold))
+    print(f"Jochen's SOR_SVD Error:")
+    pretty_print_dict(svd_error(matrix, aj_1, sj_rand, aj_2))
+    print(f"Patrick's SOR_SVD Error:")
+    pretty_print_dict(svd_error(matrix, ap_1, sp_rand, ap_2))
+
 
 
 def test_sor_svd_performance():
