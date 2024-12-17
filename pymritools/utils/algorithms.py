@@ -228,8 +228,50 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, rank):
         u_matrix = torch.movedim(a_1, -1, -2)
     return a_1, s_k, a_2
 
+def subspace_orbit_randomized_svd_PS(matrix: torch.Tensor, rank: int, device=None) -> tuple[torch.Tensor, ...]:
+    """
+    PyTorch implementation of Kaloorazi and Lamare (2018, DOI:10.1109/TSP.2018.2853137) that computes
+    a low-rank approximation.
+    :param matrix: Input matrix of dimension 2 with shape (m, n) where m >= n
+    :param rank: Rank to approximate. Must be < n
+    :return: Decomposed matrix parts (a1, s, a2) where (a1 * s) @ a2 is the low-rank approximation
+    """
+    torch._assert(matrix.ndim == 2, "matrix must be 2D")
+    m, n = matrix.shape[-2:]
+    torch._assert(m >= n, "matrix must have at least as many rows as columns")
+    l = 2 * rank
 
+    # The following steps describe algorithm 4 of the referenced paper
+    # 1) Draw a standard Gaussian matrix
+    t2 = torch.randn(
+        (n, l),
+        dtype=matrix.dtype, device=matrix.device
+    )
+    t1 = torch.zeros((matrix.shape[0], t2.shape[1]), dtype=matrix.dtype, device=matrix.device)
 
+    # 2, 3) compute t1 and t2
+    torch.matmul(matrix, t2, out=t1)
+    torch.matmul(matrix.mT, t1, out=t2)
+
+    # 4) compute qr decompositions
+    q1, _ = torch.linalg.qr(t1)
+    q2, _ = torch.linalg.qr(t2)
+
+    # 5) compute m
+    m = torch.matmul(
+        q1.mT, torch.matmul(matrix, q2)
+    )
+
+    # 6) Calculate rank truncated SVD
+    u_k, s_k, v_k = torch.linalg.svd(m, full_matrices=False)
+    u_k = u_k[:, :rank].contiguous()
+    s_k = s_k[:rank]
+    v_k = v_k[:rank, :].contiguous()
+
+    # 7) Form the SOR-SVD-based low-rank approximation
+    a_1 = torch.matmul(q1, u_k)
+    a_2 = torch.matmul(q2, v_k.H).H
+    return a_1, s_k, a_2
 
 class DE:
     """ Differential evolution """
