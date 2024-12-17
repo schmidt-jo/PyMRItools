@@ -10,7 +10,7 @@ from scipy.io import savemat
 from pymritools.utils import fft, gaussian_2d_kernel, torch_save
 
 log_module = logging.getLogger(__name__)
-torch.manual_seed(0)
+torch.manual_seed(10)
 
 
 class SheppLogan:
