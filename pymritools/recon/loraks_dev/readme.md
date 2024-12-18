@@ -1,10 +1,12 @@
 # DEV considerations
 
 - [x] Fix a requirement to the input shape: `shape = (m, ne, nc, nz, ny, nx)`
+- [ ] How to handle all of our torch functions that don't need a device? Fix either this or the speed test function
 - [ ] Clean up: 
   - Remove code that is no longer used and that we potentially won't use in the future
   - Move main functions from package files to tests folder
 - [ ] SVD
+  - [ ] Jochen check all `m.T` if a `m.H` is required 
   - check unified interface of functions
   - remove rank cropping to get either full dimension or oversampled dimensions
   - implement performance and quality tests on real phantom C matrix (SVD ground truth, SOR-SVD, RSVD, w/wo power iter)

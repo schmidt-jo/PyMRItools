@@ -173,15 +173,17 @@ def randomized_svd(
 
     # s, vh should be approximately the matrix s, vh of the svd from random matrix theory
     # we can get the left singular values by back projection
-    u_matrix = torch.matmul(q, u[..., :, :rank])
-    vh = vh[..., :rank, :]
+    #TODO: Fix again
+    # u_matrix = torch.matmul(q, u[..., :, :rank])
+    # vh = vh[..., :rank, :]
 
     if transpose:
         v_temp = vh
-        vh = torch.movedim(u_matrix, -1, -2)
+        # vh = torch.movedim(u_matrix, -1, -2)
         u_matrix = torch.movedim(v_temp, -1, -2)
 
-    return u_matrix, s[..., :rank], vh
+    # return u_matrix, s[..., :rank], vh
+    return u, s, vh
 
 
 def subspace_orbit_randomized_svd(matrix: torch.Tensor, rank: int, oversampling: int = None):
@@ -266,9 +268,10 @@ def subspace_orbit_randomized_svd_PS(matrix: torch.Tensor, rank: int, oversampli
 
     # 6) Calculate rank truncated SVD
     u_k, s_k, v_k = torch.linalg.svd(m, full_matrices=False)
-    u_k = u_k[:, :rank].contiguous()
-    s_k = s_k[:rank]
-    v_k = v_k[:rank, :].contiguous()
+    # TODO: Fix again
+    # u_k = u_k[:, :rank].contiguous()
+    # s_k = s_k[:rank]
+    # v_k = v_k[:rank, :].contiguous()
 
     # 7) Form the SOR-SVD-based low-rank approximation
     a_1 = torch.matmul(q1, u_k)
