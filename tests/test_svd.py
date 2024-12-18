@@ -1,5 +1,8 @@
+import os
 import torch
 import torch.linalg as LA
+import plotly.graph_objects as go
+from tests.utils import get_test_result_output_dir
 
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd_PS
 
@@ -23,7 +26,7 @@ def generate_noisy_low_rank_matrix(n: int, k: int) -> torch.Tensor:
     E = G / LA.norm(G)
     Q1, _ = LA.qr(torch.randn(n, n))
     Q2, _ = LA.qr(torch.randn(n, n))
-    return (Q1 * s) @ Q2.T + 0.1 * s[k - 1] * E
+    return (Q1 * s) @ Q2.T + 0.5 * s[k - 1] * E
 
 def test_svd_variants():
     n = 1000
@@ -35,3 +38,21 @@ def test_svd_variants():
     _, s_svd, _ = torch.linalg.svd(m, full_matrices=False)
     _, s_sor, _ = subspace_orbit_randomized_svd_PS(m, k, l - k)
     _, s_rand, _ = randomized_svd(m, k, l - k)
+
+    fig = go.Figure()
+    names = ["SVD", "SOR", "Randomized"]
+    for i, s in enumerate([s_svd, s_sor, s_rand]):
+        fig.add_trace(
+            go.Scatter(y=s, name=names[i], mode="markers")
+        )
+        fig.update_xaxes(range=(0, l))
+        fig.update_layout(
+            title="Singular values",
+            xaxis_title="Index",
+            yaxis_title="Singular value",
+            legend_title="Method"
+        )
+
+    output_dir = get_test_result_output_dir(test_svd_variants)
+    fig.write_image(os.path.join(output_dir, "singular_values.png"))
+
