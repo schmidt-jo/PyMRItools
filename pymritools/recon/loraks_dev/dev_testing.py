@@ -181,12 +181,6 @@ def main():
             # Use the optimal learning_rate to update parameters
             with torch.no_grad():
                 k += learning_rate * search_direction
-                # grad_update = k.grad
-                # page_mask = torch.rand(grad_update.shape) > p_t
-                # grad = grad_update - grad_last
-                # grad[page_mask] = grad_update[page_mask]
-                # k -= lr[i] * grad
-                # grad_last = grad_update
                 grads = torch.abs(k.grad)
                 conv = torch.linalg.norm(grads - grad_last)
 
