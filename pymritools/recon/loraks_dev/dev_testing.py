@@ -73,11 +73,7 @@ def armijo_search(
     return learning_rate
 
 
-def main():
-    # set output path
-    path_out = plib.Path("./dev_sim/loraks").absolute()
-    path_out.mkdir(exist_ok=True, parents=True)
-
+def prepare_k_space():
     # set up  phantom
     shape = (256, 256)
     num_coils = 4
@@ -95,11 +91,30 @@ def main():
     sl_us_k = sl_us_k[:, :, None, :, :, None]
     shape = sl_us_k.shape
 
+    # embed image in random image to ensure svd gradient stability
+    k_init = torch.randn_like(k_input)
+    k_init *= 1e-2 * torch.max(torch.abs(k_input)) / torch.max(torch.abs(k_init))
+    k_init[sampling_mask] = k_input[sampling_mask]
+
+    # get sampling mask in input shape
+    sampling_mask = (torch.abs(k_input) > 1e-9)
+
+    return k_init, sampling_mask
+
+
+def main():
+    # set output path
+    path_out = plib.Path("./dev_sim/loraks").absolute()
+    path_out.mkdir(exist_ok=True, parents=True)
+
+    # setup phantom
+    k_init, sampling_mask = prepare_k_space()
+
     # set LORAKS parameters
     loraks_nb_side_length = 5
     rank = 50
     lam_s = 0.05
-    max_num_iter = 200
+    max_num_iter = 50
     device = torch.device("cuda")
     # torch.cuda.memory._record_memory_history()
 
@@ -109,41 +124,6 @@ def main():
     # lr = np.linspace(0.008, 0.0005, max_num_iter)
     lr = torch.exp(-torch.arange(max_num_iter)/max_num_iter) * 5e-3
 
-    # __ One Time Calculations __
-    # get dimensions
-    n_read, n_phase, n_slice, n_channels, n_echoes, n_misc = shape
-
-    # combine dimensions in terms of LORAKS low rank idea:
-    # we want patches across spatial dimensions to form neighborhoods.
-    # These neighborhoods are duplicated across spatial redundant dimensions (channels, echoes, misc) and combined.
-    # This means we concatenate the neighborhoods in these dimensions (neighborhood size = nb).
-    # There are several ways to go about this indexing wise. For now we combine to a shape prior to computing indexing.
-    # Target shape: batch dim - spatial dims (patches) - combined dims (l): [b, nxyz, ncem * nb] = [b, np, l * nb]
-    # If the Target shape doesnt fit GPU memory whole, we can use the independent batch dimension
-    # to break down the size for computations.
-    # If a singular [1, nxyz, ncem] doesnt fit GPU memory due to size, we need to adress the combination method
-    # of c-e-m or reduce neighborhood size. Both need some addressing carefully and optimization evaluation.
-    # For now we have virtual phantom data and stick to full combination of sufficiently low data sizes.
-    # Other speed optimization will depend on the matrix size (eg. SVD) and hence be dependent on the combination dim.
-
-    # __ Dim combination
-    # This section still needs to be filled with convenient methods for combination.
-    # For now we decide that one spatial dimension (conveniently z) is batched and
-    # combine all spatial and all redundancy dimensions.
-    # There might be various situations were this is not wanted (i.e. 3D patches, other imaging gradient directions) or
-    # not possible (matrix dimensions and GPU memory trouble).
-    # k_input = sl_us_k.movedim(2, 0)
-    # k_input = k_input.view(n_slice, n_read, n_phase, -1)
-    #
-    # # calculate matrix dimensions
-    # # long side is all valid spatial points that support building a full patch within the shape
-    # m = (n_read - radius + 1) * (n_phase - radius + 1)
-    # # short side depends on the combination of the channels, coils, neighborhood dimensions and
-    # # LORAKS matrix (S = factor 2)
-    # loraks_method_factor = 1
-    # n = nb * loraks_method_factor
-
-
     # get indices for operators - direction is along x and y, set those to 1
     indices_mapping, batch_reshape = get_all_idx_nd_square_patches_in_nd_shape(
         size=loraks_nb_side_length, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=sl_us_k.shape,
@@ -152,16 +132,9 @@ def main():
     # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
     # need to reshape the input k-space
     k_input = torch.reshape(sl_us_k, batch_reshape)
+    sampling_mask = torch.reshape(sampling_mask, batch_reshape)
 
-    # get sampling mask in input shape
-    sampling_mask = (torch.abs(k_input) > 1e-9)
-
-    # embed image in random image to ensure svd gradient stability
-    k_init = torch.randn_like(k_input)
-    k_init *= 1e-2 * torch.max(torch.abs(k_input)) / torch.max(torch.abs(k_init))
-    k_init[sampling_mask] = k_input[sampling_mask]
-
-    logging.info("__ Testing algorithm")
+    # get LORAKS matrix dimensions
     n_spatial = indices_mapping.shape[1]
     n_nb = indices_mapping.shape[2]
 
@@ -172,7 +145,7 @@ def main():
     s_threshold[rank:] = 0
     s_threshold = s_threshold.to(device)
 
-    # log losses
+    # log losses and plot data
     losses = []
 
     # plot intermediates
@@ -183,6 +156,7 @@ def main():
     plot_grads = [torch.zeros_like(plot_k[-1])]
     plot_names = [0]
 
+    # setup iterations
     bar = tqdm.trange(max_num_iter, desc="Optimization")
     # use page implementation - did it wrong but still smoothes the loss evolution :D
     # http://proceedings.mlr.press/v139/li21a/li21a.pdf
@@ -229,17 +203,29 @@ def main():
                 # grad[page_mask] = grad_update[page_mask]
                 # k -= lr[i] * grad
                 # grad_last = grad_update
-
                 grads = torch.abs(k.grad)
-                conv = torch.linalg.norm(grads - grad_last).cpu()
-                grad_last = grads.clone()
-                grads = grads[:, :, 0, 0].cpu()
+                conv = torch.linalg.norm(grads - grad_last)
+
+                if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int) - 1):
+                    # save for plotting on some iterations
+                    grads = grads[:, :, 0, 0].cpu()
+
+                    # some plotting intermediates
+                    k_recon_loraks = k.clone().detach()
+                    p_k = k_recon_loraks[:, :, :, 0, 0].clone().detach().cpu()
+                    img = fft(p_k, axes=(0, 1), img_to_k=False).cpu()
+
+                    plot_k.append(p_k[:, :, 0])
+                    plot_img.append(root_sum_of_squares(img, dim_channel=-1))
+                    plot_grads.append(grads[:, :, 0])
+                    plot_names.append(i + 1)
+
 
             k.grad.zero_()
 
             losses.append(
                 {"total": loss.item(), "data": loss_2.item(), "low rank": loss_1.item(),
-                 "conv": conv.item()}
+                 "conv": conv.cpu().item()}
             )
 
             bar.postfix = (
@@ -247,16 +233,7 @@ def main():
                 f"total_loss: {1e3 * loss.item():.2f} -- conv : {conv.item()} -- rank: {rank}"
             )
 
-            if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int)-1):
-                # some plotting intermediates
-                k_recon_loraks = k.clone().detach()
-                p_k = k_recon_loraks[:, :, :, 0, 0].clone().detach().cpu()
-                img = fft(p_k, axes=(0, 1), img_to_k=False).cpu()
-
-                plot_k.append(p_k[:, :, 0])
-                plot_img.append(root_sum_of_squares(img, dim_channel=-1))
-                plot_grads.append(grads[:, :, 0])
-                plot_names.append(i+1)
+    # aftermath
 
     # path_memory_snapshot = path_out.joinpath(f"memory_snapshot").with_suffix(".pickle")
     # logging.info(f"Write file: {path_memory_snapshot}")
