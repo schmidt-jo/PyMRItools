@@ -158,9 +158,7 @@ def main():
 
     # setup iterations
     bar = tqdm.trange(max_num_iter, desc="Optimization")
-    # use page implementation - did it wrong but still smoothes the loss evolution :D
-    # http://proceedings.mlr.press/v139/li21a/li21a.pdf
-    p_t = 0.4
+
 
     for b in range(k_input.shape[0]):
         k = k_init[b].clone().to(device).requires_grad_(True)
@@ -175,20 +173,6 @@ def main():
                 sl_us_k=k_input_batch, sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
             )
             loss.backward()
-            # use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
-            # grad = k.grad.clone()
-            # if i == 0:
-            #     search_direction = -grad
-            # else:
-                # # get beta
-                # cos_theta = torch.dot(search_direction.view(-1), grad.view(-1)) / (torch.norm(search_direction) * torch.norm(grad))
-                # norms = torch.linalg.norm(grad) / torch.linalg.norm(search_direction)
-                # beta_u = norms / (1 + 1e-9 + cos_theta)
-                # beta_l = - norms / (1 + 1e-9 - cos_theta)
-                # # sample beta from range
-                # beta = (beta_u - beta_l) * torch.rand_like(beta_l) + beta_l
-                # # compute new direction
-                # search_direction = - grad + beta * search_direction
 
             # learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
             learning_rate = lr[i]
@@ -284,6 +268,27 @@ def main():
     # recon_k = k.detach()
     # recon_img = fft(recon_k, img_to_k=False, axes=(0, 1))
     # recon_img = root_sum_of_squares(recon_img, dim_channel=-2)
+
+
+
+# Notes / ToDos:
+# use page implementation - did it wrong but still smoothes the loss evolution :D
+# http://proceedings.mlr.press/v139/li21a/li21a.pdf
+
+# use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
+# grad = k.grad.clone()
+# if i == 0:
+#     search_direction = -grad
+# else:
+# # get beta
+# cos_theta = torch.dot(search_direction.view(-1), grad.view(-1)) / (torch.norm(search_direction) * torch.norm(grad))
+# norms = torch.linalg.norm(grad) / torch.linalg.norm(search_direction)
+# beta_u = norms / (1 + 1e-9 + cos_theta)
+# beta_l = - norms / (1 + 1e-9 - cos_theta)
+# # sample beta from range
+# beta = (beta_u - beta_l) * torch.rand_like(beta_l) + beta_l
+# # compute new direction
+# search_direction = - grad + beta * search_direction
 
 
 if __name__ == '__main__':
