@@ -12,7 +12,8 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
 from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator, c_operator, c_adjoint_operator
-from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, cgd
+from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, cgd, \
+    subspace_orbit_randomized_svd_PS
 
 
 def func_optim(k, indices, s_threshold, sl_us_k, sampling_mask, lam_s, rank):
@@ -24,8 +25,9 @@ def func_optim(k, indices, s_threshold, sl_us_k, sampling_mask, lam_s, rank):
     # do svd
     # we can use torch svd, or try the randomized versions
     # u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
-    u, s, vh = randomized_svd(matrix, sampling_size=rank, oversampling=2*rank, power_projections=2)
+    # u, s, vh = randomized_svd(matrix, sampling_size=rank, oversampling=rank, power_projections=2)
     # u, s, vh = subspace_orbit_randomized_svd(matrix, rank=rank)
+    u, s, vh = subspace_orbit_randomized_svd_PS(matrix, rank=rank, oversampling=rank)
 
     # threshold singular values
     # s_r = s * s_threshold
@@ -40,7 +42,7 @@ def func_optim(k, indices, s_threshold, sl_us_k, sampling_mask, lam_s, rank):
 
     # __ Data Loss
     # enforce data - consistency by minimizing distance to known sampled points
-    loss_2 = torch.linalg.norm(k[sampling_mask] - sl_us_k[sampling_mask])
+    loss_2 = torch.linalg.norm(k[sampling_mask] - sl_us_k)
 
     return loss_2 + lam_s * loss_1, loss_1, loss_2
 
@@ -73,6 +75,49 @@ def armijo_search(
     return learning_rate
 
 
+def armijo_line_search(k, loss, grad, direction, func_optim, index_batch, s_threshold, k_input_batch,
+                       sampling_mask_batch, lam_s, rank, alpha=0.5, gamma=0.1):
+    """
+    Armijo-Zeilensuche, um die optimale Lernrate zu bestimmen.
+    Parameters:
+        k: aktueller Tensor.
+        loss: Loss (vorheriger Wert).
+        grad: Gradient.
+        direction: Suchrichtung (conjugate gradient).
+        func_optim: Optimierungsfunktion.
+        alpha: Reduktionsfaktor der Schrittgröße (zwischen 0 und 1).
+        gamma: Kontrollparameter (meistens kleines, positives Skalar).
+    """
+    learning_rate = 1.0  # Start mit anfänglicher Lernrate
+    c = gamma
+
+    # Armijo-Bedingung prüfen
+    while True:
+        # Vorschlag zur nächsten Position
+        k_new = k + learning_rate * direction
+
+        # Neue Loss nach Änderung auswerten
+        with torch.no_grad():
+            new_loss, _, _ = func_optim(
+                k=k_new, indices=index_batch, s_threshold=s_threshold,
+                sl_us_k=k_input_batch, sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
+            )
+
+        # Armijo-Bedingung:
+        # new_loss <= loss + c * learning_rate * torch.dot(grad.flatten(), direction.flatten())
+        if new_loss <= loss + c * learning_rate * torch.abs(torch.dot(grad.flatten(), direction.flatten())):
+            break  # Bedingung erfüllt
+
+        # Schrittweite reduzieren
+        learning_rate *= alpha
+
+        # Abbruchbedingung: Sehr kleine Lernrate
+        if learning_rate < 1e-8:
+            break
+
+    return learning_rate
+
+
 def prepare_k_space():
     # set up  phantom
     shape = (256, 256)
@@ -90,14 +135,14 @@ def prepare_k_space():
     # We want to set LORAKS input dimensions to be (nx, ny, nz, nc, ne, m)
     sl_us_k = sl_us_k[:, :, None, :, :, None]
     shape = sl_us_k.shape
+    # get sampling mask in input shape
+    sampling_mask = (torch.abs(sl_us_k) > 1e-9)
 
     # embed image in random image to ensure svd gradient stability
-    k_init = torch.randn_like(k_input)
-    k_init *= 1e-2 * torch.max(torch.abs(k_input)) / torch.max(torch.abs(k_init))
-    k_init[sampling_mask] = k_input[sampling_mask]
+    k_init = torch.randn_like(sl_us_k)
+    k_init *= 1e-2 * torch.max(torch.abs(sl_us_k)) / torch.max(torch.abs(k_init))
+    k_init[sampling_mask] = sl_us_k[sampling_mask]
 
-    # get sampling mask in input shape
-    sampling_mask = (torch.abs(k_input) > 1e-9)
 
     return k_init, sampling_mask
 
@@ -108,7 +153,8 @@ def main():
     path_out.mkdir(exist_ok=True, parents=True)
 
     # setup phantom
-    k_init, sampling_mask = prepare_k_space()
+    k_input, sampling_mask = prepare_k_space()
+    shape = k_input.shape
 
     # set LORAKS parameters
     loraks_nb_side_length = 5
@@ -126,12 +172,12 @@ def main():
 
     # get indices for operators - direction is along x and y, set those to 1
     indices_mapping, batch_reshape = get_all_idx_nd_square_patches_in_nd_shape(
-        size=loraks_nb_side_length, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=sl_us_k.shape,
+        size=loraks_nb_side_length, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=shape,
         combination_direction=(0, 0, 0, 1, 1, 1)
     )
     # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
     # need to reshape the input k-space
-    k_input = torch.reshape(sl_us_k, batch_reshape)
+    k_input = torch.reshape(k_input, batch_reshape)
     sampling_mask = torch.reshape(sampling_mask, batch_reshape)
 
     # get LORAKS matrix dimensions
@@ -149,9 +195,9 @@ def main():
     losses = []
 
     # plot intermediates
-    sl_us_img = fft(sl_us_k, img_to_k=False, axes=(0, 1))
+    sl_us_img = fft(k_input, img_to_k=False, axes=(0, 1))
     sl_us_img = root_sum_of_squares(sl_us_img, dim_channel=-3)
-    plot_k = [sl_us_k[:, :, 0, 0, 0, 0].cpu()]
+    plot_k = [k_input[:, :, 0, 0, 0, 0].cpu()]
     plot_img = [sl_us_img[:, :, 0, 0, 0].cpu()]
     plot_grads = [torch.zeros_like(plot_k[-1])]
     plot_names = [0]
@@ -161,11 +207,11 @@ def main():
 
 
     for b in range(k_input.shape[0]):
-        k = k_init[b].clone().to(device).requires_grad_(True)
+        k = k_input[b].clone().to(device).requires_grad_(True)
         index_batch = indices_mapping[b].to(device)
         sampling_mask_batch = sampling_mask[b].to(device)
-        k_input_batch = k_input[b].to(device)
-        grad_last = torch.zeros_like(k)
+        k_input_batch = k_input[b].to(device)[sampling_mask_batch]
+        prev_gradient = torch.zeros_like(k)
 
         for i in bar:
             loss, loss_1, loss_2 = func_optim(
@@ -174,15 +220,35 @@ def main():
             )
             loss.backward()
 
+            grad = k.grad  # Gradienten des aktuellen Schritts
+
+            if i == 0 or search_direction is None:
+                # Zu Beginn wird die Suchrichtung als negativer Gradient initialisiert
+                search_direction = -grad
+                beta = 0  # Kein Beta-Wert beim ersten Schritt
+            else:
+                # Beta berechnen
+                beta = torch.dot(grad.flatten(), grad.flatten()) / torch.dot(prev_gradient.flatten(),
+                                                                             prev_gradient.flatten())
+                # Konjugierte Suchrichtung aktualisieren
+                search_direction = -grad + beta * search_direction
+
+            # Lernrate mit Armijo-Zeilensuche bestimmen
+            learning_rate = armijo_line_search(
+                k=k, loss=loss, grad=grad, direction=search_direction, func_optim=func_optim,
+                index_batch=index_batch, s_threshold=s_threshold, k_input_batch=k_input_batch,
+                sampling_mask_batch=sampling_mask_batch, lam_s=lam_s, rank=rank
+            )
             # learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
-            learning_rate = lr[i]
-            search_direction = -k.grad
+            # learning_rate = lr[i]
+            # search_direction = -k.grad
 
             # Use the optimal learning_rate to update parameters
             with torch.no_grad():
                 k += learning_rate * search_direction
                 grads = torch.abs(k.grad)
-                conv = torch.linalg.norm(grads - grad_last)
+                conv = torch.linalg.norm(grads - prev_gradient)
+                prev_gradient = grad.clone()
 
                 if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int) - 1):
                     # save for plotting on some iterations

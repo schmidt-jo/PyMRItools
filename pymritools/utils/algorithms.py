@@ -252,8 +252,8 @@ def subspace_orbit_randomized_svd_PS(matrix: torch.Tensor, rank: int, oversampli
     t1 = torch.zeros((matrix.shape[0], t2.shape[1]), dtype=matrix.dtype, device=matrix.device)
 
     # 2, 3) compute t1 and t2
-    torch.matmul(matrix, t2, out=t1)
-    torch.matmul(matrix.mT, t1, out=t2)
+    t1 = torch.matmul(matrix, t2)
+    t2 = torch.matmul(matrix.mT, t1)
 
     # 4) compute qr decompositions
     q1, _ = torch.linalg.qr(t1)
