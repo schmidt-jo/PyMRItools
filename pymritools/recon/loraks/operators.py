@@ -7,7 +7,7 @@ import plotly.subplots as psub
 
 from pymritools.utils.phantom import SheppLogan
 from pymritools.utils import (
-    fft, MatrixOperatorLowRank2D,
+    fft,
     get_idx_2d_circular_neighborhood_patches_in_shape,
     get_idx_2d_rectangular_grid,
     get_idx_2d_grid_circle_within_radius
