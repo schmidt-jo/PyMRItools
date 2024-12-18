@@ -34,18 +34,20 @@ def get_all_idx_nd_square_patches_in_nd_shape(
         combination_direction: tuple[int, ...] = ()
 ):
     """
-        Get all linear indices for ND square patches within a given k-space, iterating along specified directional dimensions,
-        combining other dimensions along a secondary axis, and grouping unspecified dimensions along the first axis.
+    Get all linear indices for ND square patches within a given k-space, iterating along specified directional dimensions,
+    combining other dimensions along a secondary axis, and grouping unspecified dimensions along the first axis.
 
-        Args:
-            size: Size of the square patch.
-            patch_direction: Tuple indicating the direction in k-space, e.g., (0, 0, 1, 0, 1).
-            k_space_shape: Shape of the k-space, e.g., (echos, channels, nz, ny, nx).
-            combination_direction: Tuple indicating other dimensions to combine patches across.
-        Returns:
-            torch.Tensor: Linear indices with specified output dimensions:
-                [unspecified, valid points, patch dimensions * combined dims].
-        """
+    Args:
+        size: Size of the square patch.
+        patch_direction: Tuple indicating the direction in k-space, e.g., (0, 0, 1, 0, 1).
+        k_space_shape: Shape of the k-space, e.g., (echos, channels, nz, ny, nx).
+        combination_direction: Tuple indicating other dimensions to combine patches across.
+
+    Returns:
+        torch.Tensor: Linear indices with specified output dimensions:
+                      [unspecified, valid points, patch dimensions * combined dims].
+        tuple: Reshape info for the input tensor (recommended reshaped shape).
+    """
     # Step 1: Determine unspecified dimensions
     direction_mask = torch.tensor(patch_direction).to(dtype=torch.bool)
     combination_mask = torch.tensor(combination_direction).to(dtype=torch.bool)
@@ -77,7 +79,6 @@ def get_all_idx_nd_square_patches_in_nd_shape(
     # Step 4: Handle combination_direction
     if combination_direction:
         shape_combined_dims = torch.tensor(k_space_shape)[combination_mask]
-
         # Steps for combining patches along combination dimensions
         combination_steps = dim_multipliers[combination_mask]
         combination_coords = torch.meshgrid(*[torch.arange(n) for n in shape_combined_dims], indexing="ij")
@@ -107,8 +108,13 @@ def get_all_idx_nd_square_patches_in_nd_shape(
         shape_unspecified_dims.prod().item(), grid_offsets.numel(), -1
     )
 
-    # Return indices for all patches
-    return all_patches_indices
+    # Step 6: Compute reshape info for the input tensor
+    reshape_shape = (
+            (-1,) + tuple(s for s, mask in zip(k_space_shape, specified_mask.tolist()) if mask)
+    )
+
+    # Return indices for all patches and reshape info
+    return all_patches_indices, reshape_shape
 
 
 def combine_indices(
