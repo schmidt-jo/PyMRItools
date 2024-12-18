@@ -15,44 +15,32 @@ from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, cgd
 
 
-def func_optim(k, indices, s_threshold, shape, count_matrix, sl_us_k, sampling_mask, lam_s, rank):
+def func_optim(k, indices, s_threshold, sl_us_k, sampling_mask, lam_s, rank):
     # get operator matrix
     matrix = s_operator(
         k_space=k, indices=indices
     )
 
     # do svd
-    # we can use torch svd, or try the randomized version, see above
+    # we can use torch svd, or try the randomized versions
     # u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
-    # u, s, vh = randomized_svd(matrix, sampling_size=rank, oversampling=2*rank)
-    u, s, vh = subspace_orbit_randomized_svd(matrix, rank=rank)
+    u, s, vh = randomized_svd(matrix, sampling_size=rank, oversampling=2*rank, power_projections=2)
+    # u, s, vh = subspace_orbit_randomized_svd(matrix, rank=rank)
 
     # threshold singular values
     # s_r = s * s_threshold
 
     # reconstruct the low rank approximation
     # u * s @ vh
-    matrix_recon_loraks = torch.matmul(
-        torch.matmul(u, torch.diag(s).to(u.dtype)),
-        vh
-    )
-    # Enforce low-rank loss
-    # first part of loss
-    # calculate difference to low rank approx
-    # TODO: use Frobenius norm? - default is frobenius norm apparently
+    matrix_recon_loraks = torch.matmul(u * s.to(u.dtype), vh)
+
+    # __ Low Rank Loss
+    # enforce low rank matrix structure by minimizing distance of LORAKS matrix to its truncated SVD
     loss_1 = torch.linalg.norm(matrix - matrix_recon_loraks, ord="fro")
 
-    # second part, calculate reconstructed k
-    # if not matrix_space:
-    # TODO: here you should use matrix_recon_loraks?
-    # k_recon_loraks = s_adjoint_operator(
-    #     s_matrix=matrix_recon_loraks, indices=indices, k_space_dims=shape
-    # )
-    # k_recon_loraks /= count_matrix
+    # __ Data Loss
+    # enforce data - consistency by minimizing distance to known sampled points
     loss_2 = torch.linalg.norm(k[sampling_mask] - sl_us_k[sampling_mask])
-    # else:
-    #     # take difference to sampled k for samples
-    #     loss_2 = torch.linalg.norm(matrix * sampling_mask_matrix_space - matrix_us_k)
 
     return loss_2 + lam_s * loss_1, loss_1, loss_2
 
@@ -108,11 +96,13 @@ def main():
     shape = sl_us_k.shape
 
     # set LORAKS parameters
-    radius = 5
-    rank = 40
+    loraks_nb_side_length = 5
+    rank = 50
     lam_s = 0.05
     max_num_iter = 200
     device = torch.device("cuda")
+    # torch.cuda.memory._record_memory_history()
+
     logging.info(f"Setup LORAKS: Rank - {rank}")
 
     # use adaptive learning rate
@@ -142,7 +132,7 @@ def main():
     # combine all spatial and all redundancy dimensions.
     # There might be various situations were this is not wanted (i.e. 3D patches, other imaging gradient directions) or
     # not possible (matrix dimensions and GPU memory trouble).
-    k_input = sl_us_k.movedim(2, 0)
+    # k_input = sl_us_k.movedim(2, 0)
     # k_input = k_input.view(n_slice, n_read, n_phase, -1)
     #
     # # calculate matrix dimensions
@@ -153,82 +143,29 @@ def main():
     # loraks_method_factor = 1
     # n = nb * loraks_method_factor
 
-    # get sampling mask in input shape
-    sampling_mask = (torch.abs(k_input) > 1e-9)
 
     # get indices for operators - direction is along x and y, set those to 1
-    indices = get_all_idx_nd_square_patches_in_nd_shape(
-        size=radius, patch_direction=(0, 1, 1, 0, 0, 0), k_space_shape=k_input.shape,
+    indices_mapping, batch_reshape = get_all_idx_nd_square_patches_in_nd_shape(
+        size=loraks_nb_side_length, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=sl_us_k.shape,
         combination_direction=(0, 0, 0, 1, 1, 1)
     )
     # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
+    # need to reshape the input k-space
+    k_input = torch.reshape(sl_us_k, batch_reshape)
 
-    # now assume we picked a batch
-    index_batch = indices[0]
-    k_input_batch = k_input[0]
+    # get sampling mask in input shape
+    sampling_mask = (torch.abs(k_input) > 1e-9)
 
-    # get count matrix from indices, ensure nonzero (if using non rectangular patches)
-    count_matrix = torch.bincount(index_batch.view(-1))
-    count_matrix[count_matrix == 0] = 1
-
-    # test c mapping
-    c_matrix = c_operator(k_space=k_input_batch, indices=index_batch)
-    # adjoint
-    k_recon_c = c_adjoint_operator(c_matrix=c_matrix, indices=index_batch, k_space_dims=k_input_batch.shape)
-    k_recon_c /= count_matrix.view(k_input_batch.shape)
-    print(torch.allclose(k_recon_c, k_input_batch))
-
-    # test s mapping
-    s_matrix = s_operator(k_space=k_input_batch, indices=index_batch)
-
-    # Adjoint
-    k_recon_s = s_adjoint_operator(s_matrix=s_matrix, indices=index_batch, k_space_dims=k_input_batch.shape)
-    # normalize
-    count_matrix_s = 2 * count_matrix.view(k_input_batch.shape)
-    k_recon_s /= count_matrix_s
-
-    # test
-    print(torch.allclose(k_recon_s, k_input_batch))
-
-    fig = psub.make_subplots(
-        rows=3, cols=3
-    )
-    count_matrix = count_matrix.view(k_input_batch.shape)
-    counts = [torch.ones_like(count_matrix[:, :, 0, 0, 0]), count_matrix[:, :, 0, 0, 0], count_matrix_s[:, :, 0, 0, 0]]
-    for i, d in enumerate([k_input_batch[:, :, 0, 0, 0], k_recon_c[:, :, 0, 0, 0], k_recon_s[:, :, 0, 0, 0]]):
-        fig.add_trace(
-            go.Heatmap(z=torch.log(torch.abs(d)).numpy(), showscale=False),
-            row=1, col=i + 1
-        )
-        fig.add_trace(
-            go.Heatmap(z=(torch.log(torch.abs(d)) - torch.log(torch.abs(k_input_batch[:, :, 0, 0, 0]))).numpy(),
-                       showscale=False),
-            row=3, col=i + 1
-        )
-        fig.add_trace(
-            go.Heatmap(z=counts[i].numpy(), showscale=False),
-            row=2, col=i + 1
-        )
-    fig.update_xaxes(visible=False)
-    fig.update_yaxes(visible=False)
-    fig_name = path_out.joinpath(f"mapping_tests").with_suffix(".html")
-    logging.info(f"Write file: {fig_name}")
-    fig.write_html(fig_name.as_posix())
-
-    logging.info("__ Testing algorithm")
-    # algorithm for s
-    matrix_rank = torch.min(torch.tensor(s_matrix.shape)).item()
     # embed image in random image to ensure svd gradient stability
     k_init = torch.randn_like(k_input)
     k_init *= 1e-2 * torch.max(torch.abs(k_input)) / torch.max(torch.abs(k_init))
     k_init[sampling_mask] = k_input[sampling_mask]
-    # want to multiply search candidates by sampling mask to compute data consistency term, cast to numbers
-    sampling_mask = sampling_mask.to(device=device)
-    # save us data for consistency term, send to device
-    k_input = k_input.to(device)
 
-    # ensure device
-    count_matrix = count_matrix.to(device)
+    logging.info("__ Testing algorithm")
+    n_spatial = indices_mapping.shape[1]
+    n_nb = indices_mapping.shape[2]
+
+    matrix_rank = min(n_spatial, n_nb)
 
     # build s_threshold based on rank
     s_threshold = torch.ones(matrix_rank, dtype=torch.float32)
@@ -237,6 +174,7 @@ def main():
 
     # log losses
     losses = []
+
     # plot intermediates
     sl_us_img = fft(sl_us_k, img_to_k=False, axes=(0, 1))
     sl_us_img = root_sum_of_squares(sl_us_img, dim_channel=-3)
@@ -252,20 +190,15 @@ def main():
 
     for b in range(k_input.shape[0]):
         k = k_init[b].clone().to(device).requires_grad_(True)
-        index_batch = indices[b].to(device)
+        index_batch = indices_mapping[b].to(device)
         sampling_mask_batch = sampling_mask[b].to(device)
+        k_input_batch = k_input[b].to(device)
         grad_last = torch.zeros_like(k)
-        # def func(k):
-        #     loss, _, _ = func_optim(
-        #         k=k, indices=index_batch, s_threshold=s_threshold, shape=k.shape, count_matrix=count_matrix,
-        #         sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
-        #     )
-        #     return loss
 
         for i in bar:
             loss, loss_1, loss_2 = func_optim(
-                k=k, indices=index_batch, s_threshold=s_threshold, shape=k.shape, count_matrix=count_matrix,
-                sl_us_k=k_input[b], sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
+                k=k, indices=index_batch, s_threshold=s_threshold,
+                sl_us_k=k_input_batch, sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
             )
             loss.backward()
             # use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
@@ -298,7 +231,8 @@ def main():
                 # grad_last = grad_update
 
                 grads = torch.abs(k.grad)
-                conv = torch.linalg.norm(grads).cpu()
+                conv = torch.linalg.norm(grads - grad_last).cpu()
+                grad_last = grads.clone()
                 grads = grads[:, :, 0, 0].cpu()
 
             k.grad.zero_()
@@ -323,6 +257,10 @@ def main():
                 plot_img.append(root_sum_of_squares(img, dim_channel=-1))
                 plot_grads.append(grads[:, :, 0])
                 plot_names.append(i+1)
+
+    # path_memory_snapshot = path_out.joinpath(f"memory_snapshot").with_suffix(".pickle")
+    # logging.info(f"Write file: {path_memory_snapshot}")
+    # torch.cuda.memory._dump_snapshot(path_memory_snapshot.as_posix())
 
     fig = psub.make_subplots(
         rows=3, cols=len(plot_k),
