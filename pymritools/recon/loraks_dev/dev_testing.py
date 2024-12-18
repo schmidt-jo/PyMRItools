@@ -330,6 +330,72 @@ def main():
     # recon_img = root_sum_of_squares(recon_img, dim_channel=-2)
 
 
+def core():
+    # set output path
+    path_out = plib.Path("./dev_sim/loraks").absolute()
+    path_out.mkdir(exist_ok=True, parents=True)
+
+    # setup phantom
+    k_input, sampling_mask = prepare_k_space()
+    shape = k_input.shape
+
+    # set LORAKS parameters
+    loraks_nb_side_length = 5
+    rank = 50
+    lam_s = 0.05
+    max_num_iter = 50
+    device = torch.device("cuda")
+    # torch.cuda.memory._record_memory_history()
+
+    logging.info(f"Setup LORAKS: Rank - {rank}")
+
+    # use adaptive learning rate
+    # lr = np.linspace(0.008, 0.0005, max_num_iter)
+    lr = torch.exp(-torch.arange(max_num_iter)/max_num_iter) * 5e-3
+
+    # get indices for operators - direction is along x and y, set those to 1
+    indices_mapping, batch_reshape = get_all_idx_nd_square_patches_in_nd_shape(
+        size=loraks_nb_side_length, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=shape,
+        combination_direction=(0, 0, 0, 1, 1, 1)
+    )
+    # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
+    # need to reshape the input k-space
+    k_input = torch.reshape(k_input, batch_reshape)
+    sampling_mask = torch.reshape(sampling_mask, batch_reshape)
+
+    # get LORAKS matrix dimensions
+    n_spatial = indices_mapping.shape[1]
+    n_nb = indices_mapping.shape[2]
+
+    matrix_rank = min(n_spatial, n_nb)
+
+    # build s_threshold based on rank
+    s_threshold = torch.ones(matrix_rank, dtype=torch.float32)
+    s_threshold[rank:] = 0
+    s_threshold = s_threshold.to(device)
+
+    # setup iterations
+    bar = tqdm.trange(max_num_iter, desc="Optimization")
+
+    for b in range(k_input.shape[0]):
+        # batch processing
+        k = k_input[b].clone().to(device).requires_grad_(True)
+        index_batch = indices_mapping[b].to(device)
+        sampling_mask_batch = sampling_mask[b].to(device)
+        k_input_batch = k_input[b].to(device)[sampling_mask_batch]
+
+        # iterations
+        for i in bar:
+            loss, loss_1, loss_2 = func_optim(
+                k=k, indices=index_batch, s_threshold=s_threshold,
+                sl_us_k=k_input_batch, sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
+            )
+            loss.backward()
+
+            # Use the optimal learning_rate to update parameters
+            with torch.no_grad():
+                k -= lr[i] * k.grad
+
 
 # Notes / ToDos:
 # use page implementation - did it wrong but still smoothes the loss evolution :D
