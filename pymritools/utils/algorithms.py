@@ -144,13 +144,13 @@ def randomized_svd(matrix: torch.Tensor, q: int = 6, power_projections: int = 2)
     sample_matrix = torch.matmul(matrix, sample_projection)
 
     for _ in range(power_projections):
-        sample_matrix = torch.matmul(matrix, torch.matmul(matrix.T, sample_matrix))
+        sample_matrix = torch.matmul(matrix, torch.matmul(matrix.mH, sample_matrix))
 
     # Orthonormalize basis using QR decomposition
     q, _ = torch.linalg.qr(sample_matrix)
 
     # Obtain the low-rank approximation of the original matrix - project original matrix onto that orthonormal basis
-    lr = torch.matmul(q.T, matrix)
+    lr = torch.matmul(q.mH, matrix)
     u, s, v = torch.linalg.svd(lr, full_matrices=False)
 
     # s, vh should be approximately the matrix s, vh of the svd from random matrix theory
@@ -181,7 +181,7 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projec
     # 2, 3) compute t1 and t2
     for _ in range(max(power_projections + 1, 1)):
         t1 = torch.matmul(matrix, t2)
-        t2 = torch.matmul(matrix.mT, t1)
+        t2 = torch.matmul(matrix.mH, t1)
 
     # 4) compute qr decompositions
     q1, _ = torch.linalg.qr(t1)
@@ -189,7 +189,7 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projec
 
     # 5) compute m
     m = torch.matmul(
-        q1.mT, torch.matmul(matrix, q2)
+        q1.mH, torch.matmul(matrix, q2)
     )
 
     # 6) Calculate rank truncated SVD
