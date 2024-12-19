@@ -124,37 +124,21 @@ def chambolle_pock_tv(data: np.ndarray, lam, n_it=100):
     return x
 
 
-def randomized_svd(
-        matrix: torch.Tensor, rank: int,
-        power_projections: int = 0, oversampling: int = None):
+def randomized_svd(matrix: torch.Tensor, q: int = 6, power_projections: int = 2):
     """
     Function calculates a randomized Singular Value Decomposition (SVD) for a given matrix.
     The algorithm uses random projections and, if necessary, power iterations to improve the accuracy of the approximation
     :param matrix: Input tensor containing the data matrix to be decomposed. The tensor may have additional batch dimensions.
-    :param rank: Number of singular values and vectors to compute.
+    :param q: A slightly overestimated rank of matrix.
     :param power_projections: Number of power iterations to perform to improve the approximation quality.
-    :param oversampling: Additional random vectors to sample to improve the robustness of the decomposition.
     :return: A tuple containing the left singular vectors (U), singular values (S), and right singular vectors (VH) of the input matrix.
     """
-    # get matrix shape - ignore batch dims
+    torch._assert(matrix.ndim == 2, "Matrix must be 2D")
     m, n = matrix.shape[-2:]
-    # get batch dims
-    num_batch_dims = len(matrix.shape) - 2
-    l = 2 * rank if oversampling is None else rank + oversampling
-
-    # want short side to be at front to sample across long side
-    if m > n:
-        matrix = torch.movedim(matrix, -2, -1)
-        transpose = True
-        m, n = n, m
-    else:
-        transpose = False
+    torch._assert(m >= n, "Matrix must have at least as many rows as columns")
 
     # Generate a random Gaussian matrix
-    sample_projection = torch.randn(
-        (n, l),
-        dtype=matrix.dtype, device=matrix.device
-    )
+    sample_projection = torch.randn((n, q), dtype=matrix.dtype, device=matrix.device)
 
     # Form the random projection, dim: [n, sampling size]
     sample_matrix = torch.matmul(matrix, sample_projection)
@@ -167,95 +151,37 @@ def randomized_svd(
 
     # Obtain the low-rank approximation of the original matrix - project original matrix onto that orthonormal basis
     lr = torch.matmul(q.T, matrix)
-
-    # Perform SVD on the low-rank approximation
-    u, s, vh = torch.linalg.svd(lr, full_matrices=False)
+    u, s, v = torch.linalg.svd(lr, full_matrices=False)
 
     # s, vh should be approximately the matrix s, vh of the svd from random matrix theory
     # we can get the left singular values by back projection
-    #TODO: Fix again
-    # u_matrix = torch.matmul(q, u[..., :, :rank])
-    # vh = vh[..., :rank, :]
+    u_matrix = torch.matmul(q, u)
 
-    if transpose:
-        v_temp = vh
-        # vh = torch.movedim(u_matrix, -1, -2)
-        u_matrix = torch.movedim(v_temp, -1, -2)
-
-    # return u_matrix, s[..., :rank], vh
-    return u, s, vh
+    return u_matrix, s, v
 
 
-def subspace_orbit_randomized_svd(matrix: torch.Tensor, rank: int, oversampling: int = None):
-    # adopted from Kaloorazi and Lamare (2018): 10.1109/TSP.2018.2853137
-    # output rank approximation
-    # get shape
-    m, n = matrix.shape[-2:]
-    l = 2 * rank if oversampling is None else rank + oversampling
-
-    # want short side to be at back to sample across long side
-    if m < n:
-        matrix = torch.movedim(matrix, -2, -1)
-        transpose = True
-        m, n = n, m
-    else:
-        transpose = False
-
-    # 1) draw random matrices phi 1 and 2
-    omega = torch.randn(
-        (n, l),
-        dtype=matrix.dtype, device=matrix.device
-    )
-    # 2) compute t1 and t2
-    t1 = torch.matmul(matrix, omega)
-    t2 = torch.matmul(matrix.mT, t1)
-    # 3) compute qr decompositions
-    q1, _ = torch.linalg.qr(t1)
-    q2, _ = torch.linalg.qr(t2)
-    # 4) compute m
-    m = torch.matmul(
-        q1.mT, torch.matmul(matrix, q2)
-    )
-    u_k, s_k, v_k = torch.linalg.svd(m, full_matrices=False)
-    u_k = u_k[:, :rank]
-    s_k = s_k[:rank]
-    v_k = v_k[:rank]
-    a_1 = torch.matmul(q1, u_k)
-    a_2 = torch.matmul(q2, v_k.conj().T).mT
-    # a = torch.matmul(
-    #     torch.matmul(a_1, torch.diag_embed(s_k).to(a_1.dtype)),
-    #     a_2
-    # )
-    if transpose:
-        v_temp = a_2
-        vh = torch.movedim(s_k, -1, -2)
-        u_matrix = torch.movedim(a_1, -1, -2)
-    return a_1, s_k, a_2
-
-def subspace_orbit_randomized_svd_PS(matrix: torch.Tensor, rank: int, oversampling: int = None, device=None) -> tuple[torch.Tensor, ...]:
+def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projections: int = 2) -> tuple[torch.Tensor, ...]:
     """
     PyTorch implementation of Kaloorazi and Lamare (2018, DOI:10.1109/TSP.2018.2853137) that computes
     a low-rank approximation.
-    :param matrix: Input matrix of dimension 2 with shape (m, n) where m >= n
-    :param rank: Rank to approximate. Must be < n
+    :param matrix: Input matrix of dimension 2 with shape (m, n) where m>=n
+    :param q: A slightly overestimated rank of matrix.
+    :param power_projections: Number of power iterations to perform to improve the approximation quality.
     :return: Decomposed matrix parts (a1, s, a2) where (a1 * s) @ a2 is the low-rank approximation
     """
-    torch._assert(matrix.ndim == 2, "matrix must be 2D")
+    torch._assert(matrix.ndim == 2, "Matrix must be 2D")
     m, n = matrix.shape[-2:]
-    torch._assert(m >= n, "matrix must have at least as many rows as columns")
-    l = 2 * rank if oversampling is None else rank + oversampling
+    torch._assert(m >= n, "Matrix must have at least as many rows as columns")
 
     # The following steps describe algorithm 4 of the referenced paper
     # 1) Draw a standard Gaussian matrix
-    t2 = torch.randn(
-        (n, l),
-        dtype=matrix.dtype, device=matrix.device
-    )
+    t2 = torch.randn((n, q), dtype=matrix.dtype, device=matrix.device)
     t1 = torch.zeros((matrix.shape[0], t2.shape[1]), dtype=matrix.dtype, device=matrix.device)
 
     # 2, 3) compute t1 and t2
-    t1 = torch.matmul(matrix, t2)
-    t2 = torch.matmul(matrix.mT, t1)
+    for _ in range(max(power_projections + 1, 1)):
+        t1 = torch.matmul(matrix, t2)
+        t2 = torch.matmul(matrix.mT, t1)
 
     # 4) compute qr decompositions
     q1, _ = torch.linalg.qr(t1)
@@ -268,10 +194,6 @@ def subspace_orbit_randomized_svd_PS(matrix: torch.Tensor, rank: int, oversampli
 
     # 6) Calculate rank truncated SVD
     u_k, s_k, v_k = torch.linalg.svd(m, full_matrices=False)
-    # TODO: Fix again
-    # u_k = u_k[:, :rank].contiguous()
-    # s_k = s_k[:rank]
-    # v_k = v_k[:rank, :].contiguous()
 
     # 7) Form the SOR-SVD-based low-rank approximation
     a_1 = torch.matmul(q1, u_k)

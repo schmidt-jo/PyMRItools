@@ -13,7 +13,7 @@ import plotly.subplots as psub
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
 from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator, c_operator, c_adjoint_operator
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, cgd, \
-    subspace_orbit_randomized_svd_PS
+    subspace_orbit_randomized_svd
 
 
 def func_optim(k, indices, s_threshold, sl_us_k, sampling_mask, lam_s, rank):
@@ -27,7 +27,9 @@ def func_optim(k, indices, s_threshold, sl_us_k, sampling_mask, lam_s, rank):
     # u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
     # u, s, vh = randomized_svd(matrix, sampling_size=rank, oversampling=rank, power_projections=2)
     # u, s, vh = subspace_orbit_randomized_svd(matrix, rank=rank)
-    u, s, vh = subspace_orbit_randomized_svd_PS(matrix, rank=rank, oversampling=rank)
+    # TODO: Jochen, use q=rank+2 or something if you want, but you need to
+    # crop u, s, v manually then
+    u, s, vh = subspace_orbit_randomized_svd(matrix, q=rank)
 
     # threshold singular values
     # s_r = s * s_threshold

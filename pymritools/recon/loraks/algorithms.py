@@ -136,7 +136,7 @@ def get_v_matrix_of_ac_subspace(
         v_sub = v[:, :rank]
     elif compute_mode == "rsvd":
         m_ac_rank = min(m_ac.shape[-2:])
-        _, _, v = randomized_svd(matrix=m_ac, sampling_size=4*rank)
+        _, _, v = randomized_svd(matrix=m_ac, q=4 * rank)
         v_sub = v[:rank].conj().T
     elif compute_mode == "sor-svd":
         m_ac_rank = min(m_ac.shape[-2:])
