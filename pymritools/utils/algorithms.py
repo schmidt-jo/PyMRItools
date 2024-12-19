@@ -133,7 +133,7 @@ def randomized_svd(matrix: torch.Tensor, q: int = 6, power_projections: int = 2)
     :param power_projections: Number of power iterations to perform to improve the approximation quality.
     :return: A tuple containing the left singular vectors (U), singular values (S), and right singular vectors (VH) of the input matrix.
     """
-    torch._assert(matrix.ndim == 2, "Matrix must be 2D")
+    torch._assert(matrix.ndim >= 2, "Matrix must be at least 2D")
     m, n = matrix.shape[-2:]
     torch._assert(m >= n, "Matrix must have at least as many rows as columns")
 
@@ -169,14 +169,14 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projec
     :param power_projections: Number of power iterations to perform to improve the approximation quality.
     :return: Decomposed matrix parts (a1, s, a2) where (a1 * s) @ a2 is the low-rank approximation
     """
-    torch._assert(matrix.ndim == 2, "Matrix must be 2D")
+    torch._assert(matrix.ndim >= 2, "Matrix must be at least 2D")
     m, n = matrix.shape[-2:]
     torch._assert(m >= n, "Matrix must have at least as many rows as columns")
 
     # The following steps describe algorithm 4 of the referenced paper
     # 1) Draw a standard Gaussian matrix
     t2 = torch.randn((n, q), dtype=matrix.dtype, device=matrix.device)
-    t1 = torch.zeros((matrix.shape[0], t2.shape[1]), dtype=matrix.dtype, device=matrix.device)
+    t1 = torch.zeros((matrix.shape[-2], q), dtype=matrix.dtype, device=matrix.device)
 
     # 2, 3) compute t1 and t2
     for _ in range(max(power_projections + 1, 1)):
@@ -199,6 +199,7 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projec
     a_1 = torch.matmul(q1, u_k)
     a_2 = torch.matmul(q2, v_k.H).H
     return a_1, s_k, a_2
+
 
 class DE:
     """ Differential evolution """
