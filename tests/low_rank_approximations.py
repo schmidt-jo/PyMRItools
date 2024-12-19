@@ -184,7 +184,7 @@ def test_show_svd_recovery_for_SL():
                     fig.update_xaxes(range=(0, qf - 1), row=qi + 1, col=1 + pi)
         fig.update_yaxes(range=(0, 1.1 * s_svd.max()))
         fig.update_layout(legend_title="Method")
-        output_dir = get_test_result_output_dir(test_show_singular_value_recovery)
+        output_dir = get_test_result_output_dir(test_show_svd_recovery_for_SL)
         loraks_type = ["s", "c"][oi]
         fig.write_html(os.path.join(output_dir, f"loraks_{loraks_type}_svds_q_power-iter.html"))
 
