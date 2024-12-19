@@ -73,7 +73,8 @@ def test_show_singular_value_recovery():
 
     # Sampling size of the smaller matrix. If you want to have a rank k approximation of a big matrix
     # the size of q should be greater than k. Setting q = k + 0..2 should be enough.
-    q = 30
+    q = np.arange(0, 10, 2) + k
+    power_iters = np.arange(0, 3)
 
     m = generate_noisy_low_rank_matrix(n, k)
 
@@ -84,32 +85,34 @@ def test_show_singular_value_recovery():
     # is the default for torch.svd_lowrank. Also, it really seems that if we want to have rank k, we can get
     # away using k+0..2 as size. This is actually written in the docs to torch.svd_lowrank.
     fig = psub.make_subplots(
-        rows=3, cols=1,
-        row_titles=["Pow.-iter 0", "Pow.-iter 1", "Pow.-iter 2"],
-        shared_xaxes=True
+        rows=q.shape[0], cols=3,
+        column_titles=[f"P-iter {pi}" for pi in power_iters],
+        row_titles=[f"Q: {qi}" for qi in q],
+        shared_xaxes=True, shared_yaxes=True,
+        x_title="Index", y_title="Singular value"
     )
+    names = ["SVD", "SOR-SVD", "RSVD", "TorchLR"]
     cmap = plc.sample_colorscale("Turbo", np.linspace(0.2, 0.9, 4))
-    for pi in range(3):
-        _, s_sor, _ = subspace_orbit_randomized_svd(m, q, power_projections=pi)
-        _, s_rand, _ = randomized_svd(m, q, power_projections=pi)
-        _, s_torch, _ = torch.svd_lowrank(m, q, niter=pi)
-        names = ["SVD", "SOR-SVD", "RSVD", "TorchLR"]
-        for i, s in enumerate([s_svd, s_sor, s_rand, s_torch]):
-            showlegend = True if pi == 0 else False
-            fig.add_trace(
-                go.Scatter(
-                    y=s, name=names[i], mode="lines+markers",
-                    marker=dict(color=cmap[i]), legendgroup=i,
-                    showlegend=showlegend
-                ),
-                row=pi+1, col=1
-            )
-
-    fig.update_xaxes(range=(0, q-1), title="Index")
-    fig.update_yaxes(range=(0, 1.1), title="Singular value")
+    for qi, qf in enumerate(q.tolist()):
+        for pi, p in enumerate(power_iters.tolist()):
+            _, s_sor, _ = subspace_orbit_randomized_svd(m, qf, power_projections=p)
+            _, s_rand, _ = randomized_svd(m, qf, power_projections=p)
+            _, s_torch, _ = torch.svd_lowrank(m, qf, niter=p)
+            for i, s in enumerate([s_svd, s_sor, s_rand, s_torch]):
+                showlegend = True if (pi == 0) and (qi == 0) else False
+                fig.add_trace(
+                    go.Scatter(
+                        y=s, name=names[i], mode="lines+markers",
+                        marker=dict(color=cmap[i]), legendgroup=i,
+                        showlegend=showlegend
+                    ),
+                    row=qi+1, col=1+pi
+                )
+                fig.update_xaxes(range=(0, qf-1), row=qi+1, col=1+pi)
+    fig.update_yaxes(range=(0, 1.1))
     fig.update_layout(legend_title="Method")
     output_dir = get_test_result_output_dir(test_show_singular_value_recovery)
-    fig.write_html(os.path.join(output_dir, "singular_values_svds_power-iter.html"))
+    fig.write_html(os.path.join(output_dir, "svds_q_power-iter.html"))
     # create_singular_value_plot(
     #     sigmas=[s_svd, s_sor, s_rand, s_torch], names=["SVD", "SOR-SVD", "RSVD", "TorchLR"], x_len=q,
     #     file_name=os.path.join(output_dir, f"singular_values_svds_power-iter-{pi}.html")
