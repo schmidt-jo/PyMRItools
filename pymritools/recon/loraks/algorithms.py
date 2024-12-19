@@ -142,6 +142,10 @@ def get_v_matrix_of_ac_subspace(
         m_ac_rank = min(m_ac.shape[-2:])
         _, _, v = subspace_orbit_randomized_svd(matrix=m_ac, rank=rank)
         v_sub = v.conj().T
+    elif compute_mode == "torch-lr":
+        m_ac_rank = min(m_ac.shape[-2:])
+        _, _, v = torch.svd_lowrank(A=m_ac, q=rank+10, niter=2)
+        v_sub = v.mH
     else:
         err = f"compute mode {compute_mode} not implemented for AC subspace extraction"
         log_module.error(err)
@@ -348,7 +352,7 @@ def ac_loraks(
             # __ for C
             if lambda_c > 1e-9:
                 vvc = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="torch-lr",
                     ac_indices=img_ac_indices, mode="c", rank=rank_c
                 )
             else:
@@ -357,7 +361,7 @@ def ac_loraks(
             # __ for S
             if lambda_s > 1e-9:
                 vvs = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="torch-lr",
                     ac_indices=img_ac_indices, mode="s", rank=rank_s
                 )
             else:
