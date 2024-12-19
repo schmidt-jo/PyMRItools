@@ -2,9 +2,12 @@ import json
 import os
 
 import plotly.graph_objects as go
+import plotly.subplots as psub
+import plotly.colors as plc
 import pytest
 import torch
 import torch.linalg as LA
+import numpy as np
 
 from pymritools.utils.algorithms import randomized_svd
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd
@@ -12,7 +15,7 @@ from tests.utils import do_performance_test
 from tests.utils import get_test_result_output_dir
 
 
-def generate_noisy_low_rank_matrix(n: int, k: int) -> torch.Tensor:
+def generate_noisy_low_rank_matrix(n: int, k: int, error_scale:float = 3.0) -> torch.Tensor:
     """
     Generate a matrix with controlled singular values and added noise
     like in the paper (DOI:10.1109/TSP.2018.2853137).
@@ -20,7 +23,6 @@ def generate_noisy_low_rank_matrix(n: int, k: int) -> torch.Tensor:
     sigma_max = 1.0
     sigma_min = 1e-9
     # Note that I had to scale the random noise error way up to see a decrease in quality.
-    error_scale = 3.0
     s = torch.linspace(sigma_max, sigma_min, n)
     s[k:] = 0  # Set values after k to zero (note: Python uses 0-based indexing)
     G = torch.randn(n, n)
@@ -40,13 +42,11 @@ def generate_low_rank_matrix(m: int, n: int, rank: int, dtype=torch.float32, dev
 
 
 def create_singular_value_plot(
-        sigmas_1: torch.Tensor, name_1: str,
-        sigmas_2: torch.Tensor, name_2: str,
+        sigmas: list, names: list,
         x_len: int,
         file_name: str):
     fig = go.Figure()
-    names = [name_1, name_2]
-    for i, s in enumerate([sigmas_1, sigmas_2]):
+    for i, s in enumerate(sigmas):
         fig.add_trace(
             go.Scatter(y=s, name=names[i], mode="lines+markers")
         )
@@ -57,7 +57,10 @@ def create_singular_value_plot(
             yaxis_title="Singular value",
             legend_title="Method"
         )
-    fig.write_image(file_name)
+    if file_name.endswith(".html"):
+        fig.write_html(file_name)
+    else:
+        fig.write_image(file_name)
 
 
 def test_show_singular_value_recovery():
@@ -80,18 +83,41 @@ def test_show_singular_value_recovery():
     # The gist is that all three methods seem to deliver equal quality when using 2 power-iterations which
     # is the default for torch.svd_lowrank. Also, it really seems that if we want to have rank k, we can get
     # away using k+0..2 as size. This is actually written in the docs to torch.svd_lowrank.
-    _, s_sor, _ = subspace_orbit_randomized_svd(m, q, power_projections=2)
-    _, s_rand, _ = randomized_svd(m, q, power_projections=2)
-    _, s_torch, _ = torch.svd_lowrank(m, q)
+    fig = psub.make_subplots(
+        rows=3, cols=1,
+        row_titles=["Pow.-iter 0", "Pow.-iter 1", "Pow.-iter 2"],
+        shared_xaxes=True
+    )
+    cmap = plc.sample_colorscale("Turbo", np.linspace(0.2, 0.9, 4))
+    for pi in range(3):
+        _, s_sor, _ = subspace_orbit_randomized_svd(m, q, power_projections=pi)
+        _, s_rand, _ = randomized_svd(m, q, power_projections=pi)
+        _, s_torch, _ = torch.svd_lowrank(m, q, niter=pi)
+        names = ["SVD", "SOR-SVD", "RSVD", "TorchLR"]
+        for i, s in enumerate([s_svd, s_sor, s_rand, s_torch]):
+            showlegend = True if pi == 0 else False
+            fig.add_trace(
+                go.Scatter(
+                    y=s, name=names[i], mode="lines+markers",
+                    marker=dict(color=cmap[i]), legendgroup=i,
+                    showlegend=showlegend
+                ),
+                row=pi+1, col=1
+            )
 
+    fig.update_xaxes(range=(0, q-1), title="Index")
+    fig.update_yaxes(range=(0, 1.1), title="Singular value")
+    fig.update_layout(legend_title="Method")
     output_dir = get_test_result_output_dir(test_show_singular_value_recovery)
-    create_singular_value_plot(s_svd, "SVD", s_sor,
-                               "SOR-SVG", q, os.path.join(output_dir, "singular_values_sor.png"))
-    create_singular_value_plot(s_svd, "SVD", s_rand,
-                               "RSVG", q, os.path.join(output_dir, "singular_values_rand.png"))
-    create_singular_value_plot(s_svd, "SVD", s_torch,
-                               "PyTorch", q, os.path.join(output_dir, "singular_values_torch.png"))
-
+    fig.write_html(os.path.join(output_dir, "singular_values_svds_power-iter.html"))
+    # create_singular_value_plot(
+    #     sigmas=[s_svd, s_sor, s_rand, s_torch], names=["SVD", "SOR-SVD", "RSVD", "TorchLR"], x_len=q,
+    #     file_name=os.path.join(output_dir, f"singular_values_svds_power-iter-{pi}.html")
+    # )
+    # create_singular_value_plot(
+    #     sigmas=[s_svd, s_rand], names=["SVD", "RSVD"], x_len=q,
+    #     file_name=os.path.join(output_dir, "singular_values_rand.png")
+    # )
 
 def gold_standard_svd(matrix: torch.Tensor, rank: int) -> tuple[torch.Tensor, ...]:
     u, s, v = torch.linalg.svd(matrix, full_matrices=False)
