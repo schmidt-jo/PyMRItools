@@ -17,7 +17,7 @@ untouched.
 python3.10 -m venv .venv
 
 # Install PyMRItools directory from GitHub
-pip install git+https://https://github.com/schmidt-jo/PyMRItools
+pip install git+https://github.com/schmidt-jo/PyMRItools
 ```
 
 ### Conda
