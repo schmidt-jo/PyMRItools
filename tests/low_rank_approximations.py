@@ -249,9 +249,13 @@ def test_low_rank_approximation_performance():
     m = 256 * 256
     n = 25 * 64 * 4
     rank = 10
+
+    # Triton, the backend used for compiling PyTorch functions is not supported for Windows.
+    # To make this test work on Windows, we turn compilation off on Windows.
+    import platform
+    not_windows = platform.system() != "Windows"
+
     matrix = generate_low_rank_matrix(m, n, rank=rank)
-    do_performance_test(subspace_orbit_randomized_svd, matrix, rank)
-    do_performance_test(randomized_svd, matrix, rank)
-    # Unfortunately, we cannot test torch.svd_lowrank this way, because we're not allowed to
-    # compile it.
+    do_performance_test(subspace_orbit_randomized_svd, matrix, rank, test_compilation=not_windows)
+    do_performance_test(randomized_svd, matrix, rank, test_compilation=not_windows)
     do_performance_test(torch.svd_lowrank, matrix, rank, test_compilation=False)
