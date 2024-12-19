@@ -19,10 +19,14 @@ class SheppLogan:
         im = Image.open(path).convert("L")
         self._im = np.array(im, dtype=np.float32)
 
-    def get_2D_image(self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None
-                     ) -> np.ndarray | torch.Tensor:
+    def get_2D_image(
+            self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None, num_echoes: int = None
+    ) -> np.ndarray | torch.Tensor:
+        # load the image
         im = self._im
+        # save 0 points
         zero_mask = self._im == 0
+        # scale image to shape
         if np.sum(np.abs(np.array(shape[:2]) - np.array([400, 400]))) > 1e-3:
             zf = np.array(shape[:2]) / np.array([400, 400])
             im = zoom(im, zf, order=0)
@@ -30,10 +34,17 @@ class SheppLogan:
         max_img = np.max(im, axis=(0, 1))
         # normalize to max 1
         im /= max_img
+        # reset zeros (changed due to interpolation method in above scaling
         im[zero_mask] = 0
         im = torch.from_numpy(im)
-        # include fake coil sensitivities randomly set up
+        # save within slice shape
         nx, ny = shape[:2]
+
+        if num_echoes is not None:
+            # if we want echo images we scale the original image with random variations
+            echo_factors = 0.2 * torch.randn((nx, ny, num_echoes))
+            im = im[:, :, None] * echo_factors
+        # include fake coil sensitivities randomly set up
         if num_coils is not None:
             coil_sens = torch.zeros((*shape, num_coils))
             for i in range(num_coils):
@@ -45,18 +56,21 @@ class SheppLogan:
                 )
                 gw /= torch.max(gw)
                 coil_sens[:, :, i] = gw
+            if num_echoes is not None:
+                coil_sens = coil_sens.unsqueeze(-1)
             im = im[:, :, None] * coil_sens
+
         if not as_torch_tensor:
             im = im.numpy()
         return im
 
-    def get_2D_k_space(self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None) -> np.ndarray | torch.Tensor:
-        im = self.get_2D_image(shape=shape, as_torch_tensor=as_torch_tensor, num_coils=num_coils)
+    def get_2D_k_space(self, shape: tuple, as_torch_tensor: bool = True, num_coils: int = None, num_echoes: int = None) -> np.ndarray | torch.Tensor:
+        im = self.get_2D_image(shape=shape, as_torch_tensor=as_torch_tensor, num_coils=num_coils, num_echoes=num_echoes)
         return fft(input_data=im, img_to_k=True, axes=(0, 1))
 
     def get_sub_sampled_k_space(
             self, shape: tuple, acceleration: int, ac_lines: int = 20, mode: str = "skip",
-            as_torch_tensor: bool = True, num_coils: int = None) -> np.ndarray | torch.Tensor:
+            as_torch_tensor: bool = True, num_coils: int = None, num_echoes: int = None) -> np.ndarray | torch.Tensor:
         """
         Generate a sub-sampled k-space of Shepp Logan phantom.
         The sub-sampling has an autocalibration region, i.e. fully sampled central lines,
@@ -74,19 +88,25 @@ class SheppLogan:
         modes = ["skip", "weighted"]
         # allocate
         nx, ny = shape
-        k = np.zeros((nx, ny), dtype=np.complex128) if num_coils is None else np.zeros((nx, ny, num_coils), dtype=np.complex128)
+        # get fs k - space
+        if num_echoes is None:
+            # set at least one echo
+            num_echoes = 1
+        k_fs = self.get_2D_k_space(shape=shape, as_torch_tensor=False, num_coils=num_coils, num_echoes=num_echoes)
+        k_us = np.zeros_like(k_fs)
+
         y_center = int(ny / 2)
         # calculate upper and lower edges of ac region
         y_l = y_center - int(ac_lines / 2)
         y_u = y_center + int(ac_lines / 2)
-        # build indices of ac lines
-        indices_ac = np.arange(y_l, y_u)
+        # fill ac region
+        k_us[:, y_l:y_u] = k_fs[:, y_l:y_u]
         if mode == "skip":
-             # build indices of remaining lines sampled outer lines
-            indices = np.concatenate(
-                (indices_ac, np.arange(0, y_l, acceleration), np.arange(y_u, shape[1], acceleration)),
-                axis=0
-            )
+            # we fill every acc._factor line in outer k_space and move one step for every echo
+            for e in range(num_echoes):
+                k_us[:, e:y_l:acceleration, ..., e] = k_fs[:, e:y_l:acceleration, ..., e]
+                k_us[:, y_u + e::acceleration, ..., e] = k_fs[:, y_u+e::acceleration, ..., e]
+
         elif mode == "weighted":
             # set some factor for weighting central lines preferably
             weighting_factor = 0.3
@@ -103,30 +123,29 @@ class SheppLogan:
             rng = np.random.default_rng(0)
             indices = rng.choice(
                 np.arange(0, y_l),
-                size=num_outer_lines,
+                size=(num_outer_lines, num_echoes),
                 replace=False,
                 p=weighting
             )
             # move half of them to other side of ac lines
             indices[::2] =shape[1] - 1 - indices[::2]
-            indices = np.concatenate(
-                (indices_ac, np.sort(indices)),
-                axis=0
-            )
+            indices = np.sort(indices, axis=0)
+            for e in range(num_echoes):
+                k_us[:, indices[:, e], ..., e] = k_fs[:, indices[:, e], ..., e]
         else:
             err = f"Mode {mode} not supported, should be one of: {modes}"
             log_module.error(err)
             raise ValueError(err)
-        k[:, indices] = self.get_2D_k_space(shape=shape, as_torch_tensor=False, num_coils=num_coils)[:, indices]
+        k_us = np.squeeze(k_us)
         if as_torch_tensor:
-            return torch.from_numpy(k)
-        return k
+            return torch.from_numpy(k_us)
+        return k_us
 
 
 def main():
     logging.basicConfig(level=logging.INFO)
     k_us = SheppLogan().get_sub_sampled_k_space(
-        shape=(256, 256), acceleration=2, ac_lines=30, mode="weighted", as_torch_tensor=True
+        shape=(256, 256), acceleration=2, ac_lines=30, mode="skip", as_torch_tensor=True, num_echoes=2
     )
     k_us_cs = SheppLogan().get_sub_sampled_k_space(
         shape=(256, 256), acceleration=2, ac_lines=30, mode="weighted", as_torch_tensor=True, num_coils=32
