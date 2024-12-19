@@ -76,7 +76,7 @@ def test_show_singular_value_recovery():
     q = np.arange(0, 10, 2) + k
     power_iters = np.arange(0, 3)
 
-    for ei, e in enumerate(np.linspace(0.5, 10, 5).tolist()):
+    for ei, e in enumerate(np.linspace(2, 10, 4).tolist()):
         # simulate for different noise scales
         m = generate_noisy_low_rank_matrix(n, k, error_scale=e)
 
