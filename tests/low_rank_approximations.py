@@ -9,8 +9,10 @@ import torch
 import torch.linalg as LA
 import numpy as np
 
-from pymritools.utils.algorithms import randomized_svd
-from pymritools.utils.algorithms import subspace_orbit_randomized_svd
+from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
+from pymritools.utils.phantom import SheppLogan
+from pymritools.recon.loraks_dev.operators import c_operator
+from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
 from tests.utils import do_performance_test
 from tests.utils import get_test_result_output_dir
 
@@ -124,6 +126,65 @@ def test_show_singular_value_recovery():
         #     sigmas=[s_svd, s_rand], names=["SVD", "RSVD"], x_len=q,
         #     file_name=os.path.join(output_dir, "singular_values_rand.png")
         # )
+
+def test_show_svd_recovery_for_SL():
+    """
+    Test visually how well singular values are recovered using the different methods if we assume the matrix to be
+    c mapping matrix of a coil combined Shepp Logan phantom.
+    The Shepp Logan phantom has a very simple Compact Support structure and accomodates various "smooth" functions,
+    which should yield a Low Rank C matrix representation inherently. Though we aim at not having a well
+    defined singular value cutoff as in the previous simulation.
+    """
+    sl_k_space = SheppLogan().get_2D_k_space(shape=(256, 256), as_torch_tensor=True, num_coils=4)
+    sl_k_space += torch.randn_like(sl_k_space) * 1e-4
+    shape = sl_k_space.shape
+    c_mapping, reshape = get_all_idx_nd_square_patches_in_nd_shape(
+        size=5, k_space_shape=shape, patch_direction=(1,1,0), combination_direction=(0,0,1)
+    )
+    sl_k_space = torch.reshape(sl_k_space, reshape)
+    m = c_operator(k_space=sl_k_space, indices=c_mapping)[0]
+
+    rank = 30
+
+    q = np.arange(0, 30, 6) + rank
+    power_iters = np.arange(0, 3)
+
+    # Ground truth singular values for comparison
+    _, s_svd, _ = torch.linalg.svd(m, full_matrices=False)
+
+    # The gist is that all three methods seem to deliver equal quality when using 2 power-iterations which
+    # is the default for torch.svd_lowrank. Also, it really seems that if we want to have rank k, we can get
+    # away using k+0..2 as size. This is actually written in the docs to torch.svd_lowrank.
+    fig = psub.make_subplots(
+        rows=q.shape[0], cols=3,
+        column_titles=[f"P-iter {pi}" for pi in power_iters],
+        row_titles=[f"Q: {qi}" for qi in q],
+        shared_xaxes=True, shared_yaxes=True,
+        x_title="Index", y_title="Singular value"
+    )
+    names = ["SVD", "SOR-SVD", "RSVD", "TorchLR"]
+    cmap = plc.sample_colorscale("Turbo", np.linspace(0.2, 0.9, 4))
+    for qi, qf in enumerate(q.tolist()):
+        for pi, p in enumerate(power_iters.tolist()):
+            _, s_sor, _ = subspace_orbit_randomized_svd(m, qf, power_projections=p)
+            _, s_rand, _ = randomized_svd(m, qf, power_projections=p)
+            _, s_torch, _ = torch.svd_lowrank(m, qf, niter=p)
+            for i, s in enumerate([s_svd, s_sor, s_rand, s_torch]):
+                showlegend = True if (pi == 0) and (qi == 0) else False
+                fig.add_trace(
+                    go.Scatter(
+                        y=s, name=names[i], mode="lines+markers",
+                        marker=dict(color=cmap[i]), legendgroup=i,
+                        showlegend=showlegend
+                    ),
+                    row=qi + 1, col=1 + pi
+                )
+                fig.update_xaxes(range=(0, qf - 1), row=qi + 1, col=1 + pi)
+    fig.update_yaxes(range=(0, 1.1 * s_svd.max()))
+    fig.update_layout(legend_title="Method")
+    output_dir = get_test_result_output_dir(test_show_singular_value_recovery)
+    fig.write_html(os.path.join(output_dir, f"loraks_c_svds_q_power-iter.html"))
+
 
 def gold_standard_svd(matrix: torch.Tensor, rank: int) -> tuple[torch.Tensor, ...]:
     u, s, v = torch.linalg.svd(matrix, full_matrices=False)
