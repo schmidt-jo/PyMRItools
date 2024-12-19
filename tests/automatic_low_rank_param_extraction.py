@@ -48,25 +48,26 @@ def test_automatic_low_rank_param_extraction():
         s_s = torch.linalg.svdvals(s_matrix)
 
         # calculate area under cummulatively
-        c_total_area = torch.sum(c_s)
-        c_cum_area = torch.cumsum(c_s, dim=0)
+        # c_total_area = torch.sum(c_s)
+        # c_cum_area = torch.cumsum(c_s, dim=0)
         # find threshold
-        c_th = torch.where(c_cum_area > 0.95 * c_total_area)[0][0]
+        c_max = torch.max(c_s)
+        c_th = torch.where(c_s < 0.05 * c_max)[0][0]
 
         c_ax = torch.arange(c_s.shape[0]) + 1
 
-        s_total_area = torch.sum(s_s)
-        s_cum_area = torch.cumsum(s_s, dim=0)
+        # s_total_area = torch.sum(s_s)
+        # s_cum_area = torch.cumsum(s_s, dim=0)
         # find threshold
-        s_th = torch.where(s_cum_area > 0.95 * s_total_area)[0][0]
+        s_max = torch.max(s_s)
+        s_th = torch.where(s_s < 0.05 * s_max)[0][0]
 
         s_ax = torch.arange(s_s.shape[0]) + 1
 
-        if torch.max(c_s) > c_max_val:
-            c_max_val = torch.max(c_s)
-        if torch.max(s_s) > s_max_val:
-            s_max_val = torch.max(s_s)
-
+        if c_max > c_max_val:
+            c_max_val = c_max
+        if s_max > s_max_val:
+            s_max_val = s_max
         for i, s in enumerate([c_s, s_s]):
             showlegend = True if i == 0 else False
             ax = [c_ax, s_ax][i]
