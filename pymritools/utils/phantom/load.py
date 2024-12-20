@@ -10,7 +10,8 @@ from scipy.io import savemat
 from pymritools.utils import fft, gaussian_2d_kernel, torch_save
 
 log_module = logging.getLogger(__name__)
-torch.manual_seed(10)
+seed = 10
+torch.manual_seed(seed)
 
 
 class SheppLogan:
@@ -120,7 +121,7 @@ class SheppLogan:
             weighting /= np.sum(weighting)
             # draw samples from the outer lines
             num_outer_lines = int((shape[1] - ac_lines) / acceleration)
-            rng = np.random.default_rng(0)
+            rng = np.random.default_rng(seed)
             indices = rng.choice(
                 np.arange(0, y_l),
                 size=(num_outer_lines, num_echoes),
