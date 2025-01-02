@@ -43,7 +43,7 @@ class SheppLogan:
 
         if num_echoes is not None:
             # if we want echo images we scale the original image with random variations
-            echo_factors = 0.2 * torch.randn((nx, ny, num_echoes))
+            echo_factors = 0.2 * torch.rand((nx, ny, num_echoes))
             im = im[:, :, None] * echo_factors
         # include fake coil sensitivities randomly set up
         if num_coils is not None:
