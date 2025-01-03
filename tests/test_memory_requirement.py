@@ -147,14 +147,24 @@ def test_memory_requirements():
                 mem_track_sizes.extend(mtps)
                 mem_track_svds.extend(mtss)
 
-    mem = pl.DataFrame(mem_track_svds)
+    mem_svds = pl.DataFrame(mem_track_svds)
+    # save before plotting
+    output_dir = get_test_result_output_dir(test_memory_requirements)
+    fn = f"mem_requirement_svd_methods"
+    mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+
+    mem_sizes = pl.DataFrame(mem_track_sizes)
+    # save before plotting
+    output_dir = get_test_result_output_dir(test_memory_requirements)
+    fn = f"mem_requirement_matrix_operations"
+    mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
 
     fig = go.Figure()
     for ni, n in enumerate(svd_names):
         for no, o in enumerate(op_names):
             for ri, r in enumerate(ranks):
                 idx = colsep * (ri * 2 + no) * num_svd
-                t = mem.filter(pl.col("svd") == n).filter(pl.col("op") == o).filter(pl.col("rank") == r)
+                t = mem_svds.filter(pl.col("svd") == n).filter(pl.col("op") == o).filter(pl.col("rank") == r)
                 name = f"{n}-{o}"
                 if ni > 0:
                     name += f"-rank-{r}"
@@ -178,13 +188,11 @@ def test_memory_requirements():
     fn = f"mem_requirement_svd_methods"
     fig.write_html(os.path.join(output_dir, f"{fn}.html"))
 
-    mem = pl.DataFrame(mem_track_sizes)
-
     fig = go.Figure()
-    iteration = mem["size"].unique()
+    iteration = mem_sizes["size"].unique()
     for si, size in enumerate(iteration):
         idx = colsep * si
-        t = mem.filter(pl.col("size") == size)
+        t = mem_sizes.filter(pl.col("size") == size)
         fig.add_trace(
             go.Bar(
                 x=t["point"], y=t["gpu_use"], name=name,
