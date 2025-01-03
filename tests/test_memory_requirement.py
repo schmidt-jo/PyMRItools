@@ -39,6 +39,8 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
 
     mem_track_matrix.append({
         "size": f"{nx}_{ny}_{nc}_{ne}",
+        "dims_xy": nx*ny,
+        "dims_ce": nc*ne,
         "point": "matrix_indexing", "gpu_use": gpu_mem_pre - gpu_mem_post
     })
 
@@ -60,6 +62,8 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
     # track memory
     mem_track_matrix.append({
         "size": f"{nx}_{ny}_{nc}_{ne}",
+        "dims_xy": nx*ny,
+        "dims_ce": nc*ne,
         "point": "k-space", "gpu_use": gpu_mem_pre - gpu_mem_post
     })
 
@@ -76,6 +80,8 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
         # track memory
         mem_track_matrix.append({
             "size": f"{nx}_{ny}_{nc}_{ne}",
+            "dims_xy": nx*ny,
+            "dims_ce": nc*ne,
             "point": f"{op_names[i]}-matrix",
             "gpu_use": gpu_mem_pre - gpu_mem_post
         })
@@ -104,6 +110,8 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
 
                 mem_track_size_svd.append({
                     "size": f"{nx}_{ny}_{nc}_{ne}",
+                    "dims_xy": nx*ny,
+                    "dims_ce": nc*ne,
                     "svd": svd_names[i_svd],
                     "rank": rank,
                     "op": op_names[i],
@@ -147,18 +155,18 @@ def test_memory_requirements():
                 mem_track_sizes.extend(mtps)
                 mem_track_svds.extend(mtss)
 
-        mem_svds = pl.DataFrame(mem_track_svds)
+                mem_svds = pl.DataFrame(mem_track_svds)
 
-        # save intermediate results
-        output_dir = get_test_result_output_dir(test_memory_requirements)
-        fn = f"mem_requirement_svd_methods"
-        mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+                # save intermediate results
+                output_dir = get_test_result_output_dir(test_memory_requirements)
+                fn = f"mem_requirement_svd_methods"
+                mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
 
-        mem_sizes = pl.DataFrame(mem_track_sizes)
-        # save before plotting
-        output_dir = get_test_result_output_dir(test_memory_requirements)
-        fn = f"mem_requirement_matrix_operations"
-        mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+                mem_sizes = pl.DataFrame(mem_track_sizes)
+                # save before plotting
+                output_dir = get_test_result_output_dir(test_memory_requirements)
+                fn = f"mem_requirement_matrix_operations"
+                mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
 
     fig = go.Figure()
     for ni, n in enumerate(svd_names):
