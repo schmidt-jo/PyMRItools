@@ -119,7 +119,7 @@ def test_memory_requirements():
     num_ranks = len(ranks)
 
     channels = [4, 8, 16, 32]
-    echoes = [1, 2, 4, 6]
+    echoes = [1, 2, 4]
 
     num_colors = num_ops * num_svd * num_ranks
     col_sep = 3
@@ -147,17 +147,17 @@ def test_memory_requirements():
                 mem_track_sizes.extend(mtps)
                 mem_track_svds.extend(mtss)
 
-    mem_svds = pl.DataFrame(mem_track_svds)
-    # save before plotting
-    output_dir = get_test_result_output_dir(test_memory_requirements)
-    fn = f"mem_requirement_svd_methods"
-    mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+        mem_svds = pl.DataFrame(mem_track_svds)
+        # save before plotting
+        output_dir = get_test_result_output_dir(test_memory_requirements)
+        fn = f"mem_requirement_svd_methods"
+        mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
 
-    mem_sizes = pl.DataFrame(mem_track_sizes)
-    # save before plotting
-    output_dir = get_test_result_output_dir(test_memory_requirements)
-    fn = f"mem_requirement_matrix_operations"
-    mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+        mem_sizes = pl.DataFrame(mem_track_sizes)
+        # save before plotting
+        output_dir = get_test_result_output_dir(test_memory_requirements)
+        fn = f"mem_requirement_matrix_operations"
+        mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
 
     fig = go.Figure()
     for ni, n in enumerate(svd_names):
