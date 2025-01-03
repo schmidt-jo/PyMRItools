@@ -229,21 +229,35 @@ def test_memory_requirements():
     fn = f"mem_requirement_svd_methods"
     fig.write_html(os.path.join(output_dir, f"{fn}.html"))
 
-    fig = go.Figure()
+    ops = mem_sizes["point"].unique()
+    fig = psub.make_subplots(
+        cols=len(ops), rows=1,
+        column_titles=ops.to_list(),
+        x_title="Operation", y_title="GPU RAM [MB]",
+    )
+
     n_xy = mem_sizes["dims_xy"].unique().shape[0]
     n_ce = mem_sizes["dims_ce"].unique().shape[0]
     num_cols = n_xy * n_ce
-    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.05, 0.95, num_cols).tolist())
+    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.05, 0.95, n_ce).tolist())
 
-    for di, d in enumerate(mem_sizes["dims_xy"].unique()):
+    for pi, p in enumerate(ops):
         for dti, dt in enumerate(mem_sizes["dims_ce"].unique()):
-            c_idx = di * n_xy + dti
-            ts = mem_sizes.filter(pl.col("dims_xy") == d).filter(pl.col("dims_ce") == dt)
-            for si, s in enumerate(ts["size"].unique()):
-                t = ts.filter(pl.col("size") == s)
-                fig.add_trace(
-                    go.Bar(x=t["point"], y=t["gpu_use"], name=f"n-xy-{d}_n-ce-{dt}", marker=dict(color=cmap[c_idx]))
-                )
+            c_idx = dti
+            ts = mem_sizes.filter(pl.col("point") == p).filter(pl.col("dims_ce") == dt)
+            t = ts.group_by("dims_xy").mean()
+            # for si, s in enumerate(ts["size"].unique()):
+            #     t = ts.filter(pl.col("size") == s)
+            #     print(t)
+            showlegend = True if pi == 0 else False
+            fig.add_trace(
+                go.Scatter(
+                    x=t["dims_xy"], y=t["gpu_use"], name=f"n-ce-{dt}", marker=dict(color=cmap[c_idx]),
+                    mode="lines+markers",
+                    legendgroup=dti, showlegend=showlegend
+                ),
+                col=pi + 1, row=1
+            )
     fig.update_layout(
         xaxis=dict(title="Operation"),
         yaxis=dict(title="Memory (MB)"),
