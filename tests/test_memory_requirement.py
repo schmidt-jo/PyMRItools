@@ -147,7 +147,7 @@ def test_memory_requirements():
                 mem_track_sizes.extend(mtps)
                 mem_track_svds.extend(mtss)
 
-    mem = pl.DataFrame(mem_track_sizes)
+    mem = pl.DataFrame(mem_track_svds)
 
     fig = go.Figure()
     for ni, n in enumerate(svd_names):
@@ -175,5 +175,32 @@ def test_memory_requirements():
         )
     )
     output_dir = get_test_result_output_dir(test_memory_requirements)
-    fn = f"mem_requirement_test_sizes"
+    fn = f"mem_requirement_svd_methods"
+    fig.write_html(os.path.join(output_dir, f"{fn}.html"))
+
+    mem = pl.DataFrame(mem_track_sizes)
+
+    fig = go.Figure()
+    iteration = mem["size"].unique()
+    for si, size in enumerate(iteration):
+        idx = colsep * si
+        t = mem.filter(pl.col("size") == size)
+        fig.add_trace(
+            go.Bar(
+                x=t["point"], y=t["gpu_use"], name=name,
+                marker=dict(color=cmap[idx])
+            )
+        )
+    fig.update_layout(
+        xaxis=dict(title="Operation"),
+        yaxis=dict(title="Memory (MB)"),
+        title=dict(
+            text="GPU Memory requirements for different operations",
+            x=0.5,
+            xanchor="center",
+            yanchor="top"
+        )
+    )
+    output_dir = get_test_result_output_dir(test_memory_requirements)
+    fn = f"mem_requirement_matrix_operations"
     fig.write_html(os.path.join(output_dir, f"{fn}.html"))
