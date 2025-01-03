@@ -3,6 +3,7 @@ import os
 import torch
 import plotly.graph_objects as go
 import plotly.colors as plc
+import plotly.subplots as psub
 import polars as pl
 from mpmath.matrices.matrices import colsep
 
@@ -168,24 +169,55 @@ def test_memory_requirements():
                 fn = f"mem_requirement_matrix_operations"
                 mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
 
-    fig = go.Figure()
-    for ni, n in enumerate(svd_names):
-        for no, o in enumerate(op_names):
-            for ri, r in enumerate(ranks):
-                idx = colsep * (ri * 2 + no) * num_svd
-                t = mem_svds.filter(pl.col("svd") == n).filter(pl.col("op") == o).filter(pl.col("rank") == r)
-                name = f"{n}-{o}"
-                if ni > 0:
-                    name += f"-rank-{r}"
-                fig.add_trace(
-                    go.Bar(
-                        x=t["size"], y=t["gpu_use"], name=name,
-                        marker=dict(color=cmap[idx])
-                    )
-                )
+    n_xy = mem_svds["dims_xy"].unique().shape[0]
+    n_ce = mem_svds["dims_ce"].unique().shape[0]
+    rank_min_max = [mem_svds["rank"].unique().min(), mem_svds["rank"].unique().max()]
+    num_cols = n_xy * n_ce
+    num_svds = mem_svds["svd"].unique().shape[0]
+    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.05, 0.95, 2 * num_svds).tolist())
+    svd_names = ["svd", "svd_lowrank", "r_svd", "sor_svd"]
+
+    fig = psub.make_subplots(
+        rows=n_ce, cols=n_xy,
+        row_titles=[f"NB dim: {k * 25}" for k in mem_svds["dims_ce"].unique().to_list()],
+        column_titles=[f"XY dim: {k}" for k in mem_svds["dims_xy"].unique().to_list()],
+        shared_xaxes=True, shared_yaxes=True,
+        y_title="GPU RAM [MB]", x_title="Rank"
+    )
+
+    for di, d in enumerate(mem_svds["dims_xy"].unique()):
+        for dti, dt in enumerate(mem_svds["dims_ce"].unique()):
+            ts = mem_svds.filter(pl.col("dims_xy") == d).filter(pl.col("dims_ce") == dt)
+            for svdi, svd in enumerate(svd_names):
+                for opi, op in enumerate(ts["op"].unique()):
+                    if di == 0 and dti == 0:
+                        showlegend = True
+                    else:
+                        showlegend = False
+                    t = ts.filter(pl.col("svd") == svd).filter(pl.col("op") == op).sort(by="rank")
+                    if t["size"].unique().shape[0] > 1:
+                        t = t.group_by("rank").mean()
+                    if svd == "svd":
+                        fig.add_trace(
+                            go.Scatter(
+                                x=rank_min_max, y=[t["gpu_use"].max(), t["gpu_use"].max()], mode="lines",
+                                fill="tozeroy",
+                                name=f"{svd}-{op}", legendgroup=svdi, showlegend=showlegend,
+                                line=dict(color=cmap[2 * svdi + opi], width=0), opacity=0.6
+                            ),
+                            row=dti + 1, col=di + 1
+                        )
+                    else:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=t["rank"], y=t["gpu_use"],
+                                name=f"{svd}-{op}", legendgroup=svdi, showlegend=showlegend,
+                                marker=dict(color=cmap[2 * svdi + opi])
+                            ),
+                            row=dti + 1, col=di + 1
+                        )
     fig.update_layout(
-        xaxis=dict(title="Operation"),
-        yaxis=dict(title="Memory (MB)"),
+        width=1000, height=1400,
         title=dict(
             text="GPU Memory requirements for different operations",
             x=0.5,
@@ -198,16 +230,20 @@ def test_memory_requirements():
     fig.write_html(os.path.join(output_dir, f"{fn}.html"))
 
     fig = go.Figure()
-    iteration = mem_sizes["size"].unique()
-    for si, size in enumerate(iteration):
-        idx = colsep * si
-        t = mem_sizes.filter(pl.col("size") == size)
-        fig.add_trace(
-            go.Bar(
-                x=t["point"], y=t["gpu_use"], name=name,
-                marker=dict(color=cmap[idx])
-            )
-        )
+    n_xy = mem_sizes["dims_xy"].unique().shape[0]
+    n_ce = mem_sizes["dims_ce"].unique().shape[0]
+    num_cols = n_xy * n_ce
+    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.05, 0.95, num_cols).tolist())
+
+    for di, d in enumerate(mem_sizes["dims_xy"].unique()):
+        for dti, dt in enumerate(mem_sizes["dims_ce"].unique()):
+            c_idx = di * n_xy + dti
+            ts = mem_sizes.filter(pl.col("dims_xy") == d).filter(pl.col("dims_ce") == dt)
+            for si, s in enumerate(ts["size"].unique()):
+                t = ts.filter(pl.col("size") == s)
+                fig.add_trace(
+                    go.Bar(x=t["point"], y=t["gpu_use"], name=f"n-xy-{d}_n-ce-{dt}", marker=dict(color=cmap[c_idx]))
+                )
     fig.update_layout(
         xaxis=dict(title="Operation"),
         yaxis=dict(title="Memory (MB)"),
