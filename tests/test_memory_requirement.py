@@ -146,9 +146,12 @@ def test_memory_requirements():
         for no, o in enumerate(op_names):
             for ri, r in enumerate([20, 50, 100, 200]):
                 t = mem.filter(pl.col("svd") == n).filter(pl.col("op") == o).filter(pl.col("rank") == r)
+                name = f"{n}-{o}"
+                if ni > 0:
+                    name += f"-rank-{r}"
                 fig.add_trace(
                     go.Bar(
-                        x=t["size"], y=t["gpu_use"], name=f"{n}-{o}-rank-{r}"
+                        x=t["size"], y=t["gpu_use"], name=name
                     )
                 )
     fig.update_layout(
