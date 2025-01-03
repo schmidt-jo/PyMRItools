@@ -26,7 +26,6 @@ def test_memory_requirements():
 
         # set svd iteration
         svd_names = ["svd", "svd_lowrank", "r_svd", "sor_svd"]
-        rank = 20
 
         # setup mappings
         indices, reshape = get_all_idx_nd_square_patches_in_nd_shape(
@@ -88,66 +87,70 @@ def test_memory_requirements():
             ]):
                 # track memory
                 gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
+                # circle rank
+                for i_r, rank in enumerate([20, 50, 100, 200]):
+                    if i_svd == 0:
+                        if i_r > 0:
+                            continue
+                        u, s, vh = svd(matrix, full_matrices=False)
+                    elif i_svd == 1:
+                        u, s, vh = svd(A=matrix, q=rank+2, niter=2)
+                    else:
+                        u, s, vh = svd(matrix=matrix, q=rank+2, power_projections=2)
+                    gpu_mem_post = torch.cuda.mem_get_info(device=device)[0] * 1e-6
+                    # track memory
+                    mem_track.append({
+                        "point": f"{op_names[i]}-{svd_names[i_svd]}",
+                        "gpu_use": gpu_mem_pre - gpu_mem_post,
+                        "rank": rank+2
+                    })
+                    del u, s, vh
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_max_memory_allocated()
 
-                if i_svd == 0:
-                    u, s, vh = svd(matrix, full_matrices=False)
-                elif i_svd == 1:
-                    u, s, vh = svd(A=matrix, q=rank+2, niter=2)
-                else:
-                    u, s, vh = svd(matrix=matrix, q=rank+2, power_projections=2)
+                    mem_track_per_size.append({
+                        "size": f"{nx.item()}_{ny.item()}_{nc.item()}-{ne.item()}",
+                        "svd": svd_names[i_svd],
+                        "rank": rank,
+                        "op": op_names[i],
+                        "gpu_use": gpu_mem_pre - gpu_mem_post
+                    })
 
-                gpu_mem_post = torch.cuda.mem_get_info(device=device)[0] * 1e-6
-                # track memory
-                mem_track.append({
-                    "point": f"{op_names[i]}-{svd_names[i_svd]}",
-                    "gpu_use": gpu_mem_pre - gpu_mem_post
-                })
-                del u, s, vh
-                torch.cuda.empty_cache()
-                torch.cuda.reset_max_memory_allocated()
+        # mem = pl.DataFrame(mem_track)
 
-                mem_track_per_size.append({
-                    "size": f"{nx.item()}_{ny.item()}_{nc.item()}-{ne.item()}",
-                    "svd": svd_names[i_svd],
-                    "op": op_names[i],
-                    "gpu_use": gpu_mem_pre - gpu_mem_post
-                })
-
-        mem = pl.DataFrame(mem_track)
-
-        fig = go.Figure()
-        fig.add_trace(
-            go.Bar(
-                x=mem["point"], y=mem["gpu_use"],
-
-            )
-        )
-        fig.update_layout(
-            xaxis=dict(title="Operation"),
-            yaxis=dict(title="Memory (MB)"),
-            title=dict(
-                text="GPU Memory requirements for different operations",
-                x=0.5,
-                xanchor="center",
-                yanchor="top"
-            )
-        )
-        output_dir = get_test_result_output_dir(test_memory_requirements)
-        fn = f"mem_req_per_size-{nx.item()}_{ny.item()}_{nc.item()}_{ne.item()}"
-        fig.write_html(os.path.join(output_dir, f"{fn}.html"))
+        # fig = go.Figure()
+        # fig.add_trace(
+        #     go.Bar(
+        #         x=mem["point"], y=mem["gpu_use"],
+        #
+        #     )
+        # )
+        # fig.update_layout(
+        #     xaxis=dict(title="Operation"),
+        #     yaxis=dict(title="Memory (MB)"),
+        #     title=dict(
+        #         text="GPU Memory requirements for different operations",
+        #         x=0.5,
+        #         xanchor="center",
+        #         yanchor="top"
+        #     )
+        # )
+        # output_dir = get_test_result_output_dir(test_memory_requirements)
+        # fn = f"mem_req_per_size-{nx.item()}_{ny.item()}_{nc.item()}_{ne.item()}"
+        # fig.write_html(os.path.join(output_dir, f"{fn}.html"))
 
     mem = pl.DataFrame(mem_track_per_size)
 
     fig = go.Figure()
     for ni, n in enumerate(svd_names):
         for no, o in enumerate(op_names):
-            t = mem.filter(pl.col("svd") == n).filter(pl.col("op") == o)
-            fig.add_trace(
-                go.Bar(
-                    x=t["size"], y=t["gpu_use"], name=f"{n}-{o}"
-
+            for ri, r in enumerate([20, 50, 100, 200]):
+                t = mem.filter(pl.col("svd") == n).filter(pl.col("op") == o).filter(pl.col("rank") == r)
+                fig.add_trace(
+                    go.Bar(
+                        x=t["size"], y=t["gpu_use"], name=f"{n}-{o}-rank-{r}"
+                    )
                 )
-            )
     fig.update_layout(
         xaxis=dict(title="Operation"),
         yaxis=dict(title="Memory (MB)"),
