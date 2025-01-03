@@ -2,6 +2,7 @@ import os
 
 import torch
 import plotly.graph_objects as go
+import plotly.colors as plc
 import polars as pl
 
 from pymritools.utils.phantom import SheppLogan
@@ -15,7 +16,16 @@ from tests.utils import get_test_result_output_dir
 
 def test_memory_requirements():
     mem_track_per_size = []
-    for i_size, size in enumerate(torch.arange(1,6)):
+    sizes = torch.arange(1,6)
+    num_ops = 2
+    num_svd = 4
+    ranks = [20, 50, 100, 200, 300]
+    num_ranks = len(ranks)
+
+    num_tests = num_ops * num_svd * num_ranks
+    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.1, 0.9, 2*num_tests).tolist())
+
+    for i_size, size in enumerate(sizes.tolist()):
         # set slice size
         nx, ny = 64*size, 64*size
         # set number of channels and echoes
@@ -88,7 +98,7 @@ def test_memory_requirements():
                 # track memory
                 gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
                 # circle rank
-                for i_r, rank in enumerate([20, 50, 100, 200]):
+                for i_r, rank in enumerate(ranks):
                     if i_svd == 0:
                         if i_r > 0:
                             continue
@@ -144,14 +154,16 @@ def test_memory_requirements():
     fig = go.Figure()
     for ni, n in enumerate(svd_names):
         for no, o in enumerate(op_names):
-            for ri, r in enumerate([20, 50, 100, 200]):
+            for ri, r in enumerate(ranks):
+                idx = 2 * (ni * num_svd + no * num_ops + ri * num_ranks)
                 t = mem.filter(pl.col("svd") == n).filter(pl.col("op") == o).filter(pl.col("rank") == r)
                 name = f"{n}-{o}"
                 if ni > 0:
                     name += f"-rank-{r}"
                 fig.add_trace(
                     go.Bar(
-                        x=t["size"], y=t["gpu_use"], name=name
+                        x=t["size"], y=t["gpu_use"], name=name,
+                        marker=dict(color=cmap[idx]), legendgroup=idx
                     )
                 )
     fig.update_layout(
