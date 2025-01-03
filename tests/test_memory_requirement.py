@@ -22,8 +22,8 @@ def test_memory_requirements():
     ranks = [20, 50, 100, 200, 300]
     num_ranks = len(ranks)
 
-    num_tests = num_ops * num_svd * num_ranks
-    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.1, 0.9, 2*num_tests).tolist())
+    num_colors = num_ops * num_svd
+    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.1, 0.9, 2*num_colors).tolist())
 
     for i_size, size in enumerate(sizes.tolist()):
         # set slice size
@@ -119,7 +119,7 @@ def test_memory_requirements():
                     torch.cuda.reset_max_memory_allocated()
 
                     mem_track_per_size.append({
-                        "size": f"{nx.item()}_{ny.item()}_{nc.item()}-{ne.item()}",
+                        "size": f"{nx}_{ny}_{nc}-{ne}",
                         "svd": svd_names[i_svd],
                         "rank": rank,
                         "op": op_names[i],
@@ -146,7 +146,7 @@ def test_memory_requirements():
         #     )
         # )
         # output_dir = get_test_result_output_dir(test_memory_requirements)
-        # fn = f"mem_req_per_size-{nx.item()}_{ny.item()}_{nc.item()}_{ne.item()}"
+        # fn = f"mem_req_per_size-{nx}_{ny}_{nc}_{ne}"
         # fig.write_html(os.path.join(output_dir, f"{fn}.html"))
 
     mem = pl.DataFrame(mem_track_per_size)
@@ -155,7 +155,7 @@ def test_memory_requirements():
     for ni, n in enumerate(svd_names):
         for no, o in enumerate(op_names):
             for ri, r in enumerate(ranks):
-                idx = 2 * (ni * num_svd + no * num_ops + ri * num_ranks)
+                idx = 2 * (ni * num_svd + no)
                 t = mem.filter(pl.col("svd") == n).filter(pl.col("op") == o).filter(pl.col("rank") == r)
                 name = f"{n}-{o}"
                 if ni > 0:
@@ -163,7 +163,7 @@ def test_memory_requirements():
                 fig.add_trace(
                     go.Bar(
                         x=t["size"], y=t["gpu_use"], name=name,
-                        marker=dict(color=cmap[idx]), legendgroup=idx
+                        marker=dict(color=cmap[idx])
                     )
                 )
     fig.update_layout(
