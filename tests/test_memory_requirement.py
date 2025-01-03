@@ -38,6 +38,7 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
     torch.cuda.reset_max_memory_allocated()
 
     mem_track_matrix.append({
+        "size": f"{nx}_{ny}_{nc}_{ne}",
         "point": "matrix_indexing", "gpu_use": gpu_mem_pre - gpu_mem_post
     })
 
@@ -58,6 +59,7 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
     torch.cuda.reset_max_memory_allocated()
     # track memory
     mem_track_matrix.append({
+        "size": f"{nx}_{ny}_{nc}_{ne}",
         "point": "k-space", "gpu_use": gpu_mem_pre - gpu_mem_post
     })
 
@@ -130,11 +132,12 @@ def test_memory_requirements():
     mem_track_sizes = []
     mem_track_svds = []
 
+    # set device
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
     for i_size, size in enumerate(sizes.tolist()):
         # set slice size
         nx, ny = 64 * size, 64 * size
-        # set device
-        device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
         for i_c, nc in enumerate(channels):
             for i_e, ne in enumerate(echoes):
