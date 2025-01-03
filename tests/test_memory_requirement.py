@@ -148,7 +148,8 @@ def test_memory_requirements():
                 mem_track_svds.extend(mtss)
 
         mem_svds = pl.DataFrame(mem_track_svds)
-        # save before plotting
+
+        # save intermediate results
         output_dir = get_test_result_output_dir(test_memory_requirements)
         fn = f"mem_requirement_svd_methods"
         mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
