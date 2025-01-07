@@ -25,6 +25,14 @@ class SheppLogan:
     ) -> np.ndarray | torch.Tensor:
         # load the image
         im = self._im
+        # extract unique values as labels
+        labels = np.unique(im)
+        label_img = im.copy()
+        # want to assign rates to the label images
+        random_rates = torch.rand(len(labels)).numpy()
+        for i, r in enumerate(random_rates.tolist()):
+            label_img[np.where(label_img == labels[i])] = r
+
         # save 0 points
         zero_mask = self._im == 0
         # scale image to shape
@@ -32,37 +40,41 @@ class SheppLogan:
             zf = np.array(shape[:2]) / np.array([400, 400])
             im = zoom(im, zf, order=0)
             zero_mask = zoom(zero_mask, zf, order=0)
+            label_img = zoom(label_img, zf, order=0)
+
         max_img = np.max(im, axis=(0, 1))
         # normalize to max 1
         im /= max_img
         # reset zeros (changed due to interpolation method in above scaling
         im[zero_mask] = 0
         im = torch.from_numpy(im)
+        label_img[zero_mask] = 0
+        label_img = torch.from_numpy(label_img)
+
         # save within slice shape
         nx, ny = shape[:2]
 
-        if num_echoes > 1:
-            # if we want echo images we scale the original image with random variations
-            echo_factors = 0.2 * torch.rand((nx, ny, num_echoes))
-            im = im[:, :, None] * echo_factors
+        if num_echoes is not None:
+            # if we want echo images we use the label / rates image and create a decay
+            im = im[:, :, None] * torch.exp(-label_img[:, :, None] * torch.arange(num_echoes)[None, None, :])
         else:
             im = im[:, :, None]
         # include fake coil sensitivities randomly set up
         if num_coils is not None:
-            coil_sens = torch.zeros((*shape, num_coils))
-            for i in range(num_coils):
-                center_x = torch.randint(low=int(nx / 12), high=int(11 * nx / 12), size=(1,))
-                center_y = torch.randint(low=int(ny / 12), high=int(11 * ny / 12), size=(1,))
-                gw = gaussian_2d_kernel(
-                    size_x=nx, size_y=ny,
-                    center_x=center_x.item(), center_y=center_y.item(), sigma=(40, 60)
-                )
-                gw /= torch.max(gw)
-                coil_sens[:, :, i] = gw
+            coil_sens = torch.ones((*shape, num_coils))
+            if num_coils > 1:
+                for i in range(num_coils):
+                    center_x = torch.randint(low=int(nx / 12), high=int(11 * nx / 12), size=(1,))
+                    center_y = torch.randint(low=int(ny / 12), high=int(11 * ny / 12), size=(1,))
+                    gw = gaussian_2d_kernel(
+                        size_x=nx, size_y=ny,
+                        center_x=center_x.item(), center_y=center_y.item(), sigma=(40, 60)
+                    )
+                    gw /= torch.max(gw)
+                    coil_sens[:, :, i] = gw
             if num_echoes is not None:
                 coil_sens = coil_sens.unsqueeze(-1)
             im = im[:, :, None] * coil_sens
-
         if not as_torch_tensor:
             im = im.numpy()
         return im
