@@ -31,8 +31,7 @@ def reshape_k_shape(k_shape: torch.Tensor) -> torch.Tensor:
     return torch.movedim(k_shape, 0, 2)
 
 
-def func_optim(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_s, q, matrix_shape,
-               return_mat: bool = False):
+def func_optim(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_s, q, matrix_shape):
     # ToDo: make sure to have operators "true" linear indexing ready
     # use matrix indexing -> reshape / view in 2D [dim_sampling, dim_neighborhood]
     # get operator matrix
@@ -65,12 +64,10 @@ def func_optim(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_s, 
     # __ Data Loss
     # enforce data - consistency by minimizing distance to known sampled points
     loss_2 = torch.linalg.norm(k[sampling_mask] - k_sampled_points)
-    if not return_mat:
-        return loss_2 + lam_s * loss_1, loss_1, loss_2, None
-    return loss_2 + lam_s * loss_1, loss_1, loss_2, matrix
+    return loss_2 + lam_s * loss_1, loss_1, loss_2
 
 
-def func_optim_js(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_s, q, return_mat: bool = False):
+def func_optim_js(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_s, q):
     # ToDo: make sure to have operators "true" linear indexing ready
     # use matrix indexing -> reshape / view in 2D [dim_sampling, dim_neighborhood]
     # get operator matrix
@@ -104,80 +101,7 @@ def func_optim_js(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_
     # enforce data - consistency by minimizing distance to known sampled points
     loss_2 = torch.linalg.norm(k[sampling_mask] - k_sampled_points)
 
-    if not return_mat:
-        return loss_2 + lam_s * loss_1, loss_1, loss_2, None
-    return loss_2 + lam_s * loss_1, loss_1, loss_2, matrix
-
-
-def armijo_search(
-        loss_func, param, direction, grad,
-        mu_1: float = 0.5, gamma_1: float = 1e-3,
-        learning_rate=0.5, gamma: float = 0.5,
-        max_iter: int = 20):
-    """Performs an Armijo Line Search
-    Args:
-        loss_func (callable): Function that computes the loss.
-        param (torch.Tensor): Parameter being optimized.
-        direction (torch.Tensor): search direction of the parameter change.
-        learning_rate (float, optional): Starting learning rate. Defaults to 1.0.
-        gamma (float, optional): Learning rate reduction factor. Defaults to 0.8.
-    Returns:
-        float: Optimal learning rate.
-    """
-    lp = loss_func(param)
-    for i in range(max_iter):
-        new_param = param + learning_rate * direction
-        a = loss_func(new_param)
-        b = lp + mu_1 * learning_rate * torch.linalg.norm(direction * grad)
-        if a <= b and learning_rate > gamma_1:
-            break
-        if learning_rate < 1e-4:
-            break
-        learning_rate *= gamma
-    return learning_rate
-
-
-def armijo_line_search(k, loss, grad, direction, func_optim, index_batch, s_threshold, k_input_batch,
-                       sampling_mask_batch, lam_s, rank, alpha=0.5, gamma=0.1):
-    """
-    Armijo-Zeilensuche, um die optimale Lernrate zu bestimmen.
-    Parameters:
-        k: aktueller Tensor.
-        loss: Loss (vorheriger Wert).
-        grad: Gradient.
-        direction: Suchrichtung (conjugate gradient).
-        func_optim: Optimierungsfunktion.
-        alpha: Reduktionsfaktor der Schrittgröße (zwischen 0 und 1).
-        gamma: Kontrollparameter (meistens kleines, positives Skalar).
-    """
-    learning_rate = 1.0  # Start mit anfänglicher Lernrate
-    c = gamma
-
-    # Armijo-Bedingung prüfen
-    while True:
-        # Vorschlag zur nächsten Position
-        k_new = k + learning_rate * direction
-
-        # Neue Loss nach Änderung auswerten
-        with torch.no_grad():
-            new_loss, _, _ = func_optim(
-                k=k_new, indices=index_batch, s_threshold=s_threshold,
-                sl_us_k=k_input_batch, sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
-            )
-
-        # Armijo-Bedingung:
-        # new_loss <= loss + c * learning_rate * torch.dot(grad.flatten(), direction.flatten())
-        if new_loss <= loss + c * learning_rate * torch.abs(torch.dot(grad.flatten(), direction.flatten())):
-            break  # Bedingung erfüllt
-
-        # Schrittweite reduzieren
-        learning_rate *= alpha
-
-        # Abbruchbedingung: Sehr kleine Lernrate
-        if learning_rate < 1e-8:
-            break
-
-    return learning_rate
+    return loss_2 + lam_s * loss_1, loss_1, loss_2
 
 
 def create_phantom():
@@ -224,6 +148,155 @@ def create_phantom():
     return k_init, sampling_mask
 
 
+def comparison_js(k_load: torch.Tensor, sampling_mask: torch.Tensor,
+                  lr: torch.Tensor, device: torch.device,
+                  q: int, max_num_iter: int, s_threshold: torch.Tensor, lam_s: float):
+    load_shape = k_load.shape
+    # get indices for operators - direction is along x and y, set those to 1
+    indices_mapping, batch_reshape = get_all_idx_nd_square_patches_in_nd_shape(
+        size=5, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=k_load.shape,
+        combination_direction=(0, 0, 0, 1, 1, 1)
+    )
+    # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
+    # need to reshape the input k-space
+    k_input = torch.reshape(k_load, batch_reshape)
+    k_out = torch.zeros_like(k_input)
+    sampling_mask = torch.reshape(sampling_mask, batch_reshape)
+
+    # log losses and plot data
+    losses = []
+    #
+    # # plot intermediates
+    # sl_us_img = fft(k_input, img_to_k=False, axes=(0, 1))
+    # sl_us_img = root_sum_of_squares(sl_us_img, dim_channel=-3)
+    # plot_k = [k_input[:, :, 0, 0, 0, 0].cpu()]
+    # plot_img = [sl_us_img[:, :, 0, 0, 0].cpu()]
+    # plot_grads = [torch.zeros_like(plot_k[-1])]
+    # plot_names = [0]
+
+    # setup iterations
+    bar = tqdm.trange(max_num_iter, desc="Optimization")
+
+    for b in range(k_input.shape[0]):
+        k = k_input[b].clone().to(device).requires_grad_(True)
+        index_batch = indices_mapping[b].to(device)
+        sampling_mask_batch = sampling_mask[b].to(device)
+        k_sampled_points = k_input[b].to(device)[sampling_mask_batch]
+
+        for i in bar:
+            loss, loss_1, loss_2 = func_optim_js(
+                k=k, indices=index_batch, s_threshold=s_threshold, q=q,
+                k_sampled_points=k_sampled_points, sampling_mask=sampling_mask_batch, lam_s=lam_s
+            )
+            loss.backward()
+
+            # if i == 0 or search_direction is None:
+            #     # Zu Beginn wird die Suchrichtung als negativer Gradient initialisiert
+            #     search_direction = -grad
+            #     beta = 0  # Kein Beta-Wert beim ersten Schritt
+            # else:
+            #     # Beta berechnen
+            #     beta = torch.dot(grad.flatten(), grad.flatten()) / torch.dot(prev_gradient.flatten(),
+            #                                                                  prev_gradient.flatten())
+            #     # Konjugierte Suchrichtung aktualisieren
+            #     search_direction = -grad + beta * search_direction
+            #
+            # # Lernrate mit Armijo-Zeilensuche bestimmen
+            # learning_rate = armijo_line_search(
+            #     k=k, loss=loss, grad=grad, direction=search_direction, func_optim=func_optim,
+            #     index_batch=index_batch, s_threshold=s_threshold, k_input_batch=k_sampled_points,
+            #     sampling_mask_batch=sampling_mask_batch, lam_s=lam_s, rank=rank
+            # )
+            # learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
+
+            # Use the optimal learning_rate to update parameters
+            with torch.no_grad():
+                k -= lr[i] * k.grad
+                # grads = torch.abs(k.grad)
+                # conv = torch.linalg.norm(grads - prev_gradient)
+                # prev_gradient = grad.clone()
+                #
+                # if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int) - 1):
+                #     # save for plotting on some iterations
+                #     grads = grads[:, :, 0, 0].cpu()
+                #
+                #     # some plotting intermediates
+                #     k_recon_loraks = k.clone().detach()
+                #     p_k = k_recon_loraks[:, :, :, 0, 0].clone().detach().cpu()
+                #     img = fft(p_k, axes=(0, 1), img_to_k=False).cpu()
+                #
+                #     plot_k.append(p_k[:, :, 0])
+                #     plot_img.append(root_sum_of_squares(img, dim_channel=-1))
+                #     plot_grads.append(grads[:, :, 0])
+                #     plot_names.append(i + 1)
+
+            # if i % 2 == 0:
+            k.grad.zero_()
+            bar.postfix = (
+                            f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
+                            f"total_loss: {1e3 * loss.item():.2f}"
+                        )
+        k_out[b] = k.detach().cpu()
+    return torch.reshape(k_out, load_shape), k_input
+
+
+def core(
+        k_load: torch.Tensor, sampling_mask: torch.Tensor, lr: torch.Tensor,
+        device: torch.device, q: int, max_num_iter: int, s_threshold: torch.Tensor, lam_s: float):
+    # a) shaping -> dims # dims [batch, dim_a, ... dim_n]  -> loraks matrices build from dim_a, ..., dim_n
+    # -> should fit on GPU
+    k_input = prepare_k_shape(k_load)
+    sampling_mask = prepare_k_shape(k_space_input=sampling_mask)
+    batch, *dims = k_input.shape
+    k_out = torch.zeros_like(k_input)
+
+    # b) indexing
+    patch_shape = (5, 5, -1, -1, -1)
+    sampling_directions = (1, 1, 0, 0, 0)
+
+    indices, loraks_matrix_shape = get_linear_indices(
+        k_space_shape=dims, patch_shape=patch_shape, sample_directions=sampling_directions
+    )
+    # does it make a difference to put them on GPU?
+    indices = indices.to(device=device)
+
+    # setup iterations
+    bar = tqdm.trange(max_num_iter, desc="Optimization")
+
+    for b in range(k_input.shape[0]):
+        # batch processing
+        # ToDo: better implementation?
+        k = k_input[b].clone().to(device).requires_grad_(True)
+        sampling_mask_batch = sampling_mask[b].to(device)
+        k_sampled_points = k_input[b].to(device)[sampling_mask_batch]
+
+        # iterations
+        for i in bar:
+            loss, loss_1, loss_2 = func_optim(
+                k=k, indices=indices, s_threshold=s_threshold,
+                k_sampled_points=k_sampled_points, sampling_mask=sampling_mask_batch, lam_s=lam_s,
+                q=q, matrix_shape=loraks_matrix_shape
+            )
+            loss.backward()
+
+            # Use the optimal learning_rate to update parameters
+            if i % 4 == 0:
+                with torch.no_grad():
+                    k -= lr[i] * k.grad
+                k.grad.zero_()
+
+            bar.postfix = (
+                f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
+                f"total_loss: {1e3 * loss.item():.2f}"
+            )
+        # k is our converged best guess candidate, need to unprep / reshape
+        k_out[b] = k.detach().cpu()
+
+    k_out = reshape_k_shape(k_shape=k_out)
+
+    return k_out, k_input
+
+
 def main():
     # set output path
     path_out = plib.Path("./dev_sim/loraks").absolute()
@@ -257,18 +330,18 @@ def main():
     s_threshold[rank:] = 0
     s_threshold = s_threshold.to(device)
 
-    k_recon_core, k_in_core, mat_core = core(
+    k_recon_core, k_in_core = core(
         k_load=k_load, sampling_mask=sampling_mask, lr=lr, device=device,
         max_num_iter=max_num_iter, q=q, s_threshold=s_threshold, lam_s=lam_s
     )
-    k_recon_comp_js, k_in_js, mat_js = comparison_js(
+    k_recon_comp_js, k_in_js = comparison_js(
         k_load=k_load, sampling_mask=sampling_mask, lr=lr, device=device,
         max_num_iter=max_num_iter, q=q, s_threshold=s_threshold, lam_s=lam_s
     )
     assert torch.allclose(k_in_core, k_in_js)
-    # assert torch.allclose(mat_core, mat_js)
     # output should be [nx, ny, nz, nc, ne, m]
 
+    # plotting
     logging.info("fft + rsos us")
     img_us = fft(torch.squeeze(k_load).to(device), axes=(0, 1))
     # img_us = root_sum_of_squares(img_us, dim_channel=-2)[:, :, 0]
@@ -286,7 +359,7 @@ def main():
 
     logging.info("plot")
     fig = psub.make_subplots(
-        rows=2, cols=3, column_titles=["input","core", "js"]
+        rows=1, cols=3, column_titles=["input", "core", "js"]
     )
     fig.add_trace(
         go.Heatmap(z=img_us.cpu(), colorscale="Gray"), row=1, col=1
@@ -303,17 +376,17 @@ def main():
     )
     xaxis = fig.data[-1].xaxis
     fig.update_yaxes(visible=False, row=1, col=3, scaleanchor=xaxis, scaleratio=1)
-    fig.add_trace(
-        go.Heatmap(z=torch.abs(mat_core[:2000].detach().cpu()), colorscale="Gray", transpose=True, showscale=False), row=2, col=2
-    )
-    fig.add_trace(
-        go.Heatmap(z=torch.abs(mat_js[:2000].detach().cpu()), colorscale="Gray", transpose=True, showscale=False), row=2, col=3
-    )
     fig.update_xaxes(visible=False)
     fig_name = path_out.joinpath(f"c_indexing_comp").with_suffix(".html")
     logging.info(f"Write file: {fig_name}")
     fig.write_html(fig_name.as_posix())
 
+
+# Notes / ToDos / code snippet archive:
+# use page implementation - did it wrong but still smoothes the loss evolution :D
+# http://proceedings.mlr.press/v139/li21a/li21a.pdf
+# use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
+def conjugate_gd_and_plot_snippets():
     # # get indices for operators - direction is along x and y, set those to 1
     # indices_mapping, batch_reshape = get_all_idx_nd_square_patches_in_nd_shape(
     #     size=loraks_nb_side_length, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=shape,
@@ -472,165 +545,78 @@ def main():
     # # recon_k = k.detach()
     # # recon_img = fft(recon_k, img_to_k=False, axes=(0, 1))
     # # recon_img = root_sum_of_squares(recon_img, dim_channel=-2)
+    pass
 
 
-def comparison_js(k_load: torch.Tensor, sampling_mask: torch.Tensor,
-                  lr: torch.Tensor, device: torch.device,
-                  q: int, max_num_iter: int, s_threshold: torch.Tensor, lam_s: float):
-    load_shape = k_load.shape
-    # get indices for operators - direction is along x and y, set those to 1
-    indices_mapping, batch_reshape = get_all_idx_nd_square_patches_in_nd_shape(
-        size=5, patch_direction=(1, 1, 0, 0, 0, 0), k_space_shape=k_load.shape,
-        combination_direction=(0, 0, 0, 1, 1, 1)
-    )
-    # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
-    # need to reshape the input k-space
-    k_input = torch.reshape(k_load, batch_reshape)
-    k_out = torch.zeros_like(k_input)
-    sampling_mask = torch.reshape(sampling_mask, batch_reshape)
+def armijo_search(
+        loss_func, param, direction, grad,
+        mu_1: float = 0.5, gamma_1: float = 1e-3,
+        learning_rate=0.5, gamma: float = 0.5,
+        max_iter: int = 20):
+    """Performs an Armijo Line Search
+    Args:
+        loss_func (callable): Function that computes the loss.
+        param (torch.Tensor): Parameter being optimized.
+        direction (torch.Tensor): search direction of the parameter change.
+        learning_rate (float, optional): Starting learning rate. Defaults to 1.0.
+        gamma (float, optional): Learning rate reduction factor. Defaults to 0.8.
+    Returns:
+        float: Optimal learning rate.
+    """
+    lp = loss_func(param)
+    for i in range(max_iter):
+        new_param = param + learning_rate * direction
+        a = loss_func(new_param)
+        b = lp + mu_1 * learning_rate * torch.linalg.norm(direction * grad)
+        if a <= b and learning_rate > gamma_1:
+            break
+        if learning_rate < 1e-4:
+            break
+        learning_rate *= gamma
+    return learning_rate
 
-    # log losses and plot data
-    losses = []
-    #
-    # # plot intermediates
-    # sl_us_img = fft(k_input, img_to_k=False, axes=(0, 1))
-    # sl_us_img = root_sum_of_squares(sl_us_img, dim_channel=-3)
-    # plot_k = [k_input[:, :, 0, 0, 0, 0].cpu()]
-    # plot_img = [sl_us_img[:, :, 0, 0, 0].cpu()]
-    # plot_grads = [torch.zeros_like(plot_k[-1])]
-    # plot_names = [0]
 
-    # setup iterations
-    bar = tqdm.trange(max_num_iter, desc="Optimization")
+def armijo_line_search(k, loss, grad, direction, func_optim, index_batch, s_threshold, k_input_batch,
+                       sampling_mask_batch, lam_s, rank, alpha=0.5, gamma=0.1):
+    """
+    Armijo-Zeilensuche, um die optimale Lernrate zu bestimmen.
+    Parameters:
+        k: aktueller Tensor.
+        loss: Loss (vorheriger Wert).
+        grad: Gradient.
+        direction: Suchrichtung (conjugate gradient).
+        func_optim: Optimierungsfunktion.
+        alpha: Reduktionsfaktor der Schrittgröße (zwischen 0 und 1).
+        gamma: Kontrollparameter (meistens kleines, positives Skalar).
+    """
+    learning_rate = 1.0  # Start mit anfänglicher Lernrate
+    c = gamma
 
-    for b in range(k_input.shape[0]):
-        k = k_input[b].clone().to(device).requires_grad_(True)
-        index_batch = indices_mapping[b].to(device)
-        sampling_mask_batch = sampling_mask[b].to(device)
-        k_sampled_points = k_input[b].to(device)[sampling_mask_batch]
+    # Armijo-Bedingung prüfen
+    while True:
+        # Vorschlag zur nächsten Position
+        k_new = k + learning_rate * direction
 
-        for i in bar:
-            loss, loss_1, loss_2, tmp = func_optim_js(
-                k=k, indices=index_batch, s_threshold=s_threshold, q=q,
-                k_sampled_points=k_sampled_points, sampling_mask=sampling_mask_batch, lam_s=lam_s, return_mat=(i == 0)
+        # Neue Loss nach Änderung auswerten
+        with torch.no_grad():
+            new_loss, _, _ = func_optim(
+                k=k_new, indices=index_batch, s_threshold=s_threshold,
+                sl_us_k=k_input_batch, sampling_mask=sampling_mask_batch, lam_s=lam_s, rank=rank
             )
-            loss.backward()
 
-            # if i == 0 or search_direction is None:
-            #     # Zu Beginn wird die Suchrichtung als negativer Gradient initialisiert
-            #     search_direction = -grad
-            #     beta = 0  # Kein Beta-Wert beim ersten Schritt
-            # else:
-            #     # Beta berechnen
-            #     beta = torch.dot(grad.flatten(), grad.flatten()) / torch.dot(prev_gradient.flatten(),
-            #                                                                  prev_gradient.flatten())
-            #     # Konjugierte Suchrichtung aktualisieren
-            #     search_direction = -grad + beta * search_direction
-            #
-            # # Lernrate mit Armijo-Zeilensuche bestimmen
-            # learning_rate = armijo_line_search(
-            #     k=k, loss=loss, grad=grad, direction=search_direction, func_optim=func_optim,
-            #     index_batch=index_batch, s_threshold=s_threshold, k_input_batch=k_sampled_points,
-            #     sampling_mask_batch=sampling_mask_batch, lam_s=lam_s, rank=rank
-            # )
-            # learning_rate = armijo_search(loss_func=func, param=k, direction=search_direction, grad=grad)
+        # Armijo-Bedingung:
+        # new_loss <= loss + c * learning_rate * torch.dot(grad.flatten(), direction.flatten())
+        if new_loss <= loss + c * learning_rate * torch.abs(torch.dot(grad.flatten(), direction.flatten())):
+            break  # Bedingung erfüllt
 
-            # Use the optimal learning_rate to update parameters
-            with torch.no_grad():
-                k -= lr[i] * k.grad
-                # grads = torch.abs(k.grad)
-                # conv = torch.linalg.norm(grads - prev_gradient)
-                # prev_gradient = grad.clone()
-                #
-                # if i in np.unique(np.logspace(0.1, np.log2(max_num_iter), 10, base=2, endpoint=True).astype(int) - 1):
-                #     # save for plotting on some iterations
-                #     grads = grads[:, :, 0, 0].cpu()
-                #
-                #     # some plotting intermediates
-                #     k_recon_loraks = k.clone().detach()
-                #     p_k = k_recon_loraks[:, :, :, 0, 0].clone().detach().cpu()
-                #     img = fft(p_k, axes=(0, 1), img_to_k=False).cpu()
-                #
-                #     plot_k.append(p_k[:, :, 0])
-                #     plot_img.append(root_sum_of_squares(img, dim_channel=-1))
-                #     plot_grads.append(grads[:, :, 0])
-                #     plot_names.append(i + 1)
+        # Schrittweite reduzieren
+        learning_rate *= alpha
 
-            # if i % 2 == 0:
-            k.grad.zero_()
-            bar.postfix = (
-                            f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
-                            f"total_loss: {1e3 * loss.item():.2f}"
-                        )
-            if i == 0:
-                matrix = tmp
-        k_out[b] = k.detach().cpu()
-    return torch.reshape(k_out, load_shape), k_input, matrix
+        # Abbruchbedingung: Sehr kleine Lernrate
+        if learning_rate < 1e-8:
+            break
 
-
-def core(
-        k_load: torch.Tensor, sampling_mask: torch.Tensor, lr: torch.Tensor,
-        device: torch.device, q: int, max_num_iter: int, s_threshold: torch.Tensor, lam_s: float):
-    # a) shaping -> dims # dims [batch, dim_a, ... dim_n]  -> loraks matrices build from dim_a, ..., dim_n
-    # -> should fit on GPU
-    k_input = prepare_k_shape(k_load)
-    sampling_mask = prepare_k_shape(k_space_input=sampling_mask)
-    batch, *dims = k_input.shape
-    k_out = torch.zeros_like(k_input)
-
-    # b) indexing
-    patch_shape = (5, 5, -1, -1, -1)
-    sampling_directions = (1, 1, 0, 0, 0)
-
-    indices, loraks_matrix_shape = get_linear_indices(
-        k_space_shape=dims, patch_shape=patch_shape, sample_directions=sampling_directions
-    )
-    # does it make a difference to put them on GPU?
-    indices = indices.to(device=device)
-
-    # setup iterations
-    bar = tqdm.trange(max_num_iter, desc="Optimization")
-
-    for b in range(k_input.shape[0]):
-        # batch processing
-        # ToDo: better implementation?
-        k = k_input[b].clone().to(device).requires_grad_(True)
-        sampling_mask_batch = sampling_mask[b].to(device)
-        k_sampled_points = k_input[b].to(device)[sampling_mask_batch]
-
-        # iterations
-        for i in bar:
-            loss, loss_1, loss_2, tmp = func_optim(
-                k=k, indices=indices, s_threshold=s_threshold,
-                k_sampled_points=k_sampled_points, sampling_mask=sampling_mask_batch, lam_s=lam_s,
-                q=q, matrix_shape=loraks_matrix_shape, return_mat=(i == 0)
-            )
-            loss.backward()
-
-            # Use the optimal learning_rate to update parameters
-            if i % 4 == 0:
-                with torch.no_grad():
-                    k -= lr[i] * k.grad
-                k.grad.zero_()
-            if i == 0:
-                matrix = tmp
-
-            bar.postfix = (
-                f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
-                f"total_loss: {1e3 * loss.item():.2f}"
-            )
-        # k is our converged best guess candidate, need to unprep / reshape
-        k_out[b] = k.detach().cpu()
-
-    k_out = reshape_k_shape(k_shape=k_out)
-
-    return k_out, k_input, matrix
-
-
-# Notes / ToDos:
-# use page implementation - did it wrong but still smoothes the loss evolution :D
-# http://proceedings.mlr.press/v139/li21a/li21a.pdf
-# use bpcgga from https://doi.org/10.1016/j.neucom.2017.08.037
+    return learning_rate
 
 
 if __name__ == '__main__':
