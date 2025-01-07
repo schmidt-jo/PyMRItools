@@ -107,25 +107,26 @@ def func_optim_js(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_
 def create_phantom():
     # set up  phantom
     shape = (256, 256)
-    num_coils = 1
-    num_echoes = 1
+    num_coils = 6
+    num_echoes = 3
     logging.info("get SheppLogan phantom")
     logging.info("add virtual coils")
     sl_us_k = SheppLogan().get_sub_sampled_k_space(
-        shape=shape, num_coils=None, acceleration=2, num_echoes=None
+        shape=shape, num_coils=num_coils, acceleration=2, num_echoes=num_echoes
     )
     sl_us_k = torch.flip(sl_us_k, dims=(0,))
     img = fft(sl_us_k, axes=(0, 1))
 
     fig = psub.make_subplots(
         rows=2 * num_echoes, cols=num_coils)
-
-    fig.add_trace(
-        go.Heatmap(z=torch.abs(img), colorscale="Gray"), row=1, col=1
-    )
-    fig.add_trace(
-        go.Heatmap(z=torch.log(torch.abs(sl_us_k))), row=2, col=1
-    )
+    for e in range(num_echoes):
+        for c in range(num_coils):
+            fig.add_trace(
+                go.Heatmap(z=torch.abs(img[:, :, c, e]), colorscale="Gray"), row=1+2*e, col=1+c
+            )
+            fig.add_trace(
+                go.Heatmap(z=torch.log(torch.abs(sl_us_k[:, :, c, e]))), row=2*(e+1), col=1+c
+            )
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
     fig_name = plib.Path("./dev_sim/loraks").absolute().joinpath(f"phantom").with_suffix(".html")
