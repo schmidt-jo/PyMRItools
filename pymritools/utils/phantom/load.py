@@ -41,10 +41,12 @@ class SheppLogan:
         # save within slice shape
         nx, ny = shape[:2]
 
-        if num_echoes is not None:
+        if num_echoes > 1:
             # if we want echo images we scale the original image with random variations
             echo_factors = 0.2 * torch.rand((nx, ny, num_echoes))
             im = im[:, :, None] * echo_factors
+        else:
+            im = im[:, :, None]
         # include fake coil sensitivities randomly set up
         if num_coils is not None:
             coil_sens = torch.zeros((*shape, num_coils))
@@ -129,7 +131,7 @@ class SheppLogan:
                 p=weighting
             )
             # move half of them to other side of ac lines
-            indices[::2] =shape[1] - 1 - indices[::2]
+            indices[::2] = shape[1] - 1 - indices[::2]
             indices = np.sort(indices, axis=0)
             for e in range(num_echoes):
                 k_us[:, indices[:, e], ..., e] = k_fs[:, indices[:, e], ..., e]
