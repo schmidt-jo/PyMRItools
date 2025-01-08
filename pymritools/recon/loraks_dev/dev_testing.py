@@ -135,7 +135,15 @@ def create_phantom():
 
     logging.info("add misc dimension and input shape")
     # We want to set LORAKS input dimensions to be (nx, ny, nz, nc, ne, m)
-    sl_us_k = sl_us_k[:, :, None, None, None, None]
+    # hence insert slice dim
+    sl_us_k = sl_us_k.unsqueeze(2)
+    # insert any dims at end that are not provided upon creation process
+    if num_coils is None or num_coils == 1:
+        sl_us_k = sl_us_k.unsqueeze(3)
+    if num_echoes is None or num_echoes == 1:
+        sl_us_k = sl_us_k.unsqueeze(4)
+    sl_us_k = sl_us_k.unsqueeze(-1)
+
     shape = sl_us_k.shape
 
     # get sampling mask in input shape
