@@ -169,7 +169,7 @@ def create_phantom(nx: int = 256, ny: int = 256, nc: int = 1, ne: int = 1):
     k_init *= 1e-3 * torch.max(torch.abs(sl_us_k)) / torch.max(torch.abs(k_init))
     k_init[sampling_mask] = sl_us_k[sampling_mask]
 
-    return k_init, sampling_mask
+    return k_init.contiguous(), sampling_mask.contiguous()
 
 
 def comparison_js(k_load: torch.Tensor, sampling_mask: torch.Tensor,
