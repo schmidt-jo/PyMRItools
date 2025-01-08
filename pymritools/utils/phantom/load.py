@@ -30,7 +30,8 @@ class SheppLogan:
         label_img = im.copy()
         # want to assign rates to the label images
         rng = np.random.default_rng(seed)
-        random_rates = rng.random(len(labels))
+        # assign rates, make them relatively small
+        random_rates = rng.random(len(labels)) * 0.2
         for i, r in enumerate(random_rates.tolist()):
             label_img[np.where(label_img == labels[i])] = r
 
