@@ -104,7 +104,7 @@ def func_optim_js(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_
     return loss_2 + lam_s * loss_1, loss_1, loss_2
 
 
-def create_phantom(nx: int = 256, ny: int =256, nc: int = 1, ne:int = 1):
+def create_phantom(nx: int = 256, ny: int = 256, nc: int = 1, ne: int = 1):
     # set up  phantom
     shape = (nx, ny)
     logging.info("get SheppLogan phantom")
@@ -113,25 +113,8 @@ def create_phantom(nx: int = 256, ny: int =256, nc: int = 1, ne:int = 1):
         shape=shape, num_coils=nc, acceleration=2, num_echoes=ne
     )
     sl_us_k = torch.flip(sl_us_k, dims=(0,))
-    img = fft(sl_us_k, axes=(0, 1))
 
-    fig = psub.make_subplots(
-        rows=2 * ne, cols=nc)
-    for e in range(ne):
-        for c in range(nc):
-            fig.add_trace(
-                go.Heatmap(z=torch.abs(img[:, :, c, e]), colorscale="Gray"), row=1+2*e, col=1+c
-            )
-            fig.add_trace(
-                go.Heatmap(z=torch.log(torch.abs(sl_us_k[:, :, c, e]))), row=2*(e+1), col=1+c
-            )
-    fig.update_xaxes(visible=False)
-    fig.update_yaxes(visible=False)
-    fig_name = plib.Path("./dev_sim/loraks").absolute().joinpath(f"phantom").with_suffix(".html")
-    logging.info(f"Write file: {fig_name}")
-    fig.write_html(fig_name.as_posix())
-
-    logging.info("add misc dimension and input shape")
+    logging.info("add misc dimension and set input shape")
     # We want to set LORAKS input dimensions to be (nx, ny, nz, nc, ne, m)
     # hence insert slice dim
     sl_us_k = sl_us_k.unsqueeze(2)
@@ -141,6 +124,42 @@ def create_phantom(nx: int = 256, ny: int =256, nc: int = 1, ne:int = 1):
     if ne is None or ne == 1:
         sl_us_k = sl_us_k.unsqueeze(4)
     sl_us_k = sl_us_k.unsqueeze(-1)
+
+    # plot
+    img = fft(sl_us_k, axes=(0, 1))
+    fig = psub.make_subplots(
+        cols=2 * ne, rows=nc,
+        row_titles=[f"Coil: {k + 1}" for k in range(nc)],
+        vertical_spacing=0.02, horizontal_spacing=0.02
+    )
+    for e in range(ne):
+        fig.add_annotation(
+            x=(1 / 2 + e) / ne, y=1.05, xref="paper", yref="paper", font=dict(size=16),
+            xanchor="center", yanchor="middle", text=f"Echo: {e+1}", showarrow=False,
+        )
+        for c in range(nc):
+            fig.add_trace(
+                go.Heatmap(
+                    z=torch.squeeze(torch.abs(img[:, :, :, c, e])),
+                    colorscale="Gray", showscale=False
+                ), col=1 + 2 * e, row=1 + c
+            )
+            xaxis = fig.data[-1].xaxis
+            fig.update_yaxes(visible=False, scaleanchor=xaxis, scaleratio=1, col=1 + 2 * e, row=1 + c)
+
+            fig.add_trace(
+                go.Heatmap(
+                    z=torch.squeeze(torch.log(torch.abs(sl_us_k[:, :, :, c, e]))),
+                    showscale=False
+                ), col=2 * (e + 1), row=1 + c
+            )
+            xaxis = fig.data[-1].xaxis
+            fig.update_yaxes(visible=False, scaleanchor=xaxis, scaleratio=1, col=2 * (e + 1), row=1 + c)
+
+    fig.update_xaxes(visible=False)
+    fig_name = plib.Path("./dev_sim/loraks").absolute().joinpath(f"phantom").with_suffix(".html")
+    logging.info(f"Write file: {fig_name}")
+    fig.write_html(fig_name.as_posix())
 
     # get sampling mask in input shape
     sampling_mask = (torch.abs(sl_us_k) > 1e-9)
@@ -238,9 +257,9 @@ def comparison_js(k_load: torch.Tensor, sampling_mask: torch.Tensor,
             # if i % 2 == 0:
             k.grad.zero_()
             bar.postfix = (
-                            f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
-                            f"total_loss: {1e3 * loss.item():.2f}"
-                        )
+                f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
+                f"total_loss: {1e3 * loss.item():.2f}"
+            )
         k_out[b] = k.detach().cpu()
     return torch.reshape(k_out, load_shape), k_input
 
