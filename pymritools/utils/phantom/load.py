@@ -29,7 +29,8 @@ class SheppLogan:
         labels = np.unique(im)
         label_img = im.copy()
         # want to assign rates to the label images
-        random_rates = torch.rand(len(labels)).numpy()
+        rng = np.random.default_rng(seed)
+        random_rates = rng.random(len(labels))
         for i, r in enumerate(random_rates.tolist()):
             label_img[np.where(label_img == labels[i])] = r
 
@@ -93,6 +94,7 @@ class SheppLogan:
         There are the options:
         - 'skip' to skip every line except multiples of the acceleration factors
         - 'weighted' pseudo random sampling with a window function weighting the central lines more than outer ones.
+        - 'random' random sampled points in image, no AC region.
         :param shape:
         :param acceleration:
         :param ac_lines:
@@ -100,7 +102,7 @@ class SheppLogan:
         :param mode:
         :return:
         """
-        modes = ["skip", "weighted"]
+        modes = ["skip", "weighted", "random"]
         # allocate
         nx, ny = shape
         # get fs k - space
@@ -147,6 +149,12 @@ class SheppLogan:
             indices = np.sort(indices, axis=0)
             for e in range(num_echoes):
                 k_us[:, indices[:, e], ..., e] = k_fs[:, indices[:, e], ..., e]
+        elif mode == "random":
+            rng = np.random.default_rng(seed)
+            i = np.array([[x, y] for x in np.arange(256) for y in np.arange(256)])
+            for e in range(num_echoes):
+                indices = rng.choice(i, size=int(i.shape[0] / acceleration), replace=False)
+                k_us[indices[:, 0], indices[:, 1], ..., e] = k_fs[indices[:, 0], indices[:, 1], ..., e]
         else:
             err = f"Mode {mode} not supported, should be one of: {modes}"
             log_module.error(err)
