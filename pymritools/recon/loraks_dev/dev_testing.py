@@ -104,23 +104,21 @@ def func_optim_js(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_
     return loss_2 + lam_s * loss_1, loss_1, loss_2
 
 
-def create_phantom():
+def create_phantom(nx: int = 256, ny: int =256, nc: int = 1, ne:int = 1):
     # set up  phantom
-    shape = (256, 256)
-    num_coils = 6
-    num_echoes = 3
+    shape = (nx, ny)
     logging.info("get SheppLogan phantom")
     logging.info("add virtual coils")
     sl_us_k = SheppLogan().get_sub_sampled_k_space(
-        shape=shape, num_coils=num_coils, acceleration=2, num_echoes=num_echoes
+        shape=shape, num_coils=nc, acceleration=2, num_echoes=ne
     )
     sl_us_k = torch.flip(sl_us_k, dims=(0,))
     img = fft(sl_us_k, axes=(0, 1))
 
     fig = psub.make_subplots(
-        rows=2 * num_echoes, cols=num_coils)
-    for e in range(num_echoes):
-        for c in range(num_coils):
+        rows=2 * ne, cols=nc)
+    for e in range(ne):
+        for c in range(nc):
             fig.add_trace(
                 go.Heatmap(z=torch.abs(img[:, :, c, e]), colorscale="Gray"), row=1+2*e, col=1+c
             )
@@ -138,13 +136,11 @@ def create_phantom():
     # hence insert slice dim
     sl_us_k = sl_us_k.unsqueeze(2)
     # insert any dims at end that are not provided upon creation process
-    if num_coils is None or num_coils == 1:
+    if nc is None or nc == 1:
         sl_us_k = sl_us_k.unsqueeze(3)
-    if num_echoes is None or num_echoes == 1:
+    if ne is None or ne == 1:
         sl_us_k = sl_us_k.unsqueeze(4)
     sl_us_k = sl_us_k.unsqueeze(-1)
-
-    shape = sl_us_k.shape
 
     # get sampling mask in input shape
     sampling_mask = (torch.abs(sl_us_k) > 1e-9)
@@ -315,7 +311,7 @@ def main():
     # torch.cuda.memory._record_memory_history()
 
     # setup phantom
-    k_load, sampling_mask = create_phantom()
+    k_load, sampling_mask = create_phantom(nx=256, ny=256, nc=1, ne=1)
     shape = k_load.shape  # dims [nx, ny, nz, nc, ne, m] - assumed input
 
     # set LORAKS parameters
