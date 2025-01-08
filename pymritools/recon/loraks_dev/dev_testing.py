@@ -11,7 +11,7 @@ from pymritools.utils import fft, root_sum_of_squares
 import plotly.graph_objects as go
 import plotly.subplots as psub
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape, get_linear_indices
-from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator, c_operator, c_adjoint_operator
+from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator, c_operator, c_adjoint_operator, s_operator_mem_opt
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, cgd, \
     subspace_orbit_randomized_svd
 
@@ -48,7 +48,6 @@ def func_optim(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_s, 
     # u, s, vh = randomized_svd(matrix=matrix, q=rq, power_projections=2)
     # u, s, vh = subspace_orbit_randomized_svd(matrix=matrix, q=q, power_projections=2)
     u, s, vh = torch.svd_lowrank(A=matrix, q=q, niter=2)
-    # TODO: Jochen, use q=rank+2 or something if you want, but you need to
 
     # threshold singular values
     s_r = s * s_threshold
@@ -74,6 +73,9 @@ def func_optim_js(k, indices, s_threshold, k_sampled_points, sampling_mask, lam_
     matrix = c_operator(
         k_space=k, indices=indices
     )
+    # matrix = s_operator_mem_opt(
+    #     k_space=k, indices=indices, matrix_shape=matrix_shape
+    # )
 
     # reshape to operator - for c operator
     # matrix = k.view(-1)[indices].view(matrix_shape)
@@ -184,9 +186,11 @@ def comparison_js(k_load: torch.Tensor, sampling_mask: torch.Tensor,
     # returns dims [b (non patch, non combination dims), n_patch, n_combination + neighborhood]
     # need to reshape the input k-space
     k_input = torch.reshape(k_load, batch_reshape)
+    # indices_mapping, matrix_shape = get_linear_indices(
+    #     k_space_shape=k_input.shape[1:], patch_shape=(5, 5, -1, -1, -1), sample_directions=(1, 1, 0, 0, 0)
+    # )
     k_out = torch.zeros_like(k_input)
     sampling_mask = torch.reshape(sampling_mask, batch_reshape)
-
     # log losses and plot data
     losses = []
     #
@@ -204,13 +208,15 @@ def comparison_js(k_load: torch.Tensor, sampling_mask: torch.Tensor,
     for b in range(k_input.shape[0]):
         k = k_input[b].clone().to(device).requires_grad_(True)
         index_batch = indices_mapping[b].to(device)
+        # index_batch = indices_mapping.to(device)
         sampling_mask_batch = sampling_mask[b].to(device)
         k_sampled_points = k_input[b].to(device)[sampling_mask_batch]
 
         for i in bar:
             loss, loss_1, loss_2 = func_optim_js(
                 k=k, indices=index_batch, s_threshold=s_threshold, q=q,
-                k_sampled_points=k_sampled_points, sampling_mask=sampling_mask_batch, lam_s=lam_s
+                k_sampled_points=k_sampled_points, sampling_mask=sampling_mask_batch, lam_s=lam_s,
+                # matrix_shape=matrix_shape
             )
             loss.backward()
 
@@ -330,17 +336,19 @@ def main():
     # torch.cuda.memory._record_memory_history()
 
     # setup phantom
-    k_load, sampling_mask = create_phantom(nx=256, ny=256, nc=1, ne=1)
+    num_coils = 8
+    num_echoes = 4
+    k_load, sampling_mask = create_phantom(nx=256, ny=256, nc=num_coils, ne=num_echoes)
     shape = k_load.shape  # dims [nx, ny, nz, nc, ne, m] - assumed input
 
     # set LORAKS parameters
-    rank = 15
-    lam_s = 0.425
-    max_num_iter = 500
+    rank = 30
+    lam_s = 0.1
+    max_num_iter = 400
     # torch.cuda.memory._record_memory_history()
     logging.info(f"Setup LORAKS: Rank - {rank}")
     # use adaptive learning rate
-    lr = torch.linspace(0.005, 0.000001, max_num_iter)
+    lr = torch.linspace(5e-3, 1e-4, max_num_iter)
     # lr = torch.full((max_num_iter,), 1e-3)
     # lr = torch.exp(-torch.arange(max_num_iter)/max_num_iter) * 5e-3
 
@@ -354,11 +362,11 @@ def main():
     s_threshold[rank:] = 0
     s_threshold = s_threshold.to(device)
 
-    k_recon_core, k_in_core = core(
+    k_recon_comp_js, k_in_js = comparison_js(
         k_load=k_load, sampling_mask=sampling_mask, lr=lr, device=device,
         max_num_iter=max_num_iter, q=q, s_threshold=s_threshold, lam_s=lam_s
     )
-    k_recon_comp_js, k_in_js = comparison_js(
+    k_recon_core, k_in_core = core(
         k_load=k_load, sampling_mask=sampling_mask, lr=lr, device=device,
         max_num_iter=max_num_iter, q=q, s_threshold=s_threshold, lam_s=lam_s
     )
@@ -368,18 +376,28 @@ def main():
     # plotting
     logging.info("fft + rsos us")
     img_us = fft(torch.squeeze(k_load).to(device), axes=(0, 1))
-    # img_us = root_sum_of_squares(img_us, dim_channel=-2)[:, :, 0]
     img_us = torch.abs(img_us)
+    if num_coils > 1:
+        img_us = root_sum_of_squares(img_us, dim_channel=2)
+    if num_echoes is not None:
+        img_us = img_us[..., 0]
 
     logging.info("fft + rsos core")
     img = fft(torch.squeeze(k_recon_core).to(device), axes=(0, 1))
-    # img = root_sum_of_squares(img, dim_channel=-2)[:, :, 0]
     img = torch.abs(img)
+    img = torch.abs(img)
+    if num_coils > 1:
+        img = root_sum_of_squares(img, dim_channel=2)
+    if num_echoes is not None:
+        img = img[..., 0]
 
     logging.info("fft + rsos js")
     img_js = fft(torch.squeeze(k_recon_comp_js).to(device), axes=(0, 1))
-    # img_js = root_sum_of_squares(img_js, dim_channel=-2)[:, :, 0]
     img_js = torch.abs(img_js)
+    if num_coils > 1:
+        img_js = root_sum_of_squares(img_js, dim_channel=2)
+    if num_echoes is not None:
+        img_js = img_js[..., 0]
 
     logging.info("plot")
     fig = psub.make_subplots(

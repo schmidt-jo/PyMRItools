@@ -5,11 +5,10 @@ import plotly.graph_objects as go
 import plotly.colors as plc
 import plotly.subplots as psub
 import polars as pl
-from mpmath.matrices.matrices import colsep
 
 from pymritools.utils.phantom import SheppLogan
-from pymritools.recon.loraks_dev.operators import c_operator, s_operator, c_adjoint_operator, s_adjoint_operator
-from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
+from pymritools.recon.loraks_dev.operators import c_operator, s_operator, s_operator_mem_opt
+from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
 
 from tests.utils import get_test_result_output_dir
@@ -20,19 +19,22 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
     # set svd iterations
     svd_names = ["svd", "svd_lowrank", "r_svd", "sor_svd"]
     # set loraks operations
-    op_names = ["c", "s"]
+    op_names = ["c", "s", "s_opt"]
 
     mem_track_matrix = []
     mem_track_size_svd = []
 
     # setup mappings
-    indices, reshape = get_all_idx_nd_square_patches_in_nd_shape(
-        size=5, k_space_shape=(nx, ny, nc, ne), patch_direction=(1, 1, 0, 0), combination_direction=(0, 0, 1, 1),
+    # indices, reshape = get_all_idx_nd_square_patches_in_nd_shape(
+    #     size=5, k_space_shape=(nx, ny, nc, ne), patch_direction=(1, 1, 0, 0), combination_direction=(0, 0, 1, 1),
+    # )
+    indices, matrix_shape = get_linear_indices(
+        k_space_shape=(nx, ny, nc, ne), patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
     )
+
     # track memory
     gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
-    indices = indices.to(device)[0]
-
+    indices = indices.to(device)
     gpu_mem_post = torch.cuda.mem_get_info(device=device)[0] * 1e-6
 
     torch.cuda.empty_cache()
@@ -45,18 +47,25 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
         "point": "matrix_indexing", "gpu_use": gpu_mem_pre - gpu_mem_post
     })
 
+    output_dir = get_test_result_output_dir(test_memory_requirements)
+
     # create shepp logan using its methods. The seed is set.
     # The impact of non-square slice dimensions should be neglicible
     sl_us_phantom = SheppLogan().get_sub_sampled_k_space(
         shape=(nx, ny), acceleration=3, ac_lines=20, mode="skip", as_torch_tensor=True,
         num_coils=nc, num_echoes=ne
     )
-    k_space = torch.reshape(sl_us_phantom, reshape)
+
+    # save phantom for matlab tests
+    if ne == 4:
+        fn = os.path.join(output_dir, f"sl_phantom_size-{nx}-{ny}-{nc}-{ne}.pt")
+        if not os.path.isfile(fn):
+            torch.save(sl_us_phantom, fn)
 
     # push to device
     # track memory
     gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
-    k_space = k_space.to(device)[0]
+    k_space = sl_us_phantom.to(device)
     gpu_mem_post = torch.cuda.mem_get_info(device=device)[0] * 1e-6
     torch.cuda.empty_cache()
     torch.cuda.reset_max_memory_allocated()
@@ -69,10 +78,10 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
     })
 
     # want to build c and s matrices
-    for i, op in enumerate([c_operator, s_operator]):
+    for i, op in enumerate([c_operator, s_operator, s_operator_mem_opt]):
         gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
         # matrix
-        matrix = op(k_space=k_space, indices=indices)
+        matrix = op(k_space=k_space, indices=indices, matrix_shape=matrix_shape)
 
         gpu_mem_post = torch.cuda.mem_get_info(device=device)[0] * 1e-6
         torch.cuda.empty_cache()
@@ -86,7 +95,8 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
             "point": f"{op_names[i]}-matrix",
             "gpu_use": gpu_mem_pre - gpu_mem_post
         })
-
+        if i == 1:
+            continue
         # iterate through svd variants
         for i_svd, svd in enumerate([
             torch.linalg.svd, torch.svd_lowrank, randomized_svd, subspace_orbit_randomized_svd
@@ -120,73 +130,90 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
                 })
     return mem_track_matrix, mem_track_size_svd
 
+
 def test_memory_requirements():
-    sizes = torch.arange(1,6)
-    num_ops = 2
-    num_svd = 4
-    ranks = [20, 50, 100, 200, 300]
-    num_ranks = len(ranks)
+    path = get_test_result_output_dir(test_memory_requirements)
 
-    channels = [4, 8, 16, 32]
-    echoes = [1, 2, 4]
+    if os.path.isfile(os.path.join(path, "mem_requirement_matrix_operations.csv")):
+        mem_sizes = pl.read_csv(os.path.join(path, "mem_requirement_matrix_operations.csv"))
+        if os.path.isfile(os.path.join(path, "mem_requirement_svd_methods.csv")):
+            mem_svds = pl.read_csv(os.path.join(path, "mem_requirement_svd_methods.csv"))
+        else:
+            raise FileNotFoundError(os.path.join(path, "mem_requirement_svd_methods.csv"))
+    else:
+        sizes = torch.arange(1, 6)
+        num_ops = 2
+        num_svd = 4
+        ranks = [20, 50, 100, 200, 300]
+        num_ranks = len(ranks)
 
-    num_colors = num_ops * num_svd * num_ranks
-    col_sep = 3
-    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.1, 0.9, col_sep*num_colors).tolist())
+        channels = [4, 8, 16, 32]
+        echoes = [1, 2, 4]
 
-    # set svd iterations
-    svd_names = ["svd", "svd_lowrank", "r_svd", "sor_svd"]
-    # set loraks operations
-    op_names = ["c", "s"]
-    mem_track_sizes = []
-    mem_track_svds = []
+        num_colors = num_ops * num_svd * num_ranks
+        col_sep = 3
+        cmap = plc.sample_colorscale("Turbo", torch.linspace(0.1, 0.9, col_sep*num_colors).tolist())
 
-    # set device
-    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        # set svd iterations
+        svd_names = ["svd", "svd_lowrank", "r_svd", "sor_svd"]
+        # set loraks operations
+        op_names = ["c", "s", "s_opt"]
+        mem_track_sizes = []
+        mem_track_svds = []
 
-    for i_size, size in enumerate(sizes.tolist()):
-        # set slice size
-        nx, ny = 64 * size, 64 * size
+        output_dir = get_test_result_output_dir(test_memory_requirements)
 
-        for i_c, nc in enumerate(channels):
-            for i_e, ne in enumerate(echoes):
-                mtps, mtss = iteration_per_size(
-                    nx=nx, ny=ny, nc=nc, ne=ne, ranks=ranks, device=device
-                )
-                mem_track_sizes.extend(mtps)
-                mem_track_svds.extend(mtss)
+        # set device
+        device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        # device = torch.device("cpu")
 
-                mem_svds = pl.DataFrame(mem_track_svds)
+        for i_size, size in enumerate(sizes.tolist()):
+            # set slice size
+            nx, ny = 64 * size, 64 * size
 
-                # save intermediate results
-                output_dir = get_test_result_output_dir(test_memory_requirements)
-                fn = f"mem_requirement_svd_methods"
-                mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+            for i_c, nc in enumerate(channels):
+                for i_e, ne in enumerate(echoes):
+                    mtps, mtss = iteration_per_size(
+                        nx=nx, ny=ny, nc=nc, ne=ne, ranks=ranks, device=device
+                    )
+                    mem_track_sizes.extend(mtps)
+                    mem_track_svds.extend(mtss)
 
-                mem_sizes = pl.DataFrame(mem_track_sizes)
-                # save before plotting
-                output_dir = get_test_result_output_dir(test_memory_requirements)
-                fn = f"mem_requirement_matrix_operations"
-                mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+                    mem_svds = pl.DataFrame(mem_track_svds)
 
-    n_xy = mem_svds["dims_xy"].unique().shape[0]
-    n_ce = mem_svds["dims_ce"].unique().shape[0]
+                    # save intermediate results
+                    fn = f"mem_requirement_svd_methods"
+                    mem_svds.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+
+                    mem_sizes = pl.DataFrame(mem_track_sizes)
+                    # save before plotting
+                    fn = f"mem_requirement_matrix_operations"
+                    mem_sizes.write_csv(os.path.join(output_dir, f"{fn}.csv"))
+    plot_memory_stats(mem_svds=mem_svds, mem_sizes=mem_sizes)
+
+
+def plot_memory_stats(mem_svds: pl.DataFrame, mem_sizes: pl.DataFrame):
+    xys = mem_svds["dims_xy"].unique()
+    n_xy = xys.shape[0]
+    ces = mem_svds["dims_ce"].unique()
+    n_ce = ces.shape[0]
     rank_min_max = [mem_svds["rank"].unique().min(), mem_svds["rank"].unique().max()]
     num_cols = n_xy * n_ce
     num_svds = mem_svds["svd"].unique().shape[0]
-    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.05, 0.95, 2 * num_svds).tolist())
+    num_ops = 3
+    cmap = plc.sample_colorscale("Turbo", torch.linspace(0.05, 0.95, num_ops * num_svds).tolist())
     svd_names = ["svd", "svd_lowrank", "r_svd", "sor_svd"]
 
     fig = psub.make_subplots(
         rows=n_ce, cols=n_xy,
-        row_titles=[f"NB dim: {k * 25}" for k in mem_svds["dims_ce"].unique().to_list()],
-        column_titles=[f"XY dim: {k}" for k in mem_svds["dims_xy"].unique().to_list()],
+        row_titles=[f"NB dim: {k * 25}" for k in ces.to_list()],
+        column_titles=[f"XY dim: {k}" for k in xys.to_list()],
         shared_xaxes=True, shared_yaxes=True,
         y_title="GPU RAM [MB]", x_title="Rank"
     )
 
-    for di, d in enumerate(mem_svds["dims_xy"].unique()):
-        for dti, dt in enumerate(mem_svds["dims_ce"].unique()):
+    for di, d in enumerate(xys):
+        for dti, dt in enumerate(ces):
             ts = mem_svds.filter(pl.col("dims_xy") == d).filter(pl.col("dims_ce") == dt)
             for svdi, svd in enumerate(svd_names):
                 for opi, op in enumerate(ts["op"].unique()):
@@ -225,7 +252,7 @@ def test_memory_requirements():
             yanchor="top"
         )
     )
-    output_dir = get_test_result_output_dir(test_memory_requirements)
+    output_dir = get_test_result_output_dir(plot_memory_stats)
     fn = f"mem_requirement_svd_methods"
     fig.write_html(os.path.join(output_dir, f"{fn}.html"))
 
@@ -246,6 +273,7 @@ def test_memory_requirements():
             c_idx = dti
             ts = mem_sizes.filter(pl.col("point") == p).filter(pl.col("dims_ce") == dt)
             t = ts.group_by("dims_xy").mean()
+            t = t.sort(by="dims_xy")
             # for si, s in enumerate(ts["size"].unique()):
             #     t = ts.filter(pl.col("size") == s)
             #     print(t)
@@ -268,6 +296,5 @@ def test_memory_requirements():
             yanchor="top"
         )
     )
-    output_dir = get_test_result_output_dir(test_memory_requirements)
     fn = f"mem_requirement_matrix_operations"
     fig.write_html(os.path.join(output_dir, f"{fn}.html"))
