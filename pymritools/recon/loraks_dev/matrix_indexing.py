@@ -50,7 +50,9 @@ def get_linear_indices(
         raise ValueError("Input shapes must be 1D tuples")
 
     if k_space_shape.shape != patch_shape.shape or k_space_shape.shape != sample_directions.shape:
-        raise ValueError("Input shapes must have the same length")
+        raise ValueError(f"Input shapes must have the same length: k_space_shape {k_space_shape.shape}, "
+                         f"patch_shape {patch_shape.shape}, "
+                         f"sample_directions {sample_directions.shape}")
 
     if not torch.all((sample_directions == 0) | (sample_directions == 1)):
         raise ValueError("Sample directions must be 0 or 1")
