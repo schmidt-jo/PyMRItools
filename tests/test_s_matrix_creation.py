@@ -35,9 +35,7 @@ def test_s_matrix_creation():
         torch.cuda.empty_cache()
         torch.cuda.reset_max_memory_allocated()
 
-
         gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
-
         # new version
         indices_mod_p, matrix_shape_mod_p = get_linear_indices_mod(
             k_space_shape=shape, patch_shape=(5, 5, -1, -1, -1, -1), sample_directions=(1, 1, 0, 0, 0, 0)
@@ -51,12 +49,12 @@ def test_s_matrix_creation():
         s_p = k_space.view(-1)[indices_mod_p]
         s_m = k_space.view(-1)[indices_mod_m]
         result = torch.empty(2 * len(indices), 2, device=k_space.device)
-        s_p_minus_s_m = (s_p - s_m)
-        result[:len(indices), 0] = s_p_minus_s_m.real
-        result[:len(indices), 1] = -s_p_minus_s_m.imag
-        s_p_plus_s_m = (s_p + s_m)
-        result[len(indices):, 0] = s_p_plus_s_m.imag
-        result[len(indices):, 1] = s_p_plus_s_m.real
+        s_p_m = (s_p - s_m)
+        result[:len(indices), 0] = s_p_m.real
+        result[:len(indices), 1] = -s_p_m.imag
+        s_p_m = (s_p + s_m)
+        result[len(indices):, 0] = s_p_m.imag
+        result[len(indices):, 1] = s_p_m.real
 
         shape = torch.tensor(matrix_shape_mod_p) + torch.tensor(matrix_shape_mod_m)
         s_matrix_mod = result.view(shape.tolist())
@@ -92,6 +90,8 @@ def test_s_matrix_creation():
 
     fig.update_layout(
         title=f"GPU Memory consumption for s_matrix creation of input 256 x 256 x 4*nc x 4",
+        xaxis=dict(title="nc"),
+        yaxis=dict(title="GPU Memory [MB]")
     )
 
     output_dir = get_test_result_output_dir(test_s_matrix_creation)
