@@ -85,7 +85,7 @@ def test_loraks_loss_function():
 
     operator_func = s_operator_mem_opt
     svd_func = get_lowrank_algorithm_function(LowRankAlgorithmType.TORCH_LOWRANK_SVD, (40, 2))
-    sv_threshold_func = get_sv_threshold_function(SVThresholdMethod.HARD_CUTOFF, (40, 20, device))
+    sv_threshold_func = get_sv_threshold_function(SVThresholdMethod.HARD_CUTOFF, (40, 20), device)
     loss_func = create_loss_func(
         operator_func,
         svd_func,
