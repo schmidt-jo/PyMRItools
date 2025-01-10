@@ -2,7 +2,7 @@ import os
 import torch
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices, get_linear_indices_mod
-from pymritools.recon.loraks_dev.operators import s_operator_mem_opt
+from pymritools.recon.loraks_dev.operators import s_operator_mem_opt, s_operator_mem_opt_b
 
 import plotly.graph_objects as go
 import polars as pl
@@ -14,7 +14,7 @@ def test_s_matrix_creation():
     device = torch.device("cuda:0")
     # create k_space shape
     mem = []
-    for nc in range(8):
+    for nc in range(1, 9):
         shape = (256, 256, 1, 4*nc, 4, 1)
         k_space = torch.randn(shape, dtype=torch.complex64, device=device)
 
@@ -23,6 +23,8 @@ def test_s_matrix_creation():
         indices, matrix_shape = get_linear_indices(
             k_space_shape=shape, patch_shape=(5, 5, -1, -1, -1, -1), sample_directions=(1, 1, 0, 0, 0, 0)
         )
+        indices = indices.to(device)
+
         # current s_matrix
         s_matrix = s_operator_mem_opt(k_space=k_space, indices=indices, matrix_shape=matrix_shape)
         gpu_mem_post = torch.cuda.mem_get_info(device=device)[0] * 1e-6
@@ -32,6 +34,27 @@ def test_s_matrix_creation():
             "gpu_mem": gpu_mem_pre - gpu_mem_post,
         })
 
+        del s_matrix
+        torch.cuda.empty_cache()
+        torch.cuda.reset_max_memory_allocated()
+
+        gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
+        # current indices
+        indices, matrix_shape = get_linear_indices(
+            k_space_shape=shape, patch_shape=(5, 5, -1, -1, -1, -1), sample_directions=(1, 1, 0, 0, 0, 0)
+        )
+        indices = indices.to(device)
+
+        # current s_matrix
+        s_matrix_b = s_operator_mem_opt_b(k_space=k_space, indices=indices, matrix_shape=matrix_shape)
+        gpu_mem_post = torch.cuda.mem_get_info(device=device)[0] * 1e-6
+        mem.append({
+            "nc": nc,
+            "version": "current b",
+            "gpu_mem": gpu_mem_pre - gpu_mem_post,
+        })
+
+        del s_matrix_b
         torch.cuda.empty_cache()
         torch.cuda.reset_max_memory_allocated()
 
@@ -67,6 +90,7 @@ def test_s_matrix_creation():
             "gpu_mem": gpu_mem_pre - gpu_mem_post,
         })
 
+        del s_matrix_mod, s_p_m, s_m, s_p, result
         torch.cuda.empty_cache()
         torch.cuda.reset_max_memory_allocated()
 
@@ -78,6 +102,13 @@ def test_s_matrix_creation():
     fig.add_trace(
         go.Scatter(
             x=m1["nc"], y=m1["gpu_mem"], name=f"current version"
+        )
+    )
+
+    m1 = mem.filter(pl.col("version") == "current b")
+    fig.add_trace(
+        go.Scatter(
+            x=m1["nc"], y=m1["gpu_mem"], name=f"current version b"
         )
     )
 
