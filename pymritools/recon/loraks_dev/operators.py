@@ -41,7 +41,8 @@ def s_operator_mem_opt(k_space: torch.Tensor, indices: torch.Tensor, matrix_shap
     k_flip = torch.flip(k_space, dims=(0, 1))
     s_p = k_space.view(-1)[indices]
     s_m = k_flip.view(-1)[indices]
-    result = torch.empty(2 * len(indices), 2, device=k_space.device)
+    # Todo: Check how to handle floating point size
+    result = torch.empty(2 * len(indices), 2, dtype=torch.float64, device=k_space.device)
     s_p_m = (s_p - s_m)
     result[:len(indices), 0] = s_p_m.real
     result[:len(indices), 1] = -s_p_m.imag
@@ -49,8 +50,9 @@ def s_operator_mem_opt(k_space: torch.Tensor, indices: torch.Tensor, matrix_shap
     result[len(indices):, 0] = s_p_m.imag
     result[len(indices):, 1] = s_p_m.real
 
-    shape = torch.tensor(matrix_shape) * torch.tensor([2, 2])
-    return result.view(shape.tolist())
+    # shape = torch.tensor(matrix_shape) * torch.tensor([2, 2])
+    return result.view(matrix_shape)
+    # return result
 
 
 def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
