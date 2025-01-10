@@ -9,6 +9,7 @@ def c_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple
     Maps from k-space with shape (nxyz, ncem) into the neighborhood-representation
     :param k_space: k-space with shape (nxyz, ncem)
     :param indices: neighborhood mapping with shape (nxyz valid, nb)
+    :param matrix_shape: Shape of the neighborhood matrix
     :return: neighborhood representation with shape (nxyz valid, nb * ncem)
     """
     return k_space.view(-1)[indices].view(matrix_shape)
