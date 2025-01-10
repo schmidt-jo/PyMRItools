@@ -42,12 +42,12 @@ def s_operator_mem_opt(k_space: torch.Tensor, indices: torch.Tensor, matrix_shap
     s_p = k_space.view(-1)[indices]
     s_m = k_flip.view(-1)[indices]
     result = torch.empty(2 * len(indices), 2, device=k_space.device)
-    s_p_minus_s_m = (s_p - s_m)
-    result[:len(indices), 0] = s_p_minus_s_m.real
-    result[:len(indices), 1] = -s_p_minus_s_m.imag
-    s_p_plus_s_m = (s_p + s_m)
-    result[len(indices):, 0] = s_p_plus_s_m.imag
-    result[len(indices):, 1] = s_p_plus_s_m.real
+    s_p_m = (s_p - s_m)
+    result[:len(indices), 0] = s_p_m.real
+    result[:len(indices), 1] = -s_p_m.imag
+    s_p_m = (s_p + s_m)
+    result[len(indices):, 0] = s_p_m.imag
+    result[len(indices):, 1] = s_p_m.real
 
     shape = torch.tensor(matrix_shape) * torch.tensor([2, 2])
     return result.view(shape.tolist())
