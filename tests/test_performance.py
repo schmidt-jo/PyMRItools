@@ -1,3 +1,6 @@
+from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
+from pymritools.recon.loraks_dev.ps_loraks import create_loss_func, get_lowrank_algorithm_function, \
+    LowRankAlgorithmType, get_sv_threshold_function, SVThresholdMethod, Loraks
 from .utils import do_performance_test
 import torch
 import pymritools.utils.matrix_indexing as op_indexing
@@ -55,3 +58,42 @@ def test_c_adjoint_operator():
     c_matrix = op_operators.c_operator(k_space, c_mapping)
     do_performance_test(op_operators.c_adjoint_operator, c_matrix, c_mapping, (nx, ny))
 
+def test_loraks_loss_function():
+    k_space_shape = (256, 256, 8, 4)
+    patch_shape = (5, 5, -1, -1)
+    sample_directions = (1, 1, 0, 0)
+    lambda_factor = 0.3
+    k_space = torch.randn(k_space_shape, dtype=torch.complex64)
+    sampling_mask = torch.randn_like(k_space, dtype=torch.float) > 0.7
+    k_sampled_points = sampling_mask * k_space
+    indices, c_matrix_shape = get_linear_indices(k_space_shape, patch_shape, sample_directions)
+
+    from pymritools.recon.loraks_dev.operators import c_operator
+    operator_func = c_operator
+    svd_func = get_lowrank_algorithm_function(LowRankAlgorithmType.TORCH_LOWRANK_SVD, (40, 2))
+    # We can't test performance on the SVThresholdMethod.HARD_CUTOFF because on creation of the threshold function,
+    # we already inject the threshold tensor that we multiply with the singular values vector.
+    # This tensor lives on a defined device, and our trickery of moving arguments to specified devices in the
+    # do_performance_test function doesn't work anymore.
+    sv_threshold_func = get_sv_threshold_function(SVThresholdMethod.RELU_SHIFT, (15.0,))
+    loss_func = create_loss_func(
+        operator_func,
+        svd_func,
+        sv_threshold_func
+    )
+    do_performance_test(loss_func, k_space, indices, c_matrix_shape, k_sampled_points, sampling_mask, lambda_factor)
+
+def test_reconstruction():
+    k_space_shape = (1, 256, 256, 8, 4)
+    patch_shape = (5, 5, -1, -1)
+    sample_directions = (1, 1, 0, 0)
+    k_space = torch.randn(k_space_shape, dtype=torch.complex64)
+    sampling_mask = torch.randn_like(k_space, dtype=torch.float) > 0.7
+    l = (Loraks()
+         .with_patch_shape(patch_shape)
+         .with_sample_directions(sample_directions)
+         .with_torch_lowrank_algorithm(50, 2)
+         .with_c_matrix()
+         .with_sv_soft_cutoff(15.0)
+         )
+    l.reconstruct(k_space, sampling_mask)
