@@ -7,8 +7,6 @@ dependencies:
   - python=3.10
   - poetry=1.8.3
   - pip
-  - pytorch=2.4.1
-  - pytorch-cuda=12.4
   - polars=1.8.2
   - python-kaleido=0.1.0
   - scipy=1.14.1
@@ -20,6 +18,8 @@ dependencies:
   - wandb
   - pytest
   - pip:
+      - torch
+      - triton
       - autodmri
       - git+https://github.com/pehses/twixtools.git@master#egg=twixtools
       - git+https://github.com/imr-framework/pypulseq.git@dev#egg=pypulseq

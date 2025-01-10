@@ -72,9 +72,8 @@ def test_loraks_loss_function():
     patch_shape = (5, 5, -1, -1)
     sample_directions = (1, 1, 0, 0)
     lambda_factor = 0.3
-    device = torch.device("cuda")
-    k_space = torch.randn(k_space_shape, dtype=torch.complex64, device=device)
-    sampling_mask = torch.randn_like(k_space, dtype=torch.float, device=device) > 0.7
+    k_space = torch.randn(k_space_shape, dtype=torch.complex64)
+    sampling_mask = torch.randn_like(k_space, dtype=torch.float) > 0.7
     k_sampled_points = sampling_mask * k_space
     indices, c_matrix_shape = get_linear_indices(k_space_shape, patch_shape, sample_directions)
     s_matrix_shape = tuple(2*entry for entry in c_matrix_shape)
@@ -85,15 +84,14 @@ def test_loraks_loss_function():
 
     operator_func = s_operator_mem_opt
     svd_func = get_lowrank_algorithm_function(LowRankAlgorithmType.TORCH_LOWRANK_SVD, (40, 2))
-    sv_threshold_func = get_sv_threshold_function(SVThresholdMethod.HARD_CUTOFF, (40, 20, device))
+    sv_threshold_func = get_sv_threshold_function(SVThresholdMethod.RELU_SHIFT, (100.0,))
     loss_func = create_loss_func(
         operator_func,
         svd_func,
         sv_threshold_func
     )
-    print(
-      measure_cuda_function_call(loss_func, k_candidate, indices, s_matrix_shape, k_sampled_points, sampling_mask, lambda_factor, device=torch.device("cpu"))
-    )
+    do_performance_test(loss_func, k_candidate, indices, s_matrix_shape, k_sampled_points, sampling_mask, lambda_factor)
+
 
 def test_lowrank_function():
     k_space_shape = (256, 256, 8, 4)
