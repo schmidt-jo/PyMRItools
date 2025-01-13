@@ -80,9 +80,9 @@ def test_loraks_loss_function():
 
     k_candidate = k_space.clone().requires_grad_()
 
-    from pymritools.recon.loraks_dev.operators import s_operator_mem_opt
+    from pymritools.recon.loraks_dev.operators import s_operator
 
-    operator_func = s_operator_mem_opt
+    operator_func = s_operator
     svd_func = get_lowrank_algorithm_function(LowRankAlgorithmType.TORCH_LOWRANK_SVD, (40, 2))
     sv_threshold_func = get_sv_threshold_function(SVThresholdMethod.RELU_SHIFT, (100.0,))
     loss_func = create_loss_func(
