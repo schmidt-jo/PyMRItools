@@ -24,20 +24,6 @@ def c_adjoint_operator(c_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
 
 
 def s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):
-    # test s mapping
-    k_flipped = torch.flip(k_space, dims=(0, 1))
-    s_p = k_space.view(-1)[indices].view(matrix_shape)
-    s_m = k_flipped.view(-1)[indices].view(matrix_shape)
-
-    return torch.cat(
-        (
-            torch.cat([(s_p - s_m).real, (-s_p + s_m).imag], dim=1),
-            torch.cat([(s_p + s_m).imag, (s_p + s_m).real], dim=1)
-        ), dim=0
-    )
-
-
-def s_operator_mem_opt(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):
     k_flip = torch.flip(k_space, dims=(0, 1))
     s_p = k_space.view(-1)[indices]
     s_m = k_flip.view(-1)[indices]
