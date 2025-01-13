@@ -82,7 +82,7 @@ def create_loss_func(
         matrix_recon_loraks = torch.matmul(u * s_r.to(u.dtype), vh)
         loss_1 = torch.linalg.norm(matrix - matrix_recon_loraks, ord="fro")
         loss_2 = torch.linalg.norm(k_space_candidate * sampling_mask - k_sampled_points)
-        return loss_2 + loss_1
+        return loss_2 + lam_s*loss_1, loss_1, loss_2
 
     # return torch.compile(loss_func, fullgraph=True)
     return loss_func
@@ -267,8 +267,7 @@ class Loraks:
         svd_func = get_lowrank_algorithm_function(self.svd_algorithm, self.svd_algorithm_args)
         sv_threshold_func = get_sv_threshold_function(self.sv_cutoff_method, self.sv_cutoff_args)
 
-        loss_func1 = create_loss_func(operator_func, svd_func, sv_threshold_func)
-        loss_func = torch.compile(loss_func1, fullgraph=True)
+        loss_func = create_loss_func(operator_func, svd_func, sv_threshold_func)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         max_num_iter = 50
@@ -294,17 +293,17 @@ class Loraks:
                     k_sampled_points,
                     sampling_mask_batch,
                     self.lambda_factor)
-                # loss.backward()
-                #
-                # # Use the optimal learning_rate to update parameters
-                # with torch.no_grad():
-                #     k -= lr[i] * k.grad
-                # k.grad.zero_()
-                #
-                # progress_bar.postfix = (
-                #     f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
-                #     f"total_loss: {1e3 * loss.item():.2f}"
-                # )
+                loss.backward()
+
+                # Use the optimal learning_rate to update parameters
+                with torch.no_grad():
+                    k -= lr[i] * k.grad
+                k.grad.zero_()
+
+                progress_bar.postfix = (
+                    f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
+                    f"total_loss: {1e3 * loss.item():.2f}"
+                )
             # k is our converged best guess candidate, need to unprep / reshape
             k_out[b] = k.detach().cpu()
         return k_out
