@@ -23,6 +23,10 @@
 - [ ] Do we want a tensor norm that is indifferent to the actual size/dimensionality? What do we expect when calculating norms in C-Space and in K-Space?
 - [ ] If we use a relative data consistency error, we could get rid of lambda: We define maximum percentage that we allow to be the data consistency error and scale the low-rank error to its maximum value
 
+- [ ] Split input into real and imag - real valued tensors? Otherwise, no C implementation with compile possible (no complex implementation of `torch.compile()`)
+- [ ] Use linear indexing and matrix operators in AC - LORAKS
+- [ ] Fix input floating point deopth to `tf32` for memory efficiency?
+
 # Experiments and Results
 
 - Detailed memory requirements
