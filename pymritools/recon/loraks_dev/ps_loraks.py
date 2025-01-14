@@ -277,7 +277,7 @@ class Loraks:
         progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
 
         k_input = k_space.contiguous()
-        k_out = torch.zeros_like(k_input)
+        k_out = torch.empty_like(k_input)
 
         for b in range(batch_size):
             k = k_input[b].clone().to(device).requires_grad_()
