@@ -328,6 +328,8 @@ def ac_loraks(
         )
         if not path_visuals:
             path_visuals = plib.Path("./examples/recon/loraks")
+        path_visuals = plib.Path(path_visuals).absolute()
+        path_visuals.mkdir(parents=True, exist_ok=True)
         fig_name = path_visuals.joinpath('count-matrices_ac-region').with_suffix('.html')
         log_module.info(f"write file: {fig_name}")
         fig.write_html(fig_name.as_posix())
