@@ -26,7 +26,7 @@
 - [ ] Split input into real and imag - real valued tensors? Otherwise, no C implementation with compile possible (no complex implementation of `torch.compile()`)
 - [ ] Use linear indexing and matrix operators in AC - LORAKS
 - [ ] Fix input floating point deopth to `tf32` for memory efficiency?
-- 
+
 # Experiments and Results
 
 - Detailed memory requirements
