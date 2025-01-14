@@ -12,7 +12,8 @@ from pymritools.recon.loraks.operators import (
     c_operator, c_adjoint_operator,
     s_operator, s_adjoint_operator
 )
-from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape
+from pymritools.utils import get_idx_2d_circular_neighborhood_patches_in_shape, \
+    get_idx_2d_square_neighborhood_patches_in_shape
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
 from pymritools.utils.algorithms import cgd
 
@@ -136,16 +137,16 @@ def get_v_matrix_of_ac_subspace(
         v_sub = v[:, :rank]
     elif compute_mode == "rsvd":
         m_ac_rank = min(m_ac.shape[-2:])
-        _, _, v = randomized_svd(matrix=m_ac, q=4 * rank)
+        _, _, v = randomized_svd(matrix=m_ac, q=rank+10, power_projections=2)
         v_sub = v[:rank].conj().T
     elif compute_mode == "sor-svd":
         m_ac_rank = min(m_ac.shape[-2:])
-        _, _, v = subspace_orbit_randomized_svd(matrix=m_ac, rank=rank)
-        v_sub = v.conj().T
+        _, _, v = subspace_orbit_randomized_svd(matrix=m_ac, q=rank+10, power_projections=2)
+        v_sub = v[:rank].conj().T
     elif compute_mode == "torch-lr":
         m_ac_rank = min(m_ac.shape[-2:])
         _, _, v = torch.svd_lowrank(A=m_ac, q=rank+10, niter=2)
-        v_sub = v.mH
+        v_sub = v[:, :rank]
     else:
         err = f"compute mode {compute_mode} not implemented for AC subspace extraction"
         log_module.error(err)
@@ -265,11 +266,12 @@ def ac_loraks(
 
     img_ac_start, img_ac_shape = get_ac_region_from_sampling_pattern(sampling_mask_x_y_t=sampling_mask_x_y_t)
     # find the indices to build LORAKS matrices for this particular shape
-    img_ac_indices = get_idx_2d_circular_neighborhood_patches_in_shape(
-        shape_2d=img_ac_shape, nb_radius=radius, device=torch.device("cpu")
-    )
-    # add the starting points of the AC region rectangle to the indices
-    img_ac_indices += img_ac_start[None, None]
+    # img_ac_indices = get_idx_2d_square_neighborhood_patches_in_shape(
+    #     nb_shift=(1, 1),
+    #     shape_2d=img_ac_shape, nb_size=radius+1, device=torch.device("cpu")
+    # )
+    # # add the starting points of the AC region rectangle to the indices
+    # img_ac_indices += img_ac_start[None, None]
 
     # get dimensions
     k_space_x_y_z_ch_t = k_space_x_y_z_ch_t.to(torch.complex64)
@@ -280,9 +282,21 @@ def ac_loraks(
     # k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_slice]
 
     # get indices for operators on whole image to calculate the count matrix for reconstruction
-    indices = get_idx_2d_circular_neighborhood_patches_in_shape(
-        shape_2d=(n_read, n_phase), nb_radius=radius, device=torch.device("cpu")
+    indices = get_idx_2d_square_neighborhood_patches_in_shape(
+        shape_2d=(n_read, n_phase), nb_shift=(1, 1), nb_size=2+radius, device=torch.device("cpu")
     )
+    # get the indices within the ac region
+    # convert to tensors
+    img_ac_start = torch.tensor(img_ac_start, device=indices.device)  # Starting point (2,)
+    img_ac_end = img_ac_start + torch.tensor(img_ac_shape, device=indices.device)  # End point (2,)
+
+    inside_box = (indices > img_ac_start) & (indices < img_ac_end)  # Shape: (nxy, nb, 2)
+
+    # Ensure all indices in the `nb` dimension satisfy the condition
+    valid_indices_mask = inside_box.all(dim=-1).all(dim=1)  # Shape: (nxy,)
+
+    # Extract valid indices using the mask
+    img_ac_indices = indices[valid_indices_mask]  # Shape: (number_of_valid, nb, 2)
 
     plot_list = []
     plot_names = []
