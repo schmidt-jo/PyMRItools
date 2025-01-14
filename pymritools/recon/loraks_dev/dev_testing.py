@@ -11,7 +11,7 @@ from pymritools.utils import fft, root_sum_of_squares
 import plotly.graph_objects as go
 import plotly.subplots as psub
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape, get_linear_indices
-from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator, c_operator, c_adjoint_operator, s_operator_mem_opt
+from pymritools.recon.loraks_dev.operators import s_operator, s_adjoint_operator, c_operator, c_adjoint_operator
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, cgd, \
     subspace_orbit_randomized_svd
 
