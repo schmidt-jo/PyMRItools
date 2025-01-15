@@ -1,6 +1,8 @@
 import torch
 import time
 import os
+import logging
+import pickle
 
 test_dir = os.path.dirname(__file__)
 test_output_dir = os.path.join(os.path.dirname(test_dir), "test_output")
@@ -177,3 +179,61 @@ def do_performance_test(func, *args, iterations=10, test_compilation: bool = Tru
                 f.write(f"CUDA: Compiled function took: {cuda_time_compiled:.6f} seconds per iteration\n\n")
                 f.write(f"First call timing: {warmup_3:.6f} seconds vs. {warmup_4}\n")
                 f.write(f"Speed-up: {cuda_time_non_compiled / cuda_time_compiled:.2f}x\n\n")
+
+
+def generate_trace_plot(pkl_file: str, output_file: str):
+    """
+    Generates a trace plot from a pickle file and writes it to the specified output HTML file.
+    This is ripped out of torch.cuda._memory_viz
+    """
+    from torch.cuda._memory_viz import trace_plot
+    with open(pkl_file, 'rb') as f:
+        data = pickle.load(f)
+    with open(output_file, 'w') as f:
+        f.write(trace_plot(data))
+
+
+class MemoryProfiler:
+    """
+    Utility class to profile and record CUDA memory usage during program execution.
+    Example usage::
+
+        with MemoryProfiler("indices_gpu_test"):
+            # Any torch code here
+    """
+
+    def __init__(self, report_output_dir: str, max_entries=100000):
+        """
+        Initialize the memory profiler.
+
+        Args:
+            report_output_dir (str): The directory name to save memory snapshots under the test_output directory.
+            max_entries (int): Maximum number of memory events to capture.
+        """
+        self.report_output_dir = get_test_result_output_dir(report_output_dir)
+        self.snapshot_file = os.path.join(self.report_output_dir, "memory_snapshot.pkl")
+        self.snapshot_file_html = os.path.join(self.report_output_dir, "memory_snapshot.html")
+        self.max_entries = max_entries
+        self.logger = logging.getLogger("MemoryProfiler")
+
+    def __enter__(self):
+        try:
+            torch.cuda.memory._record_memory_history(max_entries=self.max_entries)
+            self.logger.info(f"Memory profiling started with max_entries={self.max_entries}")
+        except Exception as e:
+            self.logger.error(f"Failed to start memory profiling: {e}")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            torch.cuda.memory._dump_snapshot(self.snapshot_file)
+            generate_trace_plot(self.snapshot_file, self.snapshot_file_html)
+            self.logger.info(f"Memory snapshot saved to {self.snapshot_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to save memory snapshot: {e}")
+
+        try:
+            torch.cuda.memory._record_memory_history(enabled=None)
+            self.logger.info("Memory profiling stopped")
+        except Exception as e:
+            self.logger.error(f"Failed to stop memory profiling: {e}")

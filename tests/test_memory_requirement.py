@@ -7,11 +7,68 @@ import plotly.subplots as psub
 import polars as pl
 
 from pymritools.utils.phantom import SheppLogan
-from pymritools.recon.loraks_dev.operators import c_operator, s_operator, s_operator_mem_opt
+from pymritools.recon.loraks_dev.operators import c_operator, s_operator
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
 
 from tests.utils import get_test_result_output_dir
+
+def test_indices_memory_location():
+    """
+    This test confirms that indices are temporarily allocated on the GPU when accessing data also located on the
+    GPU. This indicates that we should store our C-matrix indices on the GPU in the first place.
+    What we want to see in the trace is (1) that the data is allocated on the GPU, (2) that the indices are allocated
+    on the GPU and (3) that the result is also allocated on the GPU.
+    """
+    n = 1_000_000
+    data = torch.randn(n, dtype=torch.complex128)
+    indices = torch.randint(0, data.numel(), (n,))
+
+    from tests.utils import MemoryProfiler
+    with MemoryProfiler("indices_gpu_test"):
+        for _ in range(5):
+            data_gpu = data.cuda()
+            data_gpu[indices]
+
+def test_indices_access_performance():
+    """
+    Tests and compares the performance of GPU tensor index access using indices stored
+    on the CPU versus indices stored on the GPU. This benchmark measures execution time
+    for these two scenarios and outputs the result.
+
+    On a Linux machine with an NVIDIA RTX 4080, this results in
+        Time 1 (CPU indices): 11.563756 seconds
+        Time 2 (GPU indices): 0.243701 seconds
+    """
+    import time
+    n = 1_000_000
+    data = torch.randn(n, dtype=torch.complex128)
+    indices = torch.randint(0, data.numel(), (n,))
+    iters = 10000
+
+    # Warm-up GPU execution
+    data_gpu = data.cuda()
+    indices_cuda = indices.cuda()
+    for _ in range(10):
+        data_gpu[indices_cuda]
+
+    # Measure Time 1: Indices on CPU
+    torch.cuda.synchronize()
+    start = time.time()
+    for _ in range(iters):
+        data_gpu[indices]  # Indices on CPU
+    torch.cuda.synchronize()
+    end = time.time()
+    print(f"Time 1 (CPU indices): {end - start:.6f} seconds")
+
+    # Measure Time 2: Indices on GPU
+    torch.cuda.synchronize()
+    start = time.time()
+    for _ in range(iters):
+        data_gpu[indices_cuda]  # Indices on GPU
+    torch.cuda.synchronize()
+    end = time.time()
+    print(f"Time 2 (GPU indices): {end - start:.6f} seconds")
 
 
 def iteration_per_size(nx, ny, nc, ne, ranks, device):
