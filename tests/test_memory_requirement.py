@@ -11,7 +11,8 @@ from pymritools.recon.loraks_dev.operators import c_operator, s_operator
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
 
-from tests.utils import get_test_result_output_dir
+from tests.utils import get_test_result_output_dir, MemoryProfiler
+
 
 def test_indices_memory_location():
     """
@@ -70,6 +71,18 @@ def test_indices_access_performance():
     end = time.time()
     print(f"Time 2 (GPU indices): {end - start:.6f} seconds")
 
+
+def test_torch_lowrank_svd_requirements():
+    nx, ny = (1000, 1000)
+    matrix_type = torch.complex128
+    bytes_calculated = nx * ny * matrix_type.itemsize
+    matrix = torch.randn((nx,ny), dtype=matrix_type, device="cuda")
+    assert bytes_calculated == matrix.nbytes
+    print(f"Bytes calculated: {bytes_calculated/2**20:.2f} MB")
+    with MemoryProfiler("lowrank_svd_memory_requirements"):
+        for _ in range(5):
+            # Just test svd without using results or reconstructing
+            torch.svd_lowrank(matrix, q=50, niter=2)
 
 def iteration_per_size(nx, ny, nc, ne, ranks, device):
 
@@ -135,7 +148,7 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
     })
 
     # want to build c and s matrices
-    for i, op in enumerate([c_operator, s_operator, s_operator_mem_opt]):
+    for i, op in enumerate([c_operator, s_operator]):
         gpu_mem_pre = torch.cuda.mem_get_info(device=device)[0] * 1e-6
         # matrix
         matrix = op(k_space=k_space, indices=indices, matrix_shape=matrix_shape)
