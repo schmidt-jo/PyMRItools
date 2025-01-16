@@ -1,6 +1,7 @@
 import torch
 from typing import Callable, Tuple, Optional
 from enum import Enum, auto
+import psutil
 
 import tqdm
 
@@ -87,6 +88,22 @@ def create_loss_func(
     # return torch.compile(loss_func, fullgraph=True)
     return loss_func
 
+def calculate_matrix_size(k_space_shape: Tuple, patch_shape: Tuple, sample_directions: Tuple, matrix_type: OperatorType):
+    k_space_shape = torch.tensor(k_space_shape).flip(0)
+    patch_shape = torch.tensor(patch_shape).flip(0)
+    sample_directions = torch.tensor(sample_directions).flip(0)
+    patch_sizes = torch.where(patch_shape == 0, torch.tensor(1), patch_shape)
+    patch_sizes = torch.where(patch_shape == -1, k_space_shape, patch_sizes)
+
+    sample_steps = torch.where(sample_directions == 0, torch.tensor(1), k_space_shape - patch_sizes + 1)
+    if matrix_type == OperatorType.C:
+        return torch.prod(patch_sizes * sample_steps)
+    elif matrix_type == OperatorType.S:
+        return 4*torch.prod(patch_sizes * sample_steps)
+    else:
+        raise ValueError(f"Unknown matrix type: {matrix_type}")
+
+
 
 class Loraks:
     def __init__(self):
@@ -102,8 +119,11 @@ class Loraks:
         self.sv_cutoff_method: Optional[SVThresholdMethod] = None
         self.sv_cutoff_args: Optional[Tuple] = None
         self.lambda_factor: Optional[float] = None
-        self.loss_func: Optional[Callable] = None
+        self.max_num_iter = 50
+        self.learning_rate_func: Callable = lambda _: 1e-3
+        self.device: Optional[torch.device] = torch.get_default_device()
 
+        self.loss_func: Optional[Callable] = None
         self.indices: Optional[torch.Tensor] = None
         self.matrix_operator_shape: Optional[Tuple] = None
 
@@ -207,12 +227,43 @@ class Loraks:
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
         return self
 
+    def with_constant_learning_rate(self, learning_rate: float) -> "Loraks":
+        self.learning_rate_func = lambda _: learning_rate
+        return self
+
+    def with_linear_learning_rate(self, min_learning_rate: float, max_learning_rate: float) -> "Loraks":
+        self.learning_rate_func = lambda i: (
+                min_learning_rate + (max_learning_rate - min_learning_rate) * i / self.max_num_iter)
+        return self
+
+    def with_device(self, device: torch.device) -> "Loraks":
+        if not isinstance(device, torch.device):
+            raise ValueError("Device must be a torch.device object")
+        if self.device != device:
+            logger.info(f"Device changed from {self.device} to {device}")
+            self.device = device
+        else:
+            logger.info(f"Device unchanged: {self.device}")
+        return self
+
     def _initialize_matrix_indices(self):
         self.indices, self.matrix_operator_shape = get_linear_indices(
             self.k_space_shape[1:],
             self.patch_shape,
             self.sample_directions
         )
+
+    def _get_available_cpu_memory(self):
+        """
+        Returns the total available memory on the CPU in bytes.
+        """
+        return psutil.virtual_memory().available
+
+    def _get_available_gpu_memory(self):
+        """
+        Returns the total available memory on the GPU in bytes.
+        """
+        return torch.cuda.get_device_properties(self.device).total_memory
 
     def _prepare(self):
         if not self.dirty_config:
@@ -270,11 +321,9 @@ class Loraks:
         loss_func = create_loss_func(operator_func, svd_func, sv_threshold_func)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        max_num_iter = 50
         self.lambda_factor = 0.3
-        lr = torch.linspace(5e-3, 1e-4, max_num_iter)
         batch_size = self.k_space_shape[0]
-        progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
+        progress_bar = tqdm.trange(self.max_num_iter, desc="Optimization")
 
         k_input = k_space.contiguous()
         k_out = torch.empty_like(k_input)
@@ -297,7 +346,7 @@ class Loraks:
 
                 # Use the optimal learning_rate to update parameters
                 with torch.no_grad():
-                    k -= lr[i] * k.grad
+                    k -= self.learning_rate_func(i) * k.grad
                 k.grad.zero_()
 
                 progress_bar.postfix = (
