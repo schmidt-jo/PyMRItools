@@ -1,5 +1,6 @@
 import pathlib as plib
 import logging
+from typing import Tuple
 
 from PIL import Image
 import numpy as np
@@ -164,6 +165,25 @@ class SheppLogan:
         if as_torch_tensor:
             return torch.from_numpy(k_us)
         return k_us
+
+
+class JupiterImage:
+    def __init__(self):
+        image_path = plib.Path(__file__).absolute().parent.joinpath("jupiter_512").with_suffix(".png")
+        mask_path = plib.Path(__file__).absolute().parent.joinpath("jupiter_mask_512").with_suffix(".pnm")
+        image = Image.open(image_path).convert("L")
+        mask = Image.open(mask_path).convert("L")
+        self._image = np.array(image, dtype=np.float32)
+        self._mask = np.array(mask, dtype=np.bool)
+
+    def as_torch_tensor(self) -> Tuple[torch.Tensor, ...]:
+        t_im = torch.from_numpy(self._image)
+        t_mask = torch.from_numpy(self._mask).to(dtype=torch.bool).unsqueeze(0)
+        return (
+            t_im,
+            fft(input_data=t_im, img_to_k=True, axes=(0, 1)),
+            t_mask
+        )
 
 
 def main():
