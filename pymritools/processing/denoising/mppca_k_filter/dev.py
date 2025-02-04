@@ -6,7 +6,6 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.subplots as psub
 import tqdm
-from click.core import batch
 
 from pymritools.utils.phantom import SheppLogan
 from pymritools.utils import fft, gaussian_2d_kernel, root_sum_of_squares
@@ -126,13 +125,13 @@ def main():
             ))[:, :, 1]
 
 
-    names = ["mpk_rsos", "mpk-1", "mpk-2", "mpch_rsos", "mpch-1", "mpch-2"]
+    names = ["MPK rsos", "MPCh rsos", "MPK Ch. 1", "MPCh Ch. 1", "MPK Ch. 2", "MPCh Ch. 2"]
     for idx_d, data in enumerate([
-        plot_data_mpk_rsos, plot_data_mpk_ch1, plot_data_mpk_ch2,
-        plot_data_mpch_rsos, plot_data_mpch_ch1, plot_data_mpch_ch2
+        plot_data_mpk_rsos, plot_data_mpch_rsos, plot_data_mpk_ch1, plot_data_mpch_ch1,
+        plot_data_mpk_ch2, plot_data_mpch_ch2
     ]):
         fig = psub.make_subplots(
-            rows=6, cols=5,
+            rows=len(names), cols=5,
             row_titles=["phantom.", "noisy image", "noise filtered image", "filtered noise", "bias intuition", "filtered bias"],
             column_titles=[f"SNR: {s}" for s in snrs],
             horizontal_spacing=0.02, vertical_spacing=0.02
@@ -152,6 +151,27 @@ def main():
         file_name = fig_path.joinpath(names[idx_d]).with_suffix(".pdf")
         logging.info(f"write file: {file_name}")
         fig.write_image(file_name)
+    fig = psub.make_subplots(
+        rows=6, cols=5,
+        row_titles=["phantom.", "noisy image", "noise filtered image", "filtered noise", "bias intuition", "filtered bias"],
+        column_titles=[f"SNR: {s}" for s in snrs],
+        horizontal_spacing=0.02, vertical_spacing=0.02
+    )
+    # each of the data is dims [6, snrs, shape]
+    for idx_r, rd in enumerate(data):
+        for idx_c in range(len(snrs)):
+            fig.add_trace(
+                go.Heatmap(z=rd[idx_c], showscale=False), row=1+idx_r, col=idx_c + 1
+            )
+    fig.update_yaxes(visible=False)
+    fig.update_xaxes(visible=False)
+    fig.update_layout(width=1000, height=1200)
+    file_name = fig_path.joinpath(names[idx_d]).with_suffix(".html")
+    logging.info(f"write file: {file_name}")
+    fig.write_html(file_name)
+    file_name = fig_path.joinpath(names[idx_d]).with_suffix(".pdf")
+    logging.info(f"write file: {file_name}")
+    fig.write_image(file_name)
 
 
 
