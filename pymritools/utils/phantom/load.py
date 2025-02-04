@@ -64,6 +64,7 @@ class SheppLogan:
             im = im[:, :, None]
         # include fake coil sensitivities randomly set up
         if num_coils is not None:
+            torch.manual_seed(seed)
             coil_sens = torch.ones((*shape, num_coils))
             if num_coils > 1:
                 for i in range(num_coils):
@@ -104,7 +105,7 @@ class SheppLogan:
         :param mode:
         :return:
         """
-        modes = ["skip", "weighted", "random"]
+        modes = ["grappa", "skip", "weighted", "random"]
         # allocate
         nx, ny = shape
         # get fs k - space
@@ -120,7 +121,10 @@ class SheppLogan:
         y_u = y_center + int(ac_lines / 2)
         # fill ac region
         k_us[:, y_l:y_u] = k_fs[:, y_l:y_u]
-        if mode == "skip":
+        if mode == "grappa":
+            k_us[:, :y_l:acceleration] = k_fs[:, :y_l:acceleration]
+            k_us[:, y_u::acceleration] = k_fs[:, y_u::acceleration]
+        elif mode == "skip":
             # we fill every acc._factor line in outer k_space and move one step for every echo
             for e in range(num_echoes):
                 k_us[:, e:y_l:acceleration, ..., e] = k_fs[:, e:y_l:acceleration, ..., e]
@@ -140,11 +144,15 @@ class SheppLogan:
             # draw samples from the outer lines
             num_outer_lines = int((shape[1] - ac_lines) / acceleration)
             rng = np.random.default_rng(seed)
-            indices = rng.choice(
-                np.arange(0, y_l),
-                size=(num_outer_lines, num_echoes),
-                replace=False,
-                p=weighting
+            indices = np.stack([
+                rng.choice(
+                    np.arange(0, y_l),
+                    size=(num_outer_lines),
+                    replace=False,
+                    p=weighting
+                ) for e in range(num_echoes)
+                ],
+                axis=1
             )
             # move half of them to other side of ac lines
             indices[::2] = shape[1] - 1 - indices[::2]
