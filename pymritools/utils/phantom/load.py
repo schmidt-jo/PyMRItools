@@ -12,7 +12,6 @@ from pymritools.utils import fft, gaussian_2d_kernel, torch_save
 
 log_module = logging.getLogger(__name__)
 seed = 10
-torch.manual_seed(seed)
 
 
 class SheppLogan:
