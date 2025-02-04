@@ -317,9 +317,11 @@ class Kernel:
             dwell=params.dwell,
             system=system
         )
-        # calculate time for oversampling * dwells more
+        # calculate time for oversampling * dwell
         t_adc_extended = int((params.resolution_n_read + 1) * params.oversampling) * params.dwell
-        # calculate area for 1 read point more, s.th. flat area for original number read stays the same
+        # In case we want to turn around the readout (bipolar readout directions, we want to make sure that
+        # there is enough room for a k-space line shift (on even samples, the zero sample is considered positive,
+        # i.e. there is one more negative sample number than positives)
         flat_area = (
                             params.delta_k_read * (params.resolution_n_read + 1)
                     ) * np.power(-1, int(invert_grad_read_dir))
