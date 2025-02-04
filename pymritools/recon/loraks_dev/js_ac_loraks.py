@@ -1,0 +1,197 @@
+import logging
+import pathlib as plib
+
+import torch
+from torch.nn.functional import pad
+import tqdm
+import plotly.graph_objects as go
+import plotly.subplots as psub
+
+from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
+from pymritools.recon.loraks_dev.operators import c_operator
+from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import fft, root_sum_of_squares
+
+
+def fourier_mv(k, v, ps):
+    """
+    Compute mv directly in Fourier space with additional conjugate filters and extra padding.
+    Pads all inputs into the Fourier transform by patch size (ps) + extra padding, sums conjugate terms,
+    and finally crops to avoid boundary issues.
+
+    Parameters:
+        k (torch.Tensor): Input tensor with shape [nx, ny, nc] (real or complex-valued).
+        v (torch.Tensor): Compression matrix with shape [nc * ps**2, l] (real or complex-valued).
+        ps (int): Patch size (side length).
+        extra_pad_factor (int): Factor by which to increase padding beyond the patch size.
+
+    Returns:
+        torch.Tensor: Result tensor of shape [(nx - ps + 1) * (ny - ps + 1), l].
+    """
+    # Extract dimensions
+    nx, ny, nc = k.shape  # Input tensor dimensions
+    ps2, l = v.shape  # Compression matrix dimensions
+    assert ps2 == nc * ps ** 2, f"Compression matrix v must have {nc * ps ** 2} rows, but got {ps2}."
+
+    # Make inputs complex if not already
+    if not torch.is_complex(k):
+        k = k.to(dtype=torch.complex64)
+    if not torch.is_complex(v):
+        v = v.to(dtype=torch.complex64)
+
+    # Total padding: patch size + extra padding on all sides
+    pad_size = (ps, ps, ps, ps)  # (left, right, top, bottom)
+
+    # Pad input `k` along spatial dimensions (preserve channel dimension)
+    k_padded = pad(k.permute(2, 0, 1), pad_size, mode="constant", value=0)  # [nc, nx + 2*(ps+extra_pad), ny + 2*(ps+extra_pad)]
+    k_padded = k_padded.permute(1, 2, 0)  # Back to shape [nx + 2*(ps+extra_pad), ny + 2*(ps+extra_pad), nc]
+
+    # Reshape and pad compression matrix `v`
+    v_reshaped = v.view(ps, ps, nc, l)  # Reshape `v` into blocks [nc, ps, ps, l]
+    # calculate padding
+    v_pad_l = (k_padded.shape[0] - v_reshaped.shape[0]) // 2
+    v_pad_r = k_padded.shape[0] - v_reshaped.shape[0] - v_pad_l
+    v_pad_u = (k_padded.shape[1] - v_reshaped.shape[1]) // 2
+    v_pad_d = k_padded.shape[1] - v_reshaped.shape[1] - v_pad_u
+    v_padded = pad(v_reshaped.permute(2, 3, 0, 1), (v_pad_l, v_pad_r, v_pad_u, v_pad_d), mode="constant", value=0)
+    v_padded = v_padded.permute(2, 3, 0, 1)
+    # Perform Fourier transform on padded `k` and `v`
+    k_fft = fft(k_padded, img_to_k=False, axes=(0, 1))  # FFT of k: [nx+2*(ps+extra_pad), ny+2*(ps+extra_pad), nc]
+    v_fft = fft(torch.flip(v_padded, dims=(0, 1)), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*(ps+extra_pad), ny+2*(ps+extra_pad), l]
+
+    # Combine original and conjugated filters
+    # Summation in Fourier space before inverse transformation, summation of coils
+    result_fft = (k_fft[..., None] * v_fft).sum(dim=-2)
+
+    # Inverse Fourier transform back to spatial domain
+    result_spatial = fft(result_fft, img_to_k=True, axes=(0, 1))  # Shape: [nx+2*(ps+extra_pad), ny+2*(ps+extra_pad), l]
+
+    # Extract valid convolution region by cropping out the padded sections
+    edge = int(ps * 1.5)
+    result_cropped = result_spatial[edge:-edge, edge:-edge, :]  # Shape: [nx, ny, l]
+
+    result_final = result_cropped.reshape((-1, l))
+
+    return result_final
+
+
+def main():
+    logging.info("Set Device")
+    device = torch.device("cuda")
+
+    logging.info(f"Set Paths")
+    path = plib.Path(__name__).parent.absolute()
+    path_fig = path.joinpath("figures").absolute()
+    path_fig.mkdir(exist_ok=True, parents=True)
+
+    logging.info("Set Phantom")
+    nx, ny, nc, ne = (256, 256, 4, 2)
+    sl_us = SheppLogan().get_sub_sampled_k_space(
+        shape=(nx, ny), ac_lines=30, acceleration=3, mode="weighted", num_coils=nc, num_echoes=ne
+    )
+    sl_us = sl_us.contiguous()
+    img_us = torch.abs(fft(sl_us, axes=(0, 1)))
+    # img_us = root_sum_of_squares(img_us, dim_channel=-2)
+    mask = (torch.abs(sl_us) > 1e-9).to(torch.int)
+
+    logging.info("Find AC Region")
+    cx = int(nx / 2)
+    cy = int(ny / 2)
+    nce = mask.view((nx, ny, -1)).shape[-1]
+    for ix in tqdm.trange(cx - 1, desc="AC Region search - x"):
+        if torch.sum(mask.view((nx, ny, nce))[cx - ix - 1:cx + ix, cy]) < nce * (2 * ix + 1):
+            break
+    for iy in tqdm.trange(cy - 1, desc="AC Region search - y"):
+        if torch.sum(mask.view((nx, ny, nce))[cx, cy - iy - 1:cy + iy]) < nce * (2 * iy + 1):
+            break
+    sl_ac = sl_us[cx - ix:cx + ix, cy - iy:cy + iy, :, :]
+    sl_ac = sl_ac.contiguous()
+    mask = mask.to(torch.bool)
+    k_data_consistency = sl_us[mask]
+
+    logging.info("Set Parameters")
+    rank_s = 50
+    lambda_s = 0.1
+    max_num_iter = 400
+
+    logging.info("Set Matrix Indices and AC Matrix")
+    indices, matrix_shape = get_linear_indices(
+        k_space_shape=sl_us.shape, patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
+    )
+    matrix_shape = tuple((torch.tensor(matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
+    ac_indices, ac_matrix_shape = get_linear_indices(
+        k_space_shape=sl_ac.shape, patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
+    )
+    # ac_matrix_shape = tuple((torch.tensor(ac_matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
+    ac_matrix = c_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
+
+    _, _, v = torch.linalg.svd(ac_matrix, full_matrices=False)
+    v = v.mH[:, rank_s:]
+    del ac_matrix
+    torch.cuda.empty_cache()
+
+    logging.info("Init optimization")
+    k_init = torch.randn_like(sl_us) * 1e-5
+    k_init[mask] = sl_us[mask]
+    k = k_init.clone().to(device).requires_grad_()
+    k_data_consistency = k_data_consistency.to(device)
+    lr = torch.linspace(5e-3, 5e-4, max_num_iter, device=device)
+    mask = mask.to(device)
+    indices = indices.to(device)
+
+    # do FFT speedups of haldar
+    progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
+    for i in progress_bar:
+        loss_1 = torch.linalg.norm(
+            k[mask] - k_data_consistency
+        )
+
+        # matrix = s_operator(
+        #         k_space=k, indices=indices, matrix_shape=matrix_shape
+        # )
+        # loss_2 = torch.linalg.norm(
+        #     torch.matmul(matrix, v),
+        #     ord="fro"
+        # )
+        mv = fourier_mv(k=k.view(*k.shape[:2], -1), v=v, ps=5)
+        loss_2 = torch.linalg.norm(mv, ord="fro")
+
+        loss = loss_1 + lambda_s * loss_2
+        loss.backward()
+
+        with torch.no_grad():
+            k -= lr[i] * k.grad
+        k.grad.zero_()
+
+        progress_bar.postfix = (
+            f"loss low rank: {1e3 * loss_2.item():.2f} -- loss data: {1e3 * loss_1.item():.2f} -- "
+            f"total_loss: {1e3 * loss.item():.2f}"
+        )
+    k_recon = k.detach().cpu()
+    img_recon = torch.abs(fft(k_recon, axes=(0, 1)))
+
+    fig = psub.make_subplots(
+        rows=2, cols=4
+    )
+    for i, d in enumerate([sl_us, img_us, k_recon, img_recon]):
+        if i % 2 == 0:
+            d = torch.log(torch.abs(d))
+        else:
+            d = torch.abs(d)
+        row = int(i % 2) + 1
+        for c in range(2):
+            col = int(i / 2) + 2 * c + 1
+            fig.add_trace(
+                go.Heatmap(z=d[:, :, c, 0], showscale=False),
+                row=row, col=col
+            )
+            fig.update_xaxes(visible=False, row=row, col=col)
+            xaxis = fig.data[-1].xaxis
+            fig.update_yaxes(visible=False, scaleanchor=xaxis, row=row, col=col)
+    fig.show()
+
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    main()
