@@ -283,7 +283,7 @@ def ac_loraks(
 
     # get indices for operators on whole image to calculate the count matrix for reconstruction
     indices = get_idx_2d_square_neighborhood_patches_in_shape(
-        shape_2d=(n_read, n_phase), nb_shift=(1, 1), nb_size=2+radius, device=torch.device("cpu")
+        shape_2d=(n_read, n_phase),nb_size=2+radius, device=torch.device("cpu")
     )
     # get the indices within the ac region
     # convert to tensors
