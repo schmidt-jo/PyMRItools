@@ -1,3 +1,3 @@
-from .load import SheppLogan
+from .ps import Phantom
 
-__all__ = ["SheppLogan"]
+__all__ = ["Phantom"]
