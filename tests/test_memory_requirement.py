@@ -6,7 +6,7 @@ import plotly.colors as plc
 import plotly.subplots as psub
 import polars as pl
 
-from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import Phantom
 from pymritools.recon.loraks_dev.operators import c_operator, s_operator
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
@@ -121,10 +121,9 @@ def iteration_per_size(nx, ny, nc, ne, ranks, device):
 
     # create shepp logan using its methods. The seed is set.
     # The impact of non-square slice dimensions should be neglicible
-    sl_us_phantom = SheppLogan().get_sub_sampled_k_space(
-        shape=(nx, ny), acceleration=3, ac_lines=20, mode="skip", as_torch_tensor=True,
-        num_coils=nc, num_echoes=ne
-    )
+    phantom = Phantom.get_shepp_logan(shape=(nx, ny),
+        num_coils=nc, num_echoes=ne)
+    sl_us_phantom = phantom.sub_sample_ac_skip_lines(acceleration=3, ac_lines=20)
 
     # save phantom for matlab tests
     if ne == 4:

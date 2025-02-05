@@ -12,7 +12,7 @@ import torch
 import plotly.subplots as psub
 import plotly.graph_objects as go
 
-from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import Phantom
 from pymritools.utils import fft, root_sum_of_squares
 from pymritools.recon.loraks.algorithms import ac_loraks
 
@@ -20,12 +20,10 @@ from tests.utils import get_test_result_output_dir
 
 
 def create_phantom(nx: int, ny: int, nc: int, ne: int):
-    sl_fs = SheppLogan().get_2D_k_space(
-        shape=(nx, ny), num_coils=nc, num_echoes=ne
-    )
-    sl = SheppLogan().get_sub_sampled_k_space(
-        shape=(nx, ny), acceleration=3, ac_lines=30, mode='skip', num_coils=nc, num_echoes=ne
-    )
+    phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
+    sl_fs = phantom.get_2d_k_space()
+    sl = phantom.sub_sample_ac_skip_lines(acceleration=3, ac_lines=30)
+
     fs_img = fft(sl_fs, axes=(0, 1))
     fs_img = root_sum_of_squares(fs_img, dim_channel=-2)
 

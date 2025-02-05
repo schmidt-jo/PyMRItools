@@ -6,7 +6,7 @@ import numpy as np
 from tests.utils import get_test_result_output_dir
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
 from pymritools.recon.loraks_dev.operators import c_operator, c_adjoint_operator, s_operator, s_adjoint_operator
-from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import Phantom
 
 import plotly.subplots as psub
 import plotly.graph_objects as go
@@ -75,7 +75,8 @@ def test_k_space_to_c_matrix_and_back():
     loraks_nb_side_length = 5       # nb size = side_length**2
 
     # create sub - sampled phantom
-    k_space_us = SheppLogan().get_sub_sampled_k_space(shape=shape, acceleration=2, ac_lines=30)
+    phantom = Phantom.get_shepp_logan(shape=shape)
+    k_space_us = phantom.sub_sample_ac_skip_lines(acceleration=2, ac_lines=30)
     # add dims to get input shape [nx, ny, nz, nc, ne, m]
     k_space_us = k_space_us[:, :, None, :, None, None]
     shape = k_space_us.shape
@@ -123,7 +124,8 @@ def test_k_space_to_s_matrix_and_back():
     loraks_nb_side_length = 5       # nb size = side_length**2
 
     # create sub-sampled phantom
-    k_space_us = SheppLogan().get_sub_sampled_k_space(shape=shape, acceleration=2, ac_lines=30)
+    phantom = Phantom.get_shepp_logan(shape=shape)
+    k_space_us = phantom.sub_sample_ac_skip_lines(acceleration=2, ac_lines=30)
     # add dims to get input shape [nx, ny, nz, nc, ne, m]
     k_space_us = k_space_us[:, :, None, :, None, None]
     shape = k_space_us.shape

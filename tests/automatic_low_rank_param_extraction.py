@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 import plotly.colors as plc
 
-from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import Phantom
 from pymritools.recon.loraks_dev.operators import c_operator, s_operator
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
 from tests.utils import get_test_result_output_dir
@@ -35,10 +35,9 @@ def test_automatic_low_rank_param_extraction():
     s_ratios = []
     for ai, acc in enumerate(accs.tolist()):
         # get phantom
-        sl_us = SheppLogan().get_sub_sampled_k_space(
-            shape=shape[:2], acceleration=acc, ac_lines=30, mode="skip", as_torch_tensor=True,
-            num_echoes=shape[-1], num_coils=shape[-2]
-        )
+        phantom = Phantom.get_shepp_logan(shape=shape[:2], num_coils=shape[-2], num_echoes=shape[-1])
+
+        sl_us = phantom.sub_sample_ac_skip_lines(acceleration=acc, ac_lines=30)
 
         # get indices
         loraks_patch_mapping, reshape = get_all_idx_nd_square_patches_in_nd_shape(

@@ -10,7 +10,7 @@ import torch.linalg as LA
 import numpy as np
 
 from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
-from pymritools.utils.phantom import SheppLogan
+from pymritools.utils import Phantom
 from pymritools.recon.loraks_dev.operators import s_operator, c_operator
 from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
 from tests.utils import do_performance_test
@@ -135,7 +135,9 @@ def test_show_svd_recovery_for_SL():
     which should yield a Low Rank C matrix representation inherently. Though we aim at not having a well
     defined singular value cutoff as in the previous simulation.
     """
-    sl_k_space = SheppLogan().get_2D_k_space(shape=(256, 256), as_torch_tensor=True, num_coils=4)
+    phantom = Phantom.get_shepp_logan(shape=(256, 256), num_coils=4)
+    sl_k_space = phantom.get_2d_k_space()
+
     sl_k_space += torch.randn_like(sl_k_space) * 1e-4
     shape = sl_k_space.shape
     c_mapping, reshape = get_all_idx_nd_square_patches_in_nd_shape(
