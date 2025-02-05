@@ -1,6 +1,8 @@
 # DEV considerations
 
-- [ ] Todo Jochen: Find paper that estimates the cropping rank from median or something
+- [x] Todo Jochen: Find paper that estimates the cropping rank from median or something
+  - [Manjon et al. 2015](http://dx.doi.org/10.1016/j.media.2015.01.004) uses the median of eigenvalues to estimate the noise contributions in singular values.
+  - we could use something similar. If the data is sparse i.e. low rank, the median of the eigenvalues might provide a robust estimator for the singular value cutoff region.
 - [ ] Can we automatically adjust and calculate the rank? E.g. 90% SV integral
   - [ ] Quality difference between SV cropping and ReLU shift (polynomial decay, exponential decay)
 - [ ] Can we estimate the target LORAKS rank from one SVD run upfront?
