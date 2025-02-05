@@ -10,6 +10,7 @@ from .matrix_indexing import (
     get_flat_idx_square_neighborhood_patches_in_shape
 )
 from .algorithms import cgd, randomized_svd
+from .phantom import Phantom
 
 __all__ = [
     "root_sum_of_squares", "fft", "gaussian_2d_kernel",
