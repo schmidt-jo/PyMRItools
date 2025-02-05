@@ -1,3 +1,3 @@
-from .ps import Phantom
+from .phant import Phantom
 
 __all__ = ["Phantom"]
