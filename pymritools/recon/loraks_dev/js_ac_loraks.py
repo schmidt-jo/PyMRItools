@@ -2,15 +2,15 @@ import logging
 import pathlib as plib
 
 import torch
-from torch.nn.functional import pad
 import tqdm
 import plotly.graph_objects as go
 import plotly.subplots as psub
+from numpy.ma.core import shape
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.recon.loraks_dev.operators import c_operator
-from pymritools.utils.phantom import SheppLogan
-from pymritools.utils import fft, root_sum_of_squares
+from pymritools.utils import Phantom
+from pymritools.utils import fft
 
 
 def fourier_mv(k, v, ps):
@@ -39,32 +39,27 @@ def fourier_mv(k, v, ps):
     if not torch.is_complex(v):
         v = v.to(dtype=torch.complex64)
 
-    # Total padding: patch size + extra padding on all sides
-    pad_size = (ps, ps, ps, ps)  # (left, right, top, bottom)
-
-    # Pad input `k` along spatial dimensions (preserve channel dimension)
-    k_padded = pad(k.permute(2, 0, 1), pad_size, mode="constant", value=0)  # [nc, nx + 2*(ps+extra_pad), ny + 2*(ps+extra_pad)]
-    k_padded = k_padded.permute(1, 2, 0)  # Back to shape [nx + 2*(ps+extra_pad), ny + 2*(ps+extra_pad), nc]
+    # pad inputs
+    k_padded = torch.zeros((nx + 2 * ps, ny + 2 * ps, nc), dtype=k.dtype, device=k.device)
+    k_padded[ps:-ps, ps:-ps, :] = k
 
     # Reshape and pad compression matrix `v`
     v_reshaped = v.view(ps, ps, nc, l)  # Reshape `v` into blocks [nc, ps, ps, l]
-    # calculate padding
-    v_pad_l = (k_padded.shape[0] - v_reshaped.shape[0]) // 2
-    v_pad_r = k_padded.shape[0] - v_reshaped.shape[0] - v_pad_l
-    v_pad_u = (k_padded.shape[1] - v_reshaped.shape[1]) // 2
-    v_pad_d = k_padded.shape[1] - v_reshaped.shape[1] - v_pad_u
-    v_padded = pad(v_reshaped.permute(2, 3, 0, 1), (v_pad_l, v_pad_r, v_pad_u, v_pad_d), mode="constant", value=0)
-    v_padded = v_padded.permute(2, 3, 0, 1)
+    v_padded = torch.zeros((*k_padded.shape, l), dtype=v.dtype, device=v.device)
+    pad_l = (k_padded.shape[0] - v_reshaped.shape[0]) // 2
+    pad_d = (k_padded.shape[1] - v_reshaped.shape[1]) // 2
+    v_padded[pad_l:pad_l+ps, pad_d:pad_d+ps, :, :] = v_reshaped
+
     # Perform Fourier transform on padded `k` and `v`
-    k_fft = fft(k_padded, img_to_k=False, axes=(0, 1))  # FFT of k: [nx+2*(ps+extra_pad), ny+2*(ps+extra_pad), nc]
-    v_fft = fft(torch.flip(v_padded, dims=(0, 1)), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*(ps+extra_pad), ny+2*(ps+extra_pad), l]
+    k_fft = fft(k_padded, img_to_k=False, axes=(0, 1))  # FFT of k: [nx+2*ps, ny+2*ps, nc]
+    v_fft = fft(torch.flip(v_padded, dims=(0, 1)), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
 
     # Combine original and conjugated filters
     # Summation in Fourier space before inverse transformation, summation of coils
     result_fft = (k_fft[..., None] * v_fft).sum(dim=-2)
 
     # Inverse Fourier transform back to spatial domain
-    result_spatial = fft(result_fft, img_to_k=True, axes=(0, 1))  # Shape: [nx+2*(ps+extra_pad), ny+2*(ps+extra_pad), l]
+    result_spatial = fft(result_fft, img_to_k=True, axes=(0, 1))  # Shape: [nx+2*ps, ny+2*ps, l]
 
     # Extract valid convolution region by cropping out the padded sections
     edge = int(ps * 1.5)
@@ -86,9 +81,9 @@ def main():
 
     logging.info("Set Phantom")
     nx, ny, nc, ne = (256, 256, 4, 2)
-    sl_us = SheppLogan().get_sub_sampled_k_space(
-        shape=(nx, ny), ac_lines=30, acceleration=3, mode="weighted", num_coils=nc, num_echoes=ne
-    )
+    phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
+    sl_us = phantom.sub_sample_ac_weighted_lines(acceleration=3, ac_lines=30)
+
     sl_us = sl_us.contiguous()
     img_us = torch.abs(fft(sl_us, axes=(0, 1)))
     # img_us = root_sum_of_squares(img_us, dim_channel=-2)
