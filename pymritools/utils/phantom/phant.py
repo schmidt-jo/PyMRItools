@@ -14,8 +14,8 @@ log_module = logging.getLogger(__name__)
 
 class Phantom:
     def __init__(
-            self, shape: tuple[int, int], num_coils: int = 1, num_echoes: int = 1):
-        self.shape: tuple[int, int] = shape
+            self, shape: tuple, num_coils: int = 1, num_echoes: int = 1):
+        self.shape: tuple = shape
         self.num_coils: int = num_coils
         self.num_echoes: int = num_echoes
         # set seed for reproducibility
@@ -123,7 +123,7 @@ class Phantom:
         return k_us, k_fs, y_l, y_u
 
     @classmethod
-    def get_shepp_logan(cls, shape: tuple[int, int], num_coils: int = 1, num_echoes: int = 1, cs_mode: str = "random"):
+    def get_shepp_logan(cls, shape: tuple, num_coils: int = 1, num_echoes: int = 1, cs_mode: str = "random"):
         phantom = cls(shape=shape, num_coils=num_coils, num_echoes=num_echoes)
         # load shepp logan image
         path = plib.Path(__file__).absolute().parent.joinpath("phantom").with_suffix(".png")
@@ -134,7 +134,7 @@ class Phantom:
         return phantom
 
     @classmethod
-    def get_jupiter(cls, shape: tuple[int, int], num_coils: int = 1, num_echoes: int = 1):
+    def get_jupiter(cls, shape: tuple, num_coils: int = 1, num_echoes: int = 1):
         phantom = cls(shape=shape, num_coils=num_coils, num_echoes=num_echoes)
         # set image
         path = plib.Path(__file__).absolute().parent.joinpath("jupiter_512").with_suffix(".png")
