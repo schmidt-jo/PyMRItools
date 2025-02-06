@@ -65,3 +65,11 @@ Datasets:
   - Loss criterion for stopping
   - [x] SOR-SVD, RSVD oversampling size (in dataset tests) 
   - [x] SOR-SVD, RSVD number of power iterations (in dataset tests)
+
+
+# Questions Justin
+- S FFT convolution:
+  The FFT convolution argument is clear for the C-Matrix type, however, the S-matrix
+  convolution structure is not as obvious. How would one need to adopt the $L_i$ operator considering in our algorithm
+  only the forward pass to the loss function is necessary. It appears as its a sum of the C convolution structure
+  and a conjugated filtering method.
