@@ -5,10 +5,9 @@ import torch
 import tqdm
 import plotly.graph_objects as go
 import plotly.subplots as psub
-from numpy.ma.core import shape
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.recon.loraks_dev.operators import c_operator
+from pymritools.recon.loraks_dev.operators import c_operator, s_operator
 from pymritools.utils import Phantom
 from pymritools.utils import fft
 
@@ -57,8 +56,8 @@ def fourier_mv(k, v, ps):
     # Combine original and conjugated filters
     # Summation in Fourier space before inverse transformation, summation of coils
     result_fft = (k_fft[..., None] * v_fft).sum(dim=-2)
-
     # Inverse Fourier transform back to spatial domain
+    # ToDo check (Parsevals theorem) if we could take the norm before FFT back (should be equivalent) and save one FFT step
     result_spatial = fft(result_fft, img_to_k=True, axes=(0, 1))  # Shape: [nx+2*ps, ny+2*ps, l]
 
     # Extract valid convolution region by cropping out the padded sections
@@ -66,8 +65,48 @@ def fourier_mv(k, v, ps):
     result_cropped = result_spatial[edge:-edge, edge:-edge, :]  # Shape: [nx, ny, l]
 
     result_final = result_cropped.reshape((-1, l))
-
     return result_final
+
+def fourier_mv_s(k, v, ps):
+    """
+    Compute mv directly in Fourier space with additional conjugate filters and extra padding.
+    Pads all inputs into the Fourier transform by patch size (ps) + extra padding, sums conjugate terms,
+    and finally crops to avoid boundary issues. For S matrix
+
+    Parameters:
+        k (torch.Tensor): Input tensor with shape [nx, ny, nc] (real or complex-valued).
+        v (torch.Tensor): Compression matrix with shape [nc * ps**2, l] (real or complex-valued).
+        ps (int): Patch size (side length).
+        extra_pad_factor (int): Factor by which to increase padding beyond the patch size.
+
+    Returns:
+        torch.Tensor: Result tensor of shape [(nx - ps + 1) * (ny - ps + 1), l].
+    """
+    # Extract dimensions
+    nx, ny, nc = k.shape  # Input tensor dimensions
+    ps2, l = v.shape  # Compression matrix dimensions
+    assert ps2 == 2 * nc * ps ** 2, f"Compression matrix v must have {2 * nc * ps ** 2} rows, but got {ps2}."
+
+    # partition v into upper and lower part
+    v1 = v[:nc * ps ** 2, :]
+    v2 = v[nc * ps ** 2:, :]
+
+    # set k flipped
+    k_flipped = torch.flip(k, dims=(0, 1))
+
+    # calculate sp@v and sm@v
+    spv1 = fourier_mv(k=k, v=v1, ps=ps)
+    spv2 = fourier_mv(k=k, v=v2, ps=ps)
+    smv1 = fourier_mv(k=k_flipped, v=v1, ps=ps)
+    smv2 = fourier_mv(k=k_flipped, v=v2, ps=ps)
+
+    # sum of squares of quadrants
+    ul = torch.linalg.norm(spv1.real - smv1.real, ord="fro")
+    ll = torch.linalg.norm(spv1.imag + smv1.imag, ord="fro")
+    ur = torch.linalg.norm(-spv2.imag + smv2.imag, ord="fro")
+    lr = torch.linalg.norm(spv2.real + smv2.real, ord="fro")
+
+    return ul + ll + ur + lr
 
 
 def main():
@@ -80,7 +119,7 @@ def main():
     path_fig.mkdir(exist_ok=True, parents=True)
 
     logging.info("Set Phantom")
-    nx, ny, nc, ne = (256, 256, 4, 2)
+    nx, ny, nc, ne = (256, 256, 3, 2)
     phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
     sl_us = phantom.sub_sample_ac_weighted_lines(acceleration=3, ac_lines=30)
 
@@ -107,22 +146,24 @@ def main():
     logging.info("Set Parameters")
     rank_s = 50
     lambda_s = 0.1
-    max_num_iter = 400
+    max_num_iter = 100
 
     logging.info("Set Matrix Indices and AC Matrix")
-    indices, matrix_shape = get_linear_indices(
-        k_space_shape=sl_us.shape, patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
-    )
-    matrix_shape = tuple((torch.tensor(matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
+
     ac_indices, ac_matrix_shape = get_linear_indices(
         k_space_shape=sl_ac.shape, patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
     )
-    # ac_matrix_shape = tuple((torch.tensor(ac_matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
-    ac_matrix = c_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
+    ac_matrix_shape_s = tuple((torch.tensor(ac_matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
+    # ac_matrix_c = c_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
+    ac_matrix_s = s_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape_s).to(device)
 
-    _, _, v = torch.linalg.svd(ac_matrix, full_matrices=False)
-    v = v.mH[:, rank_s:]
-    del ac_matrix
+    # ev_c, v_c = torch.linalg.eigh(ac_matrix_c.mH @ ac_matrix_c)
+    ev_s, v_s = torch.linalg.eigh(ac_matrix_s.mH @ ac_matrix_s)
+    # eigenvals and corresponding evs are in ascending order
+    # v_c = v_c[:, :-rank_s]
+    v_s = v_s[:, :-2*rank_s]
+
+    del ac_matrix_s
     torch.cuda.empty_cache()
 
     logging.info("Init optimization")
@@ -132,7 +173,6 @@ def main():
     k_data_consistency = k_data_consistency.to(device)
     lr = torch.linspace(5e-3, 5e-4, max_num_iter, device=device)
     mask = mask.to(device)
-    indices = indices.to(device)
 
     # do FFT speedups of haldar
     progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
@@ -148,8 +188,10 @@ def main():
         #     torch.matmul(matrix, v),
         #     ord="fro"
         # )
-        mv = fourier_mv(k=k.view(*k.shape[:2], -1), v=v, ps=5)
-        loss_2 = torch.linalg.norm(mv, ord="fro")
+        # mv = fourier_mv(k=k.view(*k.shape[:2], -1), v=v_c, ps=5)
+        loss_2 = fourier_mv_s(k=k.view(*k.shape[:2], -1), v=v_s, ps=5)
+        # loss_2 = torch.linalg.norm(mv, ord="fro")
+        # loss_2 = torch.linalg.norm(mv_s, ord="fro")
 
         loss = loss_1 + lambda_s * loss_2
         loss.backward()
