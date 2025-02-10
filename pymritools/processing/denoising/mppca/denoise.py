@@ -24,7 +24,7 @@ log_module = logging.getLogger(__name__)
 
 def denoise(settings: DenoiseSettingsMPPCA):
     # load in data
-    input_data, input_img = nifti_load(settings.in_k_space)
+    input_data, input_img = nifti_load(settings.in_path)
     input_data = torch.from_numpy(input_data)
     # ToDo: do for non .nii input
 
@@ -91,6 +91,7 @@ def denoise(settings: DenoiseSettingsMPPCA):
     # save max value to rescale later
     # if too high we set it to 1000
     max_val = torch.max(torch.abs(input_data))
+    # input_data = input_data / max_val * 1e3
 
     # we want to implement a first order stationary noise bias removal from Manjon 2015
     # with noise statistics from mask and St.Jean 2020
@@ -105,9 +106,9 @@ def denoise(settings: DenoiseSettingsMPPCA):
             # use on first echo across all 3 dimensions
             # use rsos of channels if applicable, channel dim =-2
             # take first echo and sum over channels
-            input_data = root_sum_of_squares(input_data[..., 0], dim_channel=-1)
+            input_data = root_sum_of_squares(input_data, dim_channel=-2)
 
-            mask = np.ones(input_data.shape, dtype=bool)
+            mask = np.ones(input_data.shape[:-1], dtype=bool)
             # use autodmri to extract noise voxels
             for idx_ax in tqdm.trange(3, desc="extracting noise voxels, autodmri"):
                 _, _, tmp_mask = estimator.estimate_from_dwis(
@@ -121,13 +122,15 @@ def denoise(settings: DenoiseSettingsMPPCA):
 
         # get to torch
         mask = torch.from_numpy(mask)
-        # extend to time dim
-        mask = mask[:, :, :, None, None].expand(-1, -1, -1, *data_shape[-2:]).to(torch.bool)
+        while mask.shape.__len__() < len(data_shape):
+            mask = mask[..., None]
+        # Expand the mask to fit the data shape
+        mask = mask.expand(*data_shape).to(torch.bool)
         # extract noise data
         noise_voxels = input_data[mask]
         noise_voxels = noise_voxels[noise_voxels > 0]
         sigma, num_channels = ncc_stats.from_noise_voxels(noise_voxels)
-        num_channels = torch.clamp(num_channels, 1, 32)
+        num_channels = min(max(num_channels, 1), 32)
 
         # save plot for reference
         noise_bins = torch.arange(int(max_val / 10)).to(noise_voxels.dtype)
@@ -139,11 +142,24 @@ def denoise(settings: DenoiseSettingsMPPCA):
 
         # create plot
         fig = go.Figure()
-        name_list = ["noise voxels", f"noise dist. estimate, sigma: {sigma.item():.2f}, n: {num_channels.item()}"]
-        for idx_d, data in enumerate([noise_voxels, noise_hist]):
+        name_list = ["noise voxels", f"noise dist. estimate, sigma: {sigma:.2f}, n: {num_channels}"]
+
+        max_num_points = 10000
+        if noise_voxels.shape[0] > max_num_points:
+            plot_noise_vox = torch.permute(noise_voxels, dims=(0,))[:max_num_points]
+        else:
+            plot_noise_vox = noise_voxels
+        fig.add_trace(
+            go.Scattergl(
+                x=plot_noise_vox, y=(0.02 * torch.randn_like(plot_noise_vox)) + 0.05,
+                name="samples", mode="markers", marker=dict(size=2)
+            )
+        )
+
+        for i, d in enumerate([noise_hist, noise_dist]):
             fig.add_trace(
                 go.Scattergl(
-                    x=noise_bins, y=data, name=name_list[idx_d],
+                    x=noise_bins, y=d, name=name_list[i],
                 )
             )
         fig.update_layout(
