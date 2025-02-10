@@ -12,7 +12,7 @@ from pymritools.utils import Phantom
 from pymritools.utils import fft
 
 
-def fourier_mv(k, v, ps):
+def fourier_mv(k, v, ps, s: bool = False):
     """
     Compute mv directly in Fourier space with additional conjugate filters and extra padding.
     Pads all inputs into the Fourier transform by patch size (ps) + extra padding, sums conjugate terms,
@@ -49,9 +49,14 @@ def fourier_mv(k, v, ps):
     pad_d = (k_padded.shape[1] - v_reshaped.shape[1]) // 2
     v_padded[pad_l:pad_l+ps, pad_d:pad_d+ps, :, :] = v_reshaped
 
-    # Perform Fourier transform on padded `k` and `v`
-    k_fft = fft(k_padded, img_to_k=False, axes=(0, 1))  # FFT of k: [nx+2*ps, ny+2*ps, nc]
-    v_fft = fft(torch.flip(v_padded, dims=(0, 1)), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
+    if s:
+        # Perform Fourier transform on padded `k` and `v`
+        k_fft = torch.conj(fft(k_padded, img_to_k=False, axes=(0, 1)))  # FFT of k: [nx+2*ps, ny+2*ps, nc]
+        v_fft = fft(torch.conj(v_padded), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
+    else:
+        # Perform Fourier transform on padded `k` and `v`
+        k_fft = fft(k_padded, img_to_k=False, axes=(0, 1))  # FFT of k: [nx+2*ps, ny+2*ps, nc]
+        v_fft = fft(torch.flip(v_padded, dims=(0, 1)), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
 
     # Combine original and conjugated filters
     # Summation in Fourier space before inverse transformation, summation of coils
@@ -66,6 +71,7 @@ def fourier_mv(k, v, ps):
 
     result_final = result_cropped.reshape((-1, l))
     return result_final
+
 
 def fourier_mv_s(k, v, ps):
     """
@@ -84,29 +90,21 @@ def fourier_mv_s(k, v, ps):
     """
     # Extract dimensions
     nx, ny, nc = k.shape  # Input tensor dimensions
+    # complex rep
+    v = v[::2] + 1j * v[1::2]
     ps2, l = v.shape  # Compression matrix dimensions
-    assert ps2 == 2 * nc * ps ** 2, f"Compression matrix v must have {2 * nc * ps ** 2} rows, but got {ps2}."
+    assert ps2 == nc * ps ** 2, f"Compression matrix v must have {nc * ps ** 2} rows, but got {ps2}."
 
-    # partition v into upper and lower part
-    v1 = v[:nc * ps ** 2, :]
-    v2 = v[nc * ps ** 2:, :]
+    # Make inputs complex if not already
+    if not torch.is_complex(k):
+        k = k.to(dtype=torch.complex64)
+    if not torch.is_complex(v):
+        v = v.to(dtype=torch.complex64)
 
-    # set k flipped
-    k_flipped = torch.flip(k, dims=(0, 1))
+    mv_c = fourier_mv(k=k, v=v, ps=ps, s=False)
+    mv_s = fourier_mv(k=k, v=v, ps=ps, s=True)
 
-    # calculate sp@v and sm@v
-    spv1 = fourier_mv(k=k, v=v1, ps=ps)
-    spv2 = fourier_mv(k=k, v=v2, ps=ps)
-    smv1 = fourier_mv(k=k_flipped, v=v1, ps=ps)
-    smv2 = fourier_mv(k=k_flipped, v=v2, ps=ps)
-
-    # sum of squares of quadrants
-    ul = torch.linalg.norm(spv1.real - smv1.real, ord="fro")
-    ll = torch.linalg.norm(spv1.imag + smv1.imag, ord="fro")
-    ur = torch.linalg.norm(-spv2.imag + smv2.imag, ord="fro")
-    lr = torch.linalg.norm(spv2.real + smv2.real, ord="fro")
-
-    return ul + ll + ur + lr
+    return torch.sqrt(torch.linalg.norm(mv_c, ord="fro")**2 + torch.linalg.norm(mv_s, ord="fro")**2)
 
 
 def main():
@@ -145,7 +143,7 @@ def main():
 
     logging.info("Set Parameters")
     rank_s = 50
-    lambda_s = 0.1
+    lambda_s = 0.2
     max_num_iter = 100
 
     logging.info("Set Matrix Indices and AC Matrix")
@@ -153,17 +151,21 @@ def main():
     ac_indices, ac_matrix_shape = get_linear_indices(
         k_space_shape=sl_ac.shape, patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
     )
-    ac_matrix_shape_s = tuple((torch.tensor(ac_matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
-    # ac_matrix_c = c_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
-    ac_matrix_s = s_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape_s).to(device)
+    # ac_matrix_shape_s = tuple((torch.tensor(ac_matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
+    ac_matrix_c = c_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
+    # ac_matrix_s = s_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape_s).to(device)
 
-    # ev_c, v_c = torch.linalg.eigh(ac_matrix_c.mH @ ac_matrix_c)
-    ev_s, v_s = torch.linalg.eigh(ac_matrix_s.mH @ ac_matrix_s)
+    ev_c, v_c = torch.linalg.eigh(ac_matrix_c.mH @ ac_matrix_c)
+    # ev_s, v_s = torch.linalg.eigh(ac_matrix_s.mH @ ac_matrix_s)
     # eigenvals and corresponding evs are in ascending order
-    # v_c = v_c[:, :-rank_s]
-    v_s = v_s[:, :-2*rank_s]
+    v_c = v_c[:, :-rank_s]
+    # v_s = v_s[:, :-rank_s]
+    # complex number representation
+    # v_s = torch.reshape(v_s, (2 * nce, -1, v_s.shape[-1]))
+    # v_s = v_s[::2] + v_s[1::2] * 1j
+    # v_s = torch.reshape(v_s, (-1, v_s.shape[-1]))
 
-    del ac_matrix_s
+    del ac_matrix_c
     torch.cuda.empty_cache()
 
     logging.info("Init optimization")
@@ -188,9 +190,10 @@ def main():
         #     torch.matmul(matrix, v),
         #     ord="fro"
         # )
-        # mv = fourier_mv(k=k.view(*k.shape[:2], -1), v=v_c, ps=5)
-        loss_2 = fourier_mv_s(k=k.view(*k.shape[:2], -1), v=v_s, ps=5)
-        # loss_2 = torch.linalg.norm(mv, ord="fro")
+        mv = fourier_mv(k=k.view(*k.shape[:2], -1), v=v_c, ps=5)
+        # loss_2 = fourier_mv_s(k=k.view(*k.shape[:2], -1), v=v_s, ps=5)
+        # loss_2 = fourier_mv_s(k=k.view(*k.shape[:2], -1), v=v_s, ps=5)
+        loss_2 = torch.linalg.norm(mv, ord="fro")
         # loss_2 = torch.linalg.norm(mv_s, ord="fro")
 
         loss = loss_1 + lambda_s * loss_2
@@ -226,7 +229,6 @@ def main():
             xaxis = fig.data[-1].xaxis
             fig.update_yaxes(visible=False, scaleanchor=xaxis, row=row, col=col)
     fig.show()
-
 
 
 if __name__ == '__main__':
