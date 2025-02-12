@@ -42,6 +42,9 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple
 
 
 def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
+    # reverse above logic
+    s_matrix = s_matrix.view(-1, 2)
+
     # allocat
     dim = torch.prod(torch.tensor(k_space_dims))
 
