@@ -6,7 +6,7 @@ import numpy as np
 import tqdm
 import polars as pl
 
-from pymritools.utils.phantom import SheppLogan
+from pymritools.utils.phantom import Phantom
 from pymritools.utils import fft, root_sum_of_squares
 import plotly.graph_objects as go
 import plotly.subplots as psub
@@ -111,8 +111,11 @@ def create_phantom(nx: int = 256, ny: int = 256, nc: int = 1, ne: int = 1):
     shape = (nx, ny)
     logging.info("get SheppLogan phantom")
     logging.info("add virtual coils")
-    sl_us_k = SheppLogan().get_sub_sampled_k_space(
-        shape=shape, num_coils=nc, acceleration=2, num_echoes=ne
+    phantom = Phantom.get_shepp_logan(
+        shape=shape, num_coils=nc, num_echoes=ne
+    )
+    sl_us_k = phantom.sub_sample_ac_weighted_lines(
+        acceleration=2, ac_lines=30
     )
     sl_us_k = torch.flip(sl_us_k, dims=(0,))
 
