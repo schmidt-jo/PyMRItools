@@ -26,5 +26,5 @@ __all__ = [
     "get_idx_2d_circular_neighborhood_patches_in_shape",
     "get_flat_idx_square_neighborhood_patches_in_shape",
     "get_flat_idx_circular_neighborhood_patches_in_shape",
-    "cgd", "randomized_svd"
+    "cgd", "randomized_svd", "Phantom"
 ]
