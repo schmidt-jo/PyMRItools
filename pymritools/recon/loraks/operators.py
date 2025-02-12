@@ -5,7 +5,7 @@ import torch
 import plotly.graph_objects as go
 import plotly.subplots as psub
 
-from pymritools.utils.phantom import SheppLogan
+from pymritools.utils.phantom import Phantom
 from pymritools.utils import (
     fft,
     get_idx_2d_circular_neighborhood_patches_in_shape,
@@ -119,11 +119,10 @@ if __name__ == '__main__':
     logging.info("load phantom")
     # load phantom
     size_x, size_y = (256, 256)
-    sl_phantom = SheppLogan()
-    sl_fs_img = sl_phantom.get_2D_image(shape=(size_x, size_y), as_torch_tensor=True)
-    sl_us_k = sl_phantom.get_sub_sampled_k_space(
-        shape=(size_x, size_y), acceleration=3, ac_lines=32, mode="weighted",
-        as_torch_tensor=True
+    phantom = Phantom.get_shepp_logan(shape=(size_x, size_y))
+    sl_fs_img = phantom.get_2d_image()
+    sl_us_k = phantom.sub_sample_ac_weighted_lines(
+        acceleration=3, ac_lines=32
     )
     # cast to dimensions [x, y, ch, t]
     sl_us_k = sl_us_k[:, :, None, None]
