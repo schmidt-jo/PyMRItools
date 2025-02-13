@@ -108,6 +108,8 @@ def nifti_save(
 
     if torch.is_tensor(data):
         data = data.cpu().numpy()
+    if data.dtype == bool:
+        data = data.astype(np.int32)
     if torch.is_tensor(img_aff):
         img_aff = img_aff.cpu().numpy()
     if isinstance(img_aff, np.ndarray):
