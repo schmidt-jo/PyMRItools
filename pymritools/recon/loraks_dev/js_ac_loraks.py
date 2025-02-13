@@ -78,7 +78,6 @@ def fourier_mv_s(k, v, ps):
         k (torch.Tensor): Input tensor with shape [nx, ny, nc] (real or complex-valued).
         v (torch.Tensor): Compression matrix with shape [nc * ps**2, l] (real or complex-valued).
         ps (int): Patch size (side length).
-        extra_pad_factor (int): Factor by which to increase padding beyond the patch size.
 
     Returns:
         torch.Tensor: Result tensor of shape [(nx - ps + 1) * (ny - ps + 1), l].
@@ -88,14 +87,6 @@ def fourier_mv_s(k, v, ps):
     # complex rep
     h = v.shape[0] // 2
     v = v[::2] + 1j * v[1::2]
-    ps2, l = v.shape  # Compression matrix dimensions
-    assert ps2 == nc * ps ** 2, f"Compression matrix v must have {nc * ps ** 2} rows, but got {ps2}."
-
-    # Make inputs complex if not already
-    if not torch.is_complex(k):
-        k = k.to(dtype=torch.complex64)
-    if not torch.is_complex(v):
-        v = v.to(dtype=torch.complex64)
 
     mv_c = fourier_mv(k=k, v=v, ps=ps)
     mv_s = torch.conj(fourier_mv(k=torch.flip(k, dims=(0, 1)), v=v, ps=ps))
@@ -143,7 +134,7 @@ def main():
     max_num_iter = 100
 
     logging.info("Set Matrix Indices and AC Matrix")
-
+    # ToDo: Calculate size of AC subregion if whole region is to big for CPU?
     ac_indices, ac_matrix_shape = get_linear_indices(
         k_space_shape=sl_ac.shape, patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
     )
