@@ -6,6 +6,7 @@ import numpy as np
 import nibabel as nib
 import plotly.graph_objects as go
 import tqdm
+from scipy.ndimage import binary_erosion
 
 from pymritools.config.processing import DenoiseSettingsMPPCA
 from pymritools.utils import nifti_load, nifti_save, fft, root_sum_of_squares
@@ -100,19 +101,28 @@ def nbc_noise_mask(input_data: torch.Tensor, settings: DenoiseSettingsMPPCA,
             # use on first echo across all 3 dimensions
             # use rsos of channels if applicable, channel dim =-2
             # take first echo and sum over channels
-            input_data = root_sum_of_squares(input_data, dim_channel=-2)
+            admri_in = root_sum_of_squares(input_data, dim_channel=-2)
 
-            mask = np.ones(input_data.shape[:-1], dtype=bool)
+            mask = np.ones(admri_in.shape[:-1], dtype=bool)
             # use autodmri to extract noise voxels
             for idx_ax in tqdm.trange(3, desc="extracting noise voxels, autodmri"):
                 _, _, tmp_mask = estimator.estimate_from_dwis(
-                    data=torch.squeeze(input_data).numpy(), axis=idx_ax, return_mask=True, exclude_mask=None, ncores=16,
+                    data=torch.squeeze(admri_in).numpy(), axis=idx_ax, return_mask=True, exclude_mask=None, ncores=16,
                     method='moments', verbose=0, fast_median=False
                 )
                 mask = np.bitwise_and(mask, tmp_mask.astype(bool))
             # save mask
             mask = mask.astype(np.int32)
+            # binary erode
+            structure = np.zeros((3, 3, 3))
+            sphere_ind = np.array(
+                [[x, y, z] for x in range(3) for y in range(3) for z in range(3)
+                 if ((x - 1) ** 2 + (y - 1) ** 2 + (z - 1) ** 2) <= 1]
+            )
+            structure[sphere_ind[:, 0], sphere_ind[:, 1], sphere_ind[:, 2]] = 1
             nifti_save(data=mask, img_aff=input_img, path_to_dir=path_output, file_name=f"autodmri_mask")
+            mask = binary_erosion(mask, structure)
+            nifti_save(data=mask, img_aff=input_img, path_to_dir=path_output, file_name=f"autodmri_mask_erode")
 
         # get to torch
         mask = torch.from_numpy(mask)
@@ -177,7 +187,7 @@ def nbc_noise_mask(input_data: torch.Tensor, settings: DenoiseSettingsMPPCA,
 
 
 def core_fn(data_batch_b_nv_m: torch.Tensor, settings: DenoiseSettingsMPPCA,
-            right_a: torch.Tensor, left_b: torch.Tensor, r_cumsum: torch.Tensor,):
+            right_a: torch.Tensor, left_b: torch.Tensor, r_cumsum: torch.Tensor, ):
     # correction factor (n_v~m)
     beta = 1.29
 
@@ -331,7 +341,7 @@ def denoise(settings: DenoiseSettingsMPPCA):
 
 
 def save_data(
-        data_denoised: torch.Tensor, data_noise: torch.Tensor,  data_p: torch.Tensor,
+        data_denoised: torch.Tensor, data_noise: torch.Tensor, data_p: torch.Tensor,
         data_denoised_nbc: torch.Tensor,
         nii_img: nib.Nifti1Image, settings: DenoiseSettingsMPPCA):
     if data_denoised.shape[-2] > 1:
@@ -359,10 +369,10 @@ def save_data(
     # torch.save(data_denoised, file_name.as_posix())
 
     if settings.noise_bias_correction:
-        data_denoised_manjon = torch.movedim(data_denoised_nbc, (0, 1), (2, 3))
+        # data_denoised_manjon = torch.movedim(data_denoised_nbc, (0, 1), (2, 3))
 
         nifti_save(
-            data=data_denoised_manjon, img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data_nbc-manjon"
+            data=data_denoised_nbc, img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data_nbc-manjon"
         )
 
 
@@ -388,6 +398,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
