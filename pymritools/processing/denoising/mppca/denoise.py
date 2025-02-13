@@ -1,45 +1,32 @@
-"""
-MPPCA denoising using method outlined in:
-Does et al. 2019: Evaluation of principal component analysis image denoising on
-multi‐exponential MRI relaxometry. Magn Reson Med
-DOI: 10.1002/mrm.27658
-_____
-24.11.2023, Jochen Schmidt
-"""
-from pymritools.utils import nifti_load, nifti_save, fft, root_sum_of_squares, gaussian_2d_kernel
-from pymritools.config import setup_program_logging, setup_parser
-from pymritools.config.processing import DenoiseSettingsMPPCA
-from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
+import logging
 import pathlib as plib
 
 import torch
 import numpy as np
-import logging
-
-import tqdm
+import nibabel as nib
 import plotly.graph_objects as go
+import tqdm
+
+from pymritools.config.processing import DenoiseSettingsMPPCA
+from pymritools.utils import nifti_load, nifti_save, fft, root_sum_of_squares
+from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
+from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
+from pymritools.config import setup_program_logging, setup_parser
 from autodmri import estimator
+
 log_module = logging.getLogger(__name__)
 
 
-def denoise(settings: DenoiseSettingsMPPCA):
+def load_data(settings: DenoiseSettingsMPPCA):
     # load in data
     input_data, input_img = nifti_load(settings.in_path)
     input_data = torch.from_numpy(input_data)
-    # ToDo: do for non .nii input
 
     # setup save path
     path_output = plib.Path(settings.out_path).absolute()
     if not path_output.exists():
         log_module.info(f"Setting up output path: {path_output.as_posix()}")
         path_output.mkdir(exist_ok=True, parents=True)
-
-    if settings.use_gpu and torch.cuda.is_available():
-        device = torch.device(f"cuda:{settings.gpu_device}")
-    else:
-        device = torch.device("cpu")
-    log_module.info(f"Configure device: {device}")
-
     # enable processing of coil combined data. Assume if input is 4D that we have a missing coil dim
     data_shape = input_data.shape
     msg = f"Found dimensions: {data_shape}."
@@ -50,19 +37,29 @@ def denoise(settings: DenoiseSettingsMPPCA):
     if data_shape.__len__() < 5:
         msg = f"{msg} Assume no channel dimension -> adding dim. "
         input_data = torch.unsqueeze(input_data, -2)
-    data_shape = input_data.shape
     if msg:
         logging.info(msg)
     del msg
 
-    # we need to batch the data to fit on memory, easiest is to do it dimension based
-    # want to batch channel dim and two slice axis (or any dim)
-    # get vars
-    nx, ny, nz, nch, m = data_shape
-    cube_side_len = torch.ceil(torch.sqrt(torch.tensor([m]))).to(torch.int).item()
-    n_v = cube_side_len ** 2
-    ncx = nx - cube_side_len
-    ncy = ny - cube_side_len
+    if not settings.input_image_data:
+        # if input is k-space data we convert to img space
+        # loop over dim slices, batch dim channels
+        logging.info(f"fft to image space")
+        input_data = fft(input_data, img_to_k=False, axes=(0, 1))
+
+    return input_data, input_img
+
+
+def set_device(settings: DenoiseSettingsMPPCA):
+    if settings.use_gpu and torch.cuda.is_available():
+        device = torch.device(f"cuda:{settings.gpu_device}")
+    else:
+        device = torch.device("cpu")
+    log_module.info(f"Configure device: {device}")
+    return device
+
+
+def set_constants(settings: DenoiseSettingsMPPCA, m: int, n_v: int, device):
     # calculate const for mp inequality
     m_mp = min(m, n_v)
     if settings.fixed_p > 0:
@@ -81,22 +78,19 @@ def denoise(settings: DenoiseSettingsMPPCA):
         # build a matrix to make the cummulative sum for the inequality calculation a matrix multiplication
         # dim [mmp, mmp - 1]
         r_cumsum = torch.triu(torch.ones(m_mp - 1, m_mp), diagonal=1).to(device=device, dtype=torch.float64)
+    return right_a, left_b, r_cumsum
 
-    if not settings.input_image_data:
-        # if input is k-space data we convert to img space
-        # loop over dim slices, batch dim channels
-        logging.info(f"fft to image space")
-        input_data = fft(input_data, img_to_k=False, axes=(0, 1))
 
-    # save max value to rescale later
-    # if too high we set it to 1000
-    max_val = torch.max(torch.abs(input_data))
-    # input_data = input_data / max_val * 1e3
-
+def nbc_noise_mask(input_data: torch.Tensor, settings: DenoiseSettingsMPPCA,
+                   input_img: nib.Nifti1Image = None):
     # we want to implement a first order stationary noise bias removal from Manjon 2015
     # with noise statistics from mask and St.Jean 2020
+    path_output = plib.Path(settings.out_path).absolute()
     if settings.noise_bias_correction:
         mask_path = plib.Path(settings.noise_bias_mask).absolute()
+        max_val = torch.max(torch.abs(input_data))
+        data_shape = input_data.shape
+
         if mask_path.is_file():
             nii_mask, _ = nifti_load(mask_path.as_posix())
             mask = nii_mask.astype(np.int32)
@@ -140,218 +134,95 @@ def denoise(settings: DenoiseSettingsMPPCA):
         noise_dist /= torch.linalg.norm(noise_dist)
         noise_plot = torch.concatenate((noise_hist[:, None], noise_dist[:-1, None]), dim=1)
 
-        # create plot
-        fig = go.Figure()
-        name_list = ["noise voxels", f"noise dist. estimate, sigma: {sigma:.2f}, n: {num_channels}"]
+        if settings.visualize:
+            # create plot
+            fig = go.Figure()
+            name_list = ["noise voxels", f"noise dist. estimate, sigma: {sigma:.2f}, n: {num_channels}"]
 
-        max_num_points = 10000
-        if noise_voxels.shape[0] > max_num_points:
-            plot_noise_vox = torch.permute(noise_voxels, dims=(0,))[:max_num_points]
-        else:
-            plot_noise_vox = noise_voxels
-        fig.add_trace(
-            go.Scattergl(
-                x=plot_noise_vox, y=(0.02 * torch.randn_like(plot_noise_vox)) + 0.05,
-                name="samples", mode="markers", marker=dict(size=2)
-            )
-        )
-
-        for i, d in enumerate([noise_hist, noise_dist]):
+            max_num_points = 10000
+            if noise_voxels.shape[0] > max_num_points:
+                plot_noise_vox = torch.permute(noise_voxels, dims=(0,))[:max_num_points]
+            else:
+                plot_noise_vox = noise_voxels
             fig.add_trace(
                 go.Scattergl(
-                    x=noise_bins, y=d, name=name_list[i],
+                    x=plot_noise_vox, y=(0.02 * torch.randn_like(plot_noise_vox)) + 0.05,
+                    name="samples", mode="markers", marker=dict(size=2)
                 )
             )
-        fig.update_layout(
-            title=go.layout.Title(
-                text="Noise histogram",
-            ),
-            xaxis=dict(title='signal value [a,u,]'),
-            yaxis=dict(title='normalized count')
-        )
 
-        fig_name = f"noise_histogramm"
-        fig_file = path_output.joinpath(fig_name).with_suffix(".html")
-        logging.info(f"write file: {fig_file.as_posix()}")
-        fig.write_html(fig_file.as_posix())
+            for i, d in enumerate([noise_hist, noise_dist]):
+                fig.add_trace(
+                    go.Scattergl(
+                        x=noise_bins, y=d, name=name_list[i],
+                    )
+                )
+            fig.update_layout(
+                title=go.layout.Title(
+                    text="Noise histogram",
+                ),
+                xaxis=dict(title='signal value [a,u,]'),
+                yaxis=dict(title='normalized count')
+            )
 
-        data_denoised_sq = torch.movedim(torch.zeros_like(input_data), (2, 3), (0, 1))
+            fig_name = f"noise_histogramm"
+            fig_file = path_output.joinpath(fig_name).with_suffix(".html")
+            logging.info(f"write file: {fig_file.as_posix()}")
+            fig.write_html(fig_file.as_posix())
+
     else:
         sigma = None
         num_channels = None
-        data_denoised_sq = None
+    return sigma, num_channels
 
-    # scale
-    if max_val > 1e5:
-        max_val = 1000
 
-    # reshuffle for batching data
-    input_data = torch.movedim(input_data, (2, 3), (0, 1))
-    data_denoised = torch.zeros_like(input_data)
-    data_access = torch.zeros(data_denoised.shape[:-1], dtype=torch.float)
-    data_p = torch.zeros(data_access.shape, dtype=torch.int)
-    data_p_avg = torch.zeros_like(data_p)
-
+def core_fn(data_batch_b_nv_m: torch.Tensor, settings: DenoiseSettingsMPPCA,
+            right_a: torch.Tensor, left_b: torch.Tensor, r_cumsum: torch.Tensor,):
     # correction factor (n_v~m)
     beta = 1.29
 
-    logging.info(f"start processing")
-    # x steps batched
-    x_steps = torch.arange(ncx)[:, None] + torch.arange(cube_side_len)[None, :]
+    b, nv, m = data_batch_b_nv_m.shape
+    # remove mean across spatial dim of patch
+    patches_mean = torch.mean(data_batch_b_nv_m, dim=-1, keepdim=True)
+    patches = data_batch_b_nv_m - patches_mean
 
-    for idx_y in tqdm.trange(data_shape[1] - cube_side_len, desc="loop over dim 1",
-                             position=0, leave=False):
-        patch = input_data[:, :, x_steps, idx_y:idx_y + cube_side_len].to(device)
-        patch_shape = patch.shape
-        patch = torch.reshape(patch, (nz, nch, ncx, -1, m))
-        patch = torch.movedim(patch, -1, -2)
-        # try batched svd
-        # patch = img_data[:, :, start_x:end_x, start_y:end_y].to(device)
-        # remove mean across spatial dim of patch
-        patch_mean = torch.mean(patch, dim=-1, keepdim=True)
-        patch_loc_mean = torch.mean(patch)
-        patch_loc_std = torch.std(patch)
-        patch -= patch_mean
-
-        # do svd
-        u, s, v = torch.linalg.svd(patch, full_matrices=False)
-        # eigenvalues -> lambda = s**2 / n_v
-        lam = s ** 2 / n_v
-        svs = s.clone()
-        if settings.fixed_p > 0:
-            # we use the p first singular values
-            svs[:, :, :, p:] = 0.0
-            num_p = torch.full((nz, nch, ncx), p)
-            theta_p = 1 / (1 + num_p)
-        else:
-            # calculate inequality, 3 batch dimensions!
-            left = (lam[:, :, :, 1:] - lam[:, :, :, -1, None]) / left_b[None, None, None]
-            r_lam = torch.einsum('is, czxs -> czxi', r_cumsum, lam)
-            right = right_a[None, None, None] * r_lam
-            # minimum p for which left < right
-            # we actually find all p for which left < right and set those 0 in s
-            p = left < right
-            svs[:, :, :, :-1][p] = 0.0
-            svs[:, :, :, -1] = 0.0
-            num_p = torch.argmax(p.to(torch.int), dim=-1).cpu()
-            theta_p = 1 / (1 + num_p.to(torch.float))
-        # calculate denoised data, two batch dims!
-        d = torch.matmul(torch.einsum("ijklm, ijkm -> ijklm", u, svs.to(input_data.dtype)), v)
-        # manjon 2015: median of eigenvalues is related to local noise pattern
-        # calculated from standard deviation, but we already subtracted patch mean, hence mean = 0.
-        # keep only the ones lower than 2 * median std
-        patch_evs = lam[torch.sqrt(lam) < 2 * torch.median(torch.sqrt(lam))]
-        patch_sigma = beta * torch.sqrt(torch.median(patch_evs))
-        local_snr = patch_loc_mean / patch_loc_std
-        patch_sigma *= manjon_corr_model(local_snr)
-        # add mean
-        d += patch_mean
-
-        # shape back
-        d = torch.movedim(d, -2, -1)
-        d = torch.reshape(d, patch_shape).cpu()
-
-        # collect
-        # dims [ch, z, c , c, m]
-        # using the multipoint - pointwise approach of overlapping sliding window blocks from manjon et al. 2013
-        # we summarize the contributions of each block at the relevant positions weighted by the
-        # inverse number of nonzero coefficients in the diagonal eigenvalue / singular value matrix. i.e. P
-        for idx_x in range(x_steps.shape[0]):
-            data_denoised[:, :, x_steps[idx_x], idx_y:idx_y + cube_side_len] += (
-                    theta_p[:, :, idx_x, None, None, None] * d[:, :, idx_x])
-            data_access[:, :, x_steps[idx_x], idx_y:idx_y + cube_side_len] += theta_p[:, :, idx_x, None, None]
-            data_p[:, :, x_steps[idx_x], idx_y:idx_y + cube_side_len] += num_p[:, :, idx_x, None, None]
-            data_p_avg[:, :, x_steps[idx_x], idx_y:idx_y + cube_side_len] += 1
-            if settings.noise_bias_correction:
-                data_denoised_sq[:, :, x_steps[idx_x], idx_y:idx_y + cube_side_len] += (
-                        theta_p[:, :, idx_x, None, None, None] * torch.abs(d[:, :, idx_x]) ** 2)
-
-    if torch.is_complex(data_denoised):
-        data_denoised.real = torch.nan_to_num(
-            torch.divide(data_denoised.real, data_access[:, :, :, :, None]),
-            nan=0.0, posinf=0.0
-        )
-        data_denoised.imag = torch.nan_to_num(
-            torch.divide(data_denoised.imag, data_access[:, :, :, :, None]),
-            nan=0.0, posinf=0.0
-        )
+    # do svd
+    u, s, v = torch.linalg.svd(patches, full_matrices=False)
+    # eigenvalues -> lambda = s**2 / n_v
+    lam = s ** 2 / nv
+    svs = s.clone()
+    if settings.fixed_p > 0:
+        p = settings.fixed_p
+        # we use the p first singular values
+        svs[:, p:] = 0.0
+        num_p = torch.full((b, nv), p, dtype=torch.int)
+        theta_p = 1 / (1 + num_p)
     else:
-        data_denoised = torch.nan_to_num(
-            torch.divide(data_denoised, data_access[:, :, :, :, None]),
-            nan=0.0, posinf=0.0
-        )
-
-    # simple corrections scheme glenn - across time points versus diffusion gradients
-    # sigma_glenn = (m / m-1) * (
-    #         torch.mean(input_data**2, dim=-1, keepdim=True) - torch.mean(img_data, dim=-1, keepdim=True)**2
-    # )
-    if settings.noise_bias_correction:
-        # # original
-        data_denoised_manjon = torch.sqrt(
-            torch.clip(
-                data_denoised ** 2 - 2 * num_channels * sigma ** 2,
-                min=0.0
-            )
-        )
-        # js
-        # ToDo: check to subtract denoised image from original to see noise contributions.
-        #  Use those noise contribution stats locally to bias correct
-
-    # move dims back
-    input_data = torch.movedim(input_data, (0, 1), (2, 3))
-    data_denoised = torch.movedim(data_denoised, (0, 1), (2, 3))
-    data_p_img = torch.nan_to_num(
-        torch.divide(data_p, data_p_avg),
-        nan=0.0, posinf=0.0
-    )
-    data_p_img = torch.movedim(data_p_img, (0, 1), (2, 3))
-
-    # compute noise
-    data_noise = input_data - data_denoised
-    # compute variance and slightly smooth in xy dir (look for spatially dependent noise patterns)
-    # for smoothing we use an fft kernel, after also taking the mean across the echoes
-    kernel_size = torch.round(torch.tensor(data_shape[:2]).to(torch.float) / 20)
-    window = gaussian_2d_kernel(
-        size_x=nx, size_y=ny, sigma=kernel_size
-    )
-    data_noise_sm_var = torch.mean(data_noise ** 2, dim=-1)
-    data_noise_sm_var = fft(data_noise_sm_var, img_to_k=True, axes=(0, 1))
-    if not torch.is_complex(input_data):
-        data_noise_sm_var = torch.real(data_noise_sm_var)
-    data_noise_sm_var = data_noise_sm_var * window[:, :, None, None]
-    data_noise_sm_var = fft(data_noise_sm_var, img_to_k=False, axes=(0, 1))
-    if not torch.is_complex(input_data):
-        data_noise_sm_var = torch.real(data_noise_sm_var)
-
-    if data_denoised.shape[-2] > 1:
-        # [x, y, z, ch, t]
-        data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
-
-    # save data
-    data_denoised = torch.squeeze(data_denoised)
-    data_noise = torch.squeeze(data_noise)
-    data_noise_sm_var = torch.squeeze(data_noise_sm_var)
-    data_denoised *= max_val / torch.max(data_denoised)
-
-    nifti_save(data=data_denoised.numpy(), img_aff=input_img, path_to_dir=path_output, file_name="denoised_data")
-    nifti_save(data=data_noise.numpy(), img_aff=input_img, path_to_dir=path_output, file_name="noise_data")
-    nifti_save(
-        data=data_noise_sm_var.numpy(), img_aff=input_img, path_to_dir=path_output,
-               file_name="noise_data_smoothed_var"
-    )
-    nifti_save(data=data_p_img.numpy(), img_aff=input_img, path_to_dir=path_output, file_name="avg_p")
-
-    #
-    # file_name = save_path.joinpath(name).with_suffix(".pt")
-    # logging.info(f"write file: {file_name.as_posix()}")
-    # torch.save(data_denoised, file_name.as_posix())
-
-    if settings.noise_bias_correction:
-        data_denoised_manjon = torch.movedim(data_denoised_manjon, (0, 1), (2, 3))
-
-        nifti_save(
-            data=data_denoised_manjon, img_aff=input_img, path_to_dir=path_output, file_name="denoised_data_nbc-manjon"
-        )
+        # calculate inequality, 1 batch dimensions!
+        left = (lam[:, 1:] - lam[:, -1, None]) / left_b[None]
+        r_lam = torch.einsum('is, bs -> bi', r_cumsum, lam)
+        right = right_a[None] * r_lam
+        # minimum p for which left < right
+        # we actually find all p for which left < right and set those 0 in s
+        p = left < right
+        svs[:, :-1][p] = 0.0
+        svs[:, -1] = 0.0
+        num_p = torch.argmax(p.to(torch.int), dim=-1).cpu()
+        # expand to patch
+        num_p = num_p.unsqueeze(-1).expand(-1, nv).to(torch.int).contiguous()
+        theta_p = 1 / (1 + num_p.to(torch.float))
+    # calculate denoised data, one batch dims!
+    d = torch.matmul(torch.einsum("ilm, im -> ilm", u, svs.to(u.dtype)), v)
+    # manjon 2015: median of eigenvalues is related to local noise pattern
+    # calculated from standard deviation, but we already subtracted patch mean, hence mean = 0.
+    # keep only the ones lower than 2 * median std
+    # patch_evs = lam[torch.sqrt(lam) < 2 * torch.median(torch.sqrt(lam))]
+    # patch_sigma = beta * torch.sqrt(torch.median(patch_evs))
+    # local_snr = patch_loc_mean / patch_loc_std
+    # patch_sigma *= manjon_corr_model(local_snr)
+    # add mean
+    d += patches_mean
+    return d, 2 * theta_p, num_p
 
 
 def manjon_corr_model(gamma: float):
@@ -363,6 +234,138 @@ def manjon_corr_model(gamma: float):
         return a / b
 
 
+def denoise(settings: DenoiseSettingsMPPCA):
+    # load data
+    input_data, input_img = load_data(settings=settings)
+
+    # set device
+    device = set_device(settings=settings)
+
+    # we ensured 5d data - take last dim as m for which we want to build the patches
+    nx, ny, nz, nc, m = input_data.shape
+
+    # get patch side length from m - we build patches from matrices of squared neighborhoods within the slice
+    # (flattened) and the m dimension
+    cube_side_len = torch.ceil(torch.sqrt(torch.tensor([m]))).to(torch.int).item()
+    n_v = cube_side_len ** 2
+    # calculate const for mp inequality - shorter side
+    m_mp = min(m, n_v)
+    right_a, left_b, r_cumsum = set_constants(settings=settings, m=m, n_v=n_v, device=device)
+
+    # setup noise stats
+    sigma, num_channels = nbc_noise_mask(
+        input_data=input_data, settings=settings, input_img=input_img
+    )
+    # think about batching all others eg. nc, nz, and calculate batch_size dims to fit gpu
+    # move slice dim to front
+    input_data = torch.movedim(input_data, 2, 0)
+    # get indices
+    data_shape = input_data.shape
+    indices, matrix_shape = get_linear_indices(
+        k_space_shape=data_shape[1:], patch_shape=(cube_side_len, cube_side_len, -1, m),
+        sample_directions=(1, 1, 0, 1)
+    )
+    indices_b, _ = get_linear_indices(
+        k_space_shape=data_shape[1:-2], patch_shape=(cube_side_len, cube_side_len),
+        sample_directions=(1, 1)
+    )
+    # still want m dim to be last dim
+    dims = np.prod(np.array(data_shape))
+    nxy, nb = matrix_shape
+    b = nz * nc
+    nb = nb // m
+    matrix_shape = (nxy, nb, m)
+
+    # allocate data
+    data_denoised = torch.zeros(data_shape, dtype=input_data.dtype).view(data_shape[0], -1)
+    data_access = torch.zeros(data_shape[:-1], dtype=torch.float).view(data_shape[0], -1)
+    data_p = torch.zeros_like(data_access, dtype=torch.int).view(data_shape[0], -1)
+
+    # data_p_avg = torch.zeros_like(data_p)
+    for si, s in enumerate(tqdm.tqdm(input_data)):
+        bs = s.flatten()
+        ind = bs[indices].view(matrix_shape).to(device)
+        d, theta_p, num_p = core_fn(ind, settings=settings, right_a=right_a, left_b=left_b, r_cumsum=r_cumsum)
+        data_denoised[si] = data_denoised[si].view(-1).index_add(0, indices, d.view(-1).cpu())
+        data_access[si] = data_access[si].view(-1).index_add(0, indices_b, theta_p.view(-1).cpu())
+        data_p[si] = data_p[si].view(-1).index_add(0, indices_b, num_p.view(-1).cpu())
+    # reshape
+    data_denoised = data_denoised.view(data_shape)
+    data_access = data_access.view(data_shape[:-1])
+    data_p = data_p.view(data_shape[:-1])
+    # move slice dim back
+    data_denoised = torch.movedim(data_denoised, 0, 2)
+    input_data = torch.movedim(input_data, 0, 2)
+    data_access = torch.movedim(data_access, 0, 2)
+    data_p = torch.movedim(data_p, 0, 2)
+    # avg
+    data_access[data_access < 1e-5] = 1
+    if torch.is_complex(data_denoised):
+        data_denoised.real = torch.divide(
+            data_denoised.real, data_access[:, :, :, :, None]
+        )
+        data_denoised.imag = torch.divide(
+            data_denoised.imag, data_access[:, :, :, :, None]
+        )
+    else:
+        data_denoised = torch.divide(
+            data_denoised, data_access[:, :, :, :, None]
+        )
+    if settings.noise_bias_correction:
+        # # original
+        data_denoised_manjon = torch.sqrt(
+            torch.clip(
+                data_denoised ** 2 - 2 * num_channels * sigma ** 2,
+                min=0.0
+            )
+        )
+    else:
+        data_denoised_manjon = None
+    # compute noise
+    data_noise = input_data - data_denoised
+
+    save_data(
+        data_denoised=data_denoised, data_noise=data_noise, data_p=data_p,
+        data_denoised_nbc=data_denoised_manjon, nii_img=input_img, settings=settings
+    )
+
+
+def save_data(
+        data_denoised: torch.Tensor, data_noise: torch.Tensor,  data_p: torch.Tensor,
+        data_denoised_nbc: torch.Tensor,
+        nii_img: nib.Nifti1Image, settings: DenoiseSettingsMPPCA):
+    if data_denoised.shape[-2] > 1:
+        # [x, y, z, ch, t]
+        data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
+    path_output = plib.Path(settings.out_path).absolute()
+
+    # save data
+    data_denoised = torch.squeeze(data_denoised)
+    data_noise = torch.squeeze(data_noise)
+    # data_noise_sm_var = torch.squeeze(data_noise_sm_var)
+    # data_denoised *= max_val / torch.max(data_denoised)
+
+    nifti_save(data=data_denoised.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data")
+    nifti_save(data=data_noise.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
+    # nifti_save(
+    #     data=data_noise_sm_var.numpy(), img_aff=nii_img, path_to_dir=path_output,
+    #            file_name="noise_data_smoothed_var"
+    # )
+    nifti_save(data=data_p.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="avg_p")
+
+    #
+    # file_name = save_path.joinpath(name).with_suffix(".pt")
+    # logging.info(f"write file: {file_name.as_posix()}")
+    # torch.save(data_denoised, file_name.as_posix())
+
+    if settings.noise_bias_correction:
+        data_denoised_manjon = torch.movedim(data_denoised_nbc, (0, 1), (2, 3))
+
+        nifti_save(
+            data=data_denoised_manjon, img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data_nbc-manjon"
+        )
+
+
 def main():
     # set program logging
     setup_program_logging(name="MPPCA Denoising", level=logging.INFO)
@@ -372,6 +375,7 @@ def main():
         dict_config_dataclasses={"settings": DenoiseSettingsMPPCA}
     )
     # get settings
+    prog_args.settings.out_path = "/data/pt_np-jschmidt/code/PyMRItools/examples/processing/denoising/results"
     settings = DenoiseSettingsMPPCA.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 
@@ -384,3 +388,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
