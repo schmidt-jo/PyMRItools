@@ -76,6 +76,9 @@ class RF(Event):
             xp=np.linspace(0, duration_s, rf.num_samples),
             fp=signal
         )
+        # make sure to start and end with 0
+        signal_interp[0] = 0
+        signal_interp[-1] = 0
 
         # normalise flip angle
         flip = np.sum(np.abs(signal_interp)) * delta_t * 2 * np.pi
