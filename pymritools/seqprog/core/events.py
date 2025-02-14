@@ -276,14 +276,14 @@ class GRAD(Event):
             return rastered_value, delay
 
     @classmethod
-    def make_trapezoid(cls, channel: str, system: pp.Opts, amplitude: float = 0.0, area: float = None,
-                       delay_s: float = 0.0, duration_s: float = 0.0,
-                       flat_area: float = 0.0, flat_time: float = -1.0,
-                       ramp_time: float = 0.0):
+    def make_trapezoid(cls, channel: str, system: pp.Opts, amplitude: float = None, area: float = None,
+                       delay_s: float = 0.0, duration_s: float = None,
+                       flat_area: float = None, flat_time: float = None,
+                       ramp_time: float = None):
         grad_instance = cls()
         grad_instance.system = system
         # some timing checks
-        if flat_time > 1e-7:
+        if flat_time is not None and flat_time > 1e-7:
             flat_time_set = flat_time
             flat_time = grad_instance.set_on_raster(flat_time, double=False)
             if np.abs(flat_time_set - flat_time) > 1e-9:
@@ -298,9 +298,9 @@ class GRAD(Event):
                 # and just append additional area, we need to increase the area by the same relative amount
                 if np.abs(flat_area) > 1e-9:
                     flat_area *= flat_time / flat_time_set
-        if duration_s > 1e-7:
+        if duration_s is not None and duration_s > 1e-7:
             duration_s = grad_instance.set_on_raster(duration_s, double=False)
-        if ramp_time > 1e-7:
+        if ramp_time is not None and ramp_time > 1e-7:
             ramp_time = grad_instance.set_on_raster(ramp_time, double=False)
 
         grad_simple_ns = pp.make_trapezoid(
@@ -578,8 +578,8 @@ class GRAD(Event):
         return a / b, t_ru, t_rd, t_flat
 
     @classmethod
-    def sym_grad(cls, system: pp.Opts, channel: str = 'x', pre_delay: float = 0.0, area_lobe: float = 0.0,
-                 amplitude_lobe: float = 0.0, duration_lobe: float = 0.0, duration_between: float = 0.0,
+    def sym_grad(cls, system: pp.Opts, channel: str = 'x', pre_delay: float = 0.0, area_lobe: float = None,
+                 amplitude_lobe: float = None, duration_lobe: float = 0.0, duration_between: float = 0.0,
                  reverse_second_lobe: bool = False):
         grad_instance = cls()
         grad_instance.system = system

@@ -201,7 +201,7 @@ class Kernel:
             read_gradient_to_prephase = 1 / 2 * grad_read.area
         grad_read_pre = events.GRAD.make_trapezoid(
             channel=params.read_dir, system=system,
-            area=- read_gradient_to_prephase
+            area=-read_gradient_to_prephase
         )
 
         # block is first refocusing + spoiling + phase encode
@@ -327,11 +327,11 @@ class Kernel:
                     ) * np.power(-1, int(invert_grad_read_dir))
         # make at least oversampling * dwell and adc dead time to fit into the falling ramp
         # since we need to shift the adc samples correctly depending on the grad direction
-        ramp_times = adc.t_dead_time_s + params.oversampling * adc.t_dwell_s
+        # ramp_times = adc.t_dead_time_s + params.oversampling * adc.t_dwell_s
         # both adjustments together should prohibit adc stretching out of gradient flat time
         grad_read = events.GRAD.make_trapezoid(
             channel=params.read_dir,
-            ramp_time=ramp_times,
+            ramp_time=None,
             flat_area=flat_area,
             flat_time=t_adc_extended,
             system=system
