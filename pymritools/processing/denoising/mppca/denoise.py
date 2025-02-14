@@ -60,12 +60,12 @@ def set_device(settings: DenoiseSettingsMPPCA):
     return device
 
 
-def set_constants(settings: DenoiseSettingsMPPCA, m: int, n_v: int, device):
+def set_constants(m: int, n_v: int, device, p: int = 0):
     # calculate const for mp inequality
     m_mp = min(m, n_v)
-    if settings.fixed_p > 0:
+    if p > 0:
         # no need to calculate thresholds
-        log_module.info(f"Set fixed threshold p: {settings.fixed_p}")
+        log_module.info(f"Set fixed threshold p: {p}")
         left_b = NotImplemented
         right_a = NotImplemented
         r_cumsum = NotImplemented
@@ -80,112 +80,114 @@ def set_constants(settings: DenoiseSettingsMPPCA, m: int, n_v: int, device):
     return right_a, left_b, r_cumsum
 
 
-def nbc_noise_mask(input_data: torch.Tensor, settings: DenoiseSettingsMPPCA,
-                   input_img: nib.Nifti1Image = None):
-    # we want to implement a first order stationary noise bias removal from Manjon 2015
-    # with noise statistics from mask and St.Jean 2020
-    path_output = plib.Path(settings.out_path).absolute()
-    if settings.noise_bias_correction:
-        mask_path = plib.Path(settings.noise_bias_mask).absolute()
-        max_val = torch.max(torch.abs(input_data))
-        data_shape = input_data.shape
+def extract_noise_stats_from_mask(input_data: torch.Tensor, mask: torch.Tensor, visualize: bool = True,
+                   input_img: nib.Nifti1Image = None, path_output: plib.Path | str = None):
+    data_shape = input_data.shape
+    max_val = torch.max(torch.abs(input_data))
+    path_output = plib.Path(path_output).absolute()
 
-        if mask_path.is_file():
-            nii_mask, _ = nifti_load(mask_path.as_posix())
-            mask = nii_mask.astype(np.int32)
+    while mask.shape.__len__() < len(data_shape):
+        mask = mask[..., None]
+    # Expand the mask to fit the data shape
+    mask = mask.expand(*data_shape).to(torch.bool)
+    # extract noise data
+    noise_voxels = input_data[mask]
+    noise_voxels = noise_voxels[noise_voxels > 0]
+    sigma, num_channels = ncc_stats.from_noise_voxels(noise_voxels)
+    num_channels = min(max(num_channels, 1), 32)
+
+    # save plot for reference
+    noise_bins = torch.arange(int(max_val / 10)).to(noise_voxels.dtype)
+    noise_hist, _ = torch.histogram(noise_voxels, bins=noise_bins, density=True)
+    noise_hist /= torch.linalg.norm(noise_hist)
+    noise_dist = ncc_stats.noise_dist_ncc(noise_bins, sigma=sigma, n=num_channels)
+    noise_dist /= torch.linalg.norm(noise_dist)
+
+    if visualize:
+        # create plot
+        fig = go.Figure()
+        name_list = ["noise voxels", f"noise dist. estimate, sigma: {sigma:.2f}, n: {num_channels}"]
+
+        max_num_points = 10000
+        if noise_voxels.shape[0] > max_num_points:
+            plot_noise_vox = torch.permute(noise_voxels, dims=(0,))[:max_num_points]
         else:
-            msg = "no mask file provided, using autodmri to extract mask"
-            log_module.info(msg)
-            # use on first echo across all 3 dimensions
-            # use rsos of channels if applicable, channel dim =-2
-            # take first echo and sum over channels
-            admri_in = root_sum_of_squares(input_data, dim_channel=-2)
-
-            mask = np.ones(admri_in.shape[:-1], dtype=bool)
-            # use autodmri to extract noise voxels
-            for idx_ax in tqdm.trange(3, desc="extracting noise voxels, autodmri"):
-                _, _, tmp_mask = estimator.estimate_from_dwis(
-                    data=torch.squeeze(admri_in).numpy(), axis=idx_ax, return_mask=True, exclude_mask=None, ncores=16,
-                    method='moments', verbose=0, fast_median=False
-                )
-                mask = np.bitwise_and(mask, tmp_mask.astype(bool))
-            # save mask
-            mask = mask.astype(np.int32)
-            # binary erode
-            structure = np.zeros((3, 3, 3))
-            sphere_ind = np.array(
-                [[x, y, z] for x in range(3) for y in range(3) for z in range(3)
-                 if ((x - 1) ** 2 + (y - 1) ** 2 + (z - 1) ** 2) <= 1]
+            plot_noise_vox = noise_voxels
+        fig.add_trace(
+            go.Scattergl(
+                x=plot_noise_vox, y=(0.02 * torch.randn_like(plot_noise_vox)) + 0.05,
+                name="samples", mode="markers", marker=dict(size=2)
             )
-            structure[sphere_ind[:, 0], sphere_ind[:, 1], sphere_ind[:, 2]] = 1
-            nifti_save(data=mask, img_aff=input_img, path_to_dir=path_output, file_name=f"autodmri_mask")
-            mask = binary_erosion(mask, structure)
-            nifti_save(data=mask, img_aff=input_img, path_to_dir=path_output, file_name=f"autodmri_mask_erode")
+        )
 
-        # get to torch
-        mask = torch.from_numpy(mask)
-        while mask.shape.__len__() < len(data_shape):
-            mask = mask[..., None]
-        # Expand the mask to fit the data shape
-        mask = mask.expand(*data_shape).to(torch.bool)
-        # extract noise data
-        noise_voxels = input_data[mask]
-        noise_voxels = noise_voxels[noise_voxels > 0]
-        sigma, num_channels = ncc_stats.from_noise_voxels(noise_voxels)
-        num_channels = min(max(num_channels, 1), 32)
-
-        # save plot for reference
-        noise_bins = torch.arange(int(max_val / 10)).to(noise_voxels.dtype)
-        noise_hist, _ = torch.histogram(noise_voxels, bins=noise_bins, density=True)
-        noise_hist /= torch.linalg.norm(noise_hist)
-        noise_dist = ncc_stats.noise_dist_ncc(noise_bins, sigma=sigma, n=num_channels)
-        noise_dist /= torch.linalg.norm(noise_dist)
-        noise_plot = torch.concatenate((noise_hist[:, None], noise_dist[:-1, None]), dim=1)
-
-        if settings.visualize:
-            # create plot
-            fig = go.Figure()
-            name_list = ["noise voxels", f"noise dist. estimate, sigma: {sigma:.2f}, n: {num_channels}"]
-
-            max_num_points = 10000
-            if noise_voxels.shape[0] > max_num_points:
-                plot_noise_vox = torch.permute(noise_voxels, dims=(0,))[:max_num_points]
-            else:
-                plot_noise_vox = noise_voxels
+        for i, d in enumerate([noise_hist, noise_dist]):
             fig.add_trace(
                 go.Scattergl(
-                    x=plot_noise_vox, y=(0.02 * torch.randn_like(plot_noise_vox)) + 0.05,
-                    name="samples", mode="markers", marker=dict(size=2)
+                    x=noise_bins, y=d, name=name_list[i],
                 )
             )
+        fig.update_layout(
+            title=go.layout.Title(
+                text="Noise histogram",
+            ),
+            xaxis=dict(title='signal value [a,u,]'),
+            yaxis=dict(title='normalized count')
+        )
 
-            for i, d in enumerate([noise_hist, noise_dist]):
-                fig.add_trace(
-                    go.Scattergl(
-                        x=noise_bins, y=d, name=name_list[i],
-                    )
-                )
-            fig.update_layout(
-                title=go.layout.Title(
-                    text="Noise histogram",
-                ),
-                xaxis=dict(title='signal value [a,u,]'),
-                yaxis=dict(title='normalized count')
-            )
-
-            fig_name = f"noise_histogramm"
-            fig_file = path_output.joinpath(fig_name).with_suffix(".html")
-            logging.info(f"write file: {fig_file.as_posix()}")
-            fig.write_html(fig_file.as_posix())
-
-    else:
-        sigma = NotImplemented
-        num_channels = NotImplemented
+        fig_name = f"noise_histogramm"
+        fig_file = path_output.joinpath(fig_name).with_suffix(".html")
+        logging.info(f"write file: {fig_file.as_posix()}")
+        fig.write_html(fig_file.as_posix())
     return sigma, num_channels
 
 
-def core_fn(data_batch_b_nv_m: torch.Tensor, settings: DenoiseSettingsMPPCA,
-            right_a: torch.Tensor, left_b: torch.Tensor, r_cumsum: torch.Tensor, ):
+def extract_noise_mask(
+        path_out: plib.Path | str, path_mask: plib.Path | str,
+        input_data: torch.Tensor, input_img: nib.Nifti1Image = None):
+    # we want to implement a first order stationary noise bias removal from Manjon 2015
+    # with noise statistics from mask and St.Jean 2020
+    path_output = plib.Path(path_out).absolute()
+    mask_path = plib.Path(path_mask).absolute()
+
+    if mask_path.is_file():
+        nii_mask, _ = nifti_load(mask_path.as_posix())
+        mask = nii_mask.astype(np.int32)
+    else:
+        msg = "no mask file provided, using autodmri to extract mask"
+        log_module.info(msg)
+        # use on first echo across all 3 dimensions
+        # use rsos of channels if applicable, channel dim =-2
+        # take first echo and sum over channels
+        admri_in = root_sum_of_squares(input_data, dim_channel=-2)
+
+        mask = np.ones(admri_in.shape[:-1], dtype=bool)
+        # use autodmri to extract noise voxels
+        for idx_ax in tqdm.trange(3, desc="extracting noise voxels, autodmri"):
+            _, _, tmp_mask = estimator.estimate_from_dwis(
+                data=torch.squeeze(admri_in).numpy(), axis=idx_ax, return_mask=True, exclude_mask=None, ncores=16,
+                method='moments', verbose=0, fast_median=False
+            )
+            mask = np.bitwise_and(mask, tmp_mask.astype(bool))
+        # save mask
+        mask = mask.astype(np.int32)
+        # binary erode
+        structure = np.zeros((3, 3, 3))
+        sphere_ind = np.array(
+            [[x, y, z] for x in range(3) for y in range(3) for z in range(3)
+             if ((x - 1) ** 2 + (y - 1) ** 2 + (z - 1) ** 2) <= 1]
+        )
+        structure[sphere_ind[:, 0], sphere_ind[:, 1], sphere_ind[:, 2]] = 1
+        nifti_save(data=mask, img_aff=input_img, path_to_dir=path_output, file_name=f"autodmri_mask")
+        mask = binary_erosion(mask, structure)
+        nifti_save(data=mask, img_aff=input_img, path_to_dir=path_output, file_name=f"autodmri_mask_erode")
+
+        # get to torch
+        mask = torch.from_numpy(mask)
+    return mask
+
+
+def core_iteration(data_batch_b_nv_m: torch.Tensor,
+                   right_a: torch.Tensor, left_b: torch.Tensor, r_cumsum: torch.Tensor, p: int = 0):
     # correction factor (n_v~m)
     beta = 1.29
 
@@ -199,8 +201,7 @@ def core_fn(data_batch_b_nv_m: torch.Tensor, settings: DenoiseSettingsMPPCA,
     # eigenvalues -> lambda = s**2 / n_v
     lam = s ** 2 / nv
     svs = s.clone()
-    if settings.fixed_p > 0:
-        p = settings.fixed_p
+    if p > 0:
         # we use the p first singular values
         svs[:, p:] = 0.0
         num_p = torch.full((b, nv), p, dtype=torch.int)
@@ -242,13 +243,8 @@ def manjon_corr_model(gamma: float):
         return a / b
 
 
-def denoise(settings: DenoiseSettingsMPPCA):
-    # load data
-    input_data, input_img = load_data(settings=settings)
-
-    # set device
-    device = set_device(settings=settings)
-
+def core_fn(
+        input_data: torch.Tensor, p: int = 0, device: torch.device = torch.get_default_device()):
     # we ensured 5d data - take last dim as m for which we want to build the patches
     nx, ny, nz, nc, m = input_data.shape
 
@@ -257,12 +253,8 @@ def denoise(settings: DenoiseSettingsMPPCA):
     cube_side_len = torch.ceil(torch.sqrt(torch.tensor([m]))).to(torch.int).item()
     n_v = cube_side_len ** 2
     # calculate const for mp inequality - shorter side
-    right_a, left_b, r_cumsum = set_constants(settings=settings, m=m, n_v=n_v, device=device)
+    right_a, left_b, r_cumsum = set_constants(m=m, n_v=n_v, p=p, device=device)
 
-    # setup noise stats
-    sigma, num_channels = nbc_noise_mask(
-        input_data=input_data, settings=settings, input_img=input_img
-    )
     # batching nc, nz, and calculate batch_size dims to fit gpu
     input_data = input_data.view(nx, ny, -1, m)
     # move batch dim to front
@@ -290,7 +282,9 @@ def denoise(settings: DenoiseSettingsMPPCA):
     # data_p_avg = torch.zeros_like(data_p)
     for si, s in enumerate(tqdm.tqdm(input_data)):
         data_b_nv_m = s.flatten()[indices].view(matrix_shape).to(device)
-        d, theta_p, num_p = core_fn(data_batch_b_nv_m=data_b_nv_m, settings=settings, right_a=right_a, left_b=left_b, r_cumsum=r_cumsum)
+        d, theta_p, num_p = core_iteration(
+            data_batch_b_nv_m=data_b_nv_m, p=p, right_a=right_a, left_b=left_b, r_cumsum=r_cumsum
+        )
         data_denoised[si] = data_denoised[si].view(-1).index_add(0, indices, d.view(-1).cpu())
         data_access[si] = data_access[si].view(-1).index_add(0, indices_b, theta_p.view(-1).cpu())
         data_p[si] = data_p[si].view(-1).index_add(0, indices_b, num_p.view(-1).cpu())
@@ -300,12 +294,10 @@ def denoise(settings: DenoiseSettingsMPPCA):
     data_p = data_p.view(data_batched_shape[:-1])
     # move batch dim back
     data_denoised = torch.movedim(data_denoised, 0, 2)
-    input_data = torch.movedim(input_data, 0, 2)
     data_access = torch.movedim(data_access, 0, 2)
     data_p = torch.movedim(data_p, 0, 2)
     # reshape
     data_denoised = data_denoised.view(nx, ny, nz, nc, m)
-    input_data = input_data.view(nx, ny, nz, nc, m)
     data_access = data_access.view(nx, ny, nz, nc)
     data_p = data_p.view(nx, ny, nz, nc)
     # avg
@@ -321,22 +313,53 @@ def denoise(settings: DenoiseSettingsMPPCA):
         data_denoised = torch.divide(
             data_denoised, data_access[:, :, :, :, None]
         )
+    return data_denoised, data_access, data_p
+
+
+def noise_bias_correction(input_data: torch.Tensor, denoised_data: torch.Tensor,
+                          path_out: plib.Path | str, path_mask: plib.Path | str = "",
+                          input_img: nib.Nifti1Image = None, visualize: bool = True):
+    # setup noise stats
+    mask = extract_noise_mask(
+        input_data=input_data, path_out=path_out, path_mask=path_mask, input_img=input_img
+    )
+    sigma, num_channels = extract_noise_stats_from_mask(
+        input_data=input_data, mask=mask, visualize=visualize, input_img=input_img,
+        path_output=path_out
+    )
+    # correct
+    return torch.sqrt(
+        torch.clip(
+            denoised_data ** 2 - 2 * num_channels * sigma ** 2,
+            min=0.0
+        )
+    )
+
+
+def denoise(settings: DenoiseSettingsMPPCA):
+    # load data
+    input_data, input_img = load_data(settings=settings)
+
+    # set device
+    device = set_device(settings=settings)
+
+    data_denoised, data_access, data_p = core_fn(input_data=input_data, p=settings.fixed_p, device=device)
+
     if settings.noise_bias_correction:
-        # # original
-        data_denoised_manjon = torch.sqrt(
-            torch.clip(
-                data_denoised ** 2 - 2 * num_channels * sigma ** 2,
-                min=0.0
-            )
+        data_denoised_nbc = noise_bias_correction(
+            input_data=input_data, denoised_data=data_denoised,
+            path_out=settings.out_path, path_mask=settings.noise_bias_mask,
+            input_img=input_img, visualize=settings.visualize
         )
     else:
-        data_denoised_manjon = None
+        data_denoised_nbc = None
+
     # compute noise
     data_noise = input_data - data_denoised
 
     save_data(
         data_denoised=data_denoised, data_noise=data_noise, data_p=data_p,
-        data_denoised_nbc=data_denoised_manjon, nii_img=input_img, settings=settings
+        data_denoised_nbc=data_denoised_nbc, nii_img=input_img, settings=settings
     )
 
 
@@ -372,7 +395,7 @@ def save_data(
         # data_denoised_manjon = torch.movedim(data_denoised_nbc, (0, 1), (2, 3))
 
         nifti_save(
-            data=data_denoised_nbc, img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data_nbc-manjon"
+            data=data_denoised_nbc, img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data_nbc"
         )
 
 
