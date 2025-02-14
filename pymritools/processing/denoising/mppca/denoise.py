@@ -65,14 +65,12 @@ def set_constants(settings: DenoiseSettingsMPPCA, m: int, n_v: int, device):
     m_mp = min(m, n_v)
     if settings.fixed_p > 0:
         # no need to calculate thresholds
-        p = settings.fixed_p
-        log_module.info(f"Set fixed threshold p: {p}")
-        left_b = None
-        right_a = None
-        r_cumsum = None
+        log_module.info(f"Set fixed threshold p: {settings.fixed_p}")
+        left_b = NotImplemented
+        right_a = NotImplemented
+        r_cumsum = NotImplemented
     else:
         # calculate threshold. Already do parts that are constant throughout to reduce overhead
-        p = None
         m_mp_arr = torch.arange(m_mp - 1)
         left_b = 4 * torch.sqrt((m_mp - m_mp_arr) / n_v).to(device=device, dtype=torch.float64)
         right_a = (1 / (m_mp - m_mp_arr)).to(device=device, dtype=torch.float64)
@@ -181,8 +179,8 @@ def nbc_noise_mask(input_data: torch.Tensor, settings: DenoiseSettingsMPPCA,
             fig.write_html(fig_file.as_posix())
 
     else:
-        sigma = None
-        num_channels = None
+        sigma = NotImplemented
+        num_channels = NotImplemented
     return sigma, num_channels
 
 
@@ -259,55 +257,57 @@ def denoise(settings: DenoiseSettingsMPPCA):
     cube_side_len = torch.ceil(torch.sqrt(torch.tensor([m]))).to(torch.int).item()
     n_v = cube_side_len ** 2
     # calculate const for mp inequality - shorter side
-    m_mp = min(m, n_v)
     right_a, left_b, r_cumsum = set_constants(settings=settings, m=m, n_v=n_v, device=device)
 
     # setup noise stats
     sigma, num_channels = nbc_noise_mask(
         input_data=input_data, settings=settings, input_img=input_img
     )
-    # think about batching all others eg. nc, nz, and calculate batch_size dims to fit gpu
-    # move slice dim to front
+    # batching nc, nz, and calculate batch_size dims to fit gpu
+    input_data = input_data.view(nx, ny, -1, m)
+    # move batch dim to front
     input_data = torch.movedim(input_data, 2, 0)
     # get indices
-    data_shape = input_data.shape
+    data_batched_shape = input_data.shape
     indices, matrix_shape = get_linear_indices(
-        k_space_shape=data_shape[1:], patch_shape=(cube_side_len, cube_side_len, -1, m),
-        sample_directions=(1, 1, 0, 1)
+        k_space_shape=data_batched_shape[1:], patch_shape=(cube_side_len, cube_side_len, -1),
+        sample_directions=(1, 1, 0)
     )
     indices_b, _ = get_linear_indices(
-        k_space_shape=data_shape[1:-2], patch_shape=(cube_side_len, cube_side_len),
+        k_space_shape=data_batched_shape[1:-1], patch_shape=(cube_side_len, cube_side_len),
         sample_directions=(1, 1)
     )
     # still want m dim to be last dim
-    dims = np.prod(np.array(data_shape))
     nxy, nb = matrix_shape
-    b = nz * nc
     nb = nb // m
     matrix_shape = (nxy, nb, m)
 
     # allocate data
-    data_denoised = torch.zeros(data_shape, dtype=input_data.dtype).view(data_shape[0], -1)
-    data_access = torch.zeros(data_shape[:-1], dtype=torch.float).view(data_shape[0], -1)
-    data_p = torch.zeros_like(data_access, dtype=torch.int).view(data_shape[0], -1)
+    data_denoised = torch.zeros(data_batched_shape, dtype=input_data.dtype).view(data_batched_shape[0], -1)
+    data_access = torch.zeros(data_batched_shape[:-1], dtype=torch.float).view(data_batched_shape[0], -1)
+    data_p = torch.zeros_like(data_access, dtype=torch.int).view(data_batched_shape[0], -1)
 
     # data_p_avg = torch.zeros_like(data_p)
     for si, s in enumerate(tqdm.tqdm(input_data)):
-        bs = s.flatten()
-        ind = bs[indices].view(matrix_shape).to(device)
-        d, theta_p, num_p = core_fn(ind, settings=settings, right_a=right_a, left_b=left_b, r_cumsum=r_cumsum)
+        data_b_nv_m = s.flatten()[indices].view(matrix_shape).to(device)
+        d, theta_p, num_p = core_fn(data_batch_b_nv_m=data_b_nv_m, settings=settings, right_a=right_a, left_b=left_b, r_cumsum=r_cumsum)
         data_denoised[si] = data_denoised[si].view(-1).index_add(0, indices, d.view(-1).cpu())
         data_access[si] = data_access[si].view(-1).index_add(0, indices_b, theta_p.view(-1).cpu())
         data_p[si] = data_p[si].view(-1).index_add(0, indices_b, num_p.view(-1).cpu())
     # reshape
-    data_denoised = data_denoised.view(data_shape)
-    data_access = data_access.view(data_shape[:-1])
-    data_p = data_p.view(data_shape[:-1])
-    # move slice dim back
+    data_denoised = data_denoised.view(data_batched_shape)
+    data_access = data_access.view(data_batched_shape[:-1])
+    data_p = data_p.view(data_batched_shape[:-1])
+    # move batch dim back
     data_denoised = torch.movedim(data_denoised, 0, 2)
     input_data = torch.movedim(input_data, 0, 2)
     data_access = torch.movedim(data_access, 0, 2)
     data_p = torch.movedim(data_p, 0, 2)
+    # reshape
+    data_denoised = data_denoised.view(nx, ny, nz, nc, m)
+    input_data = input_data.view(nx, ny, nz, nc, m)
+    data_access = data_access.view(nx, ny, nz, nc)
+    data_p = data_p.view(nx, ny, nz, nc)
     # avg
     data_access[data_access < 1e-5] = 1
     if torch.is_complex(data_denoised):
