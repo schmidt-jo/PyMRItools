@@ -201,14 +201,14 @@ class Loraks:
             logger.info(f"Matrix type unchanged: {self.operator_type}")
         return self
 
-    def with_sv_hard_cutoff(self, q: int) -> "Loraks":
-        if self.sv_cutoff_method != SVThresholdMethod.HARD_CUTOFF or self.sv_cutoff_args != (q,):
+    def with_sv_hard_cutoff(self, q: int, rank: int) -> "Loraks":
+        if self.sv_cutoff_method != SVThresholdMethod.HARD_CUTOFF or self.sv_cutoff_args != (q, rank):
             logger.info(
                 f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.HARD_CUTOFF}")
             logger.info(f"Singular values cutoff arguments changed from {self.sv_cutoff_args} to ({q},)")
             self.dirty_config = True
             self.sv_cutoff_method = SVThresholdMethod.HARD_CUTOFF
-            self.sv_cutoff_args = (q,)
+            self.sv_cutoff_args = (q, rank)
         else:
             logger.info(f"Singular values cutoff method unchanged: {self.sv_cutoff_method}")
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
@@ -252,6 +252,8 @@ class Loraks:
             self.patch_shape,
             self.sample_directions
         )
+        if self.operator_type == OperatorType.S:
+            self.matrix_operator_shape = tuple(2*d for d in self.matrix_operator_shape)
 
     def _get_available_cpu_memory(self):
         """
