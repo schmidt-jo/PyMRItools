@@ -1,5 +1,5 @@
 import torch
-from typing import Callable, Tuple, Optional
+from typing import Callable, Tuple, Optional, Union
 from enum import Enum, auto
 import psutil
 
@@ -29,6 +29,7 @@ class OperatorType(Enum):
 class SVThresholdMethod(Enum):
     HARD_CUTOFF = auto()
     RELU_SHIFT = auto()
+    RELU_SHIFT_AUTOMATIC = auto()
 
 
 def get_lowrank_algorithm_function(algorithm: LowRankAlgorithmType, args: Tuple):
@@ -62,6 +63,14 @@ def get_sv_threshold_function(method: SVThresholdMethod, args: Tuple, device: to
             if len(args) != 1 or not isinstance(args[0], float):
                 raise ValueError("ReLU cutoff method arguments must be one float tau.")
             return lambda singular_values: torch.relu(singular_values - args[0])
+        case SVThresholdMethod.RELU_SHIFT_AUTOMATIC:
+            if len(args) != 0:
+                raise ValueError("ReLU shift automatic method does not take arguments.")
+            def func(singular_values: torch.Tensor):
+                scaled_cum_sum = torch.cumsum(singular_values, dim=0)/torch.sum(singular_values)
+                idx = torch.nonzero(scaled_cum_sum < 0.95)[-1].item()
+                return torch.relu(singular_values - singular_values[idx])
+            return func
         case _:
             raise ValueError(f"Unknown singular value cutoff method: {method}")
 
@@ -88,25 +97,42 @@ def create_loss_func(
     # return torch.compile(loss_func, fullgraph=True)
     return loss_func
 
-def calculate_matrix_size(k_space_shape: Tuple, patch_shape: Tuple, sample_directions: Tuple, matrix_type: OperatorType):
-    k_space_shape = torch.tensor(k_space_shape).flip(0)
-    patch_shape = torch.tensor(patch_shape).flip(0)
-    sample_directions = torch.tensor(sample_directions).flip(0)
+def calculate_matrix_size(k_space_shape: Tuple,
+                          patch_shape: Tuple,
+                          sample_directions: Tuple,
+                          matrix_type: OperatorType) -> tuple[int, int]:
+    """
+        Calculates the operator matrix size for a given k-space shape, patch shape, sample directions,
+        and matrix type.
+
+        Args:
+        k_space_shape (Tuple): The shape of the k-space which impacts the number of sampling points.
+        patch_shape (Tuple): The patch shape to extract from the k-space.
+        sample_directions (Tuple): Directional sampling patterns for patches.
+        matrix_type (OperatorType): Type of operator matrix
+
+        Returns:
+        tuple[int, int]: A tuple containing two integers representing the dimensions of the
+        operator matrix based on the given inputs and the specified operator type.
+    """
+    k_space_shape = torch.tensor(k_space_shape)
+    patch_shape = torch.tensor(patch_shape)
+    sample_directions = torch.tensor(sample_directions)
     patch_sizes = torch.where(patch_shape == 0, torch.tensor(1), patch_shape)
     patch_sizes = torch.where(patch_shape == -1, k_space_shape, patch_sizes)
 
     sample_steps = torch.where(sample_directions == 0, torch.tensor(1), k_space_shape - patch_sizes + 1)
     if matrix_type == OperatorType.C:
-        return torch.prod(patch_sizes * sample_steps)
+        return torch.prod(patch_sizes).item(),  torch.prod(sample_steps).item()
     elif matrix_type == OperatorType.S:
-        return 4*torch.prod(patch_sizes * sample_steps)
+        return 2 * torch.prod(patch_sizes).item(), 2 * torch.prod(sample_steps).item()
     else:
         raise ValueError(f"Unknown matrix type: {matrix_type}")
 
 
 
 class Loraks:
-    def __init__(self):
+    def __init__(self, lambda_factor: float = 0.3, max_num_iter: int = 50):
         self.dirty_config = True
         self.dirty_indices = True
 
@@ -118,8 +144,8 @@ class Loraks:
         self.operator_type: Optional[OperatorType] = None
         self.sv_cutoff_method: Optional[SVThresholdMethod] = None
         self.sv_cutoff_args: Optional[Tuple] = None
-        self.lambda_factor: Optional[float] = None
-        self.max_num_iter = 50
+        self.lambda_factor: Optional[float] = lambda_factor
+        self.max_num_iter = max_num_iter
         self.learning_rate_func: Callable = lambda _: 1e-3
         self.device: Optional[torch.device] = torch.get_default_device()
 
@@ -227,16 +253,32 @@ class Loraks:
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
         return self
 
+
+    def with_sv_auto_soft_cutoff(self) -> "Loraks":
+        if self.sv_cutoff_method != SVThresholdMethod.RELU_SHIFT_AUTOMATIC:
+            logger.info(
+                f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.RELU_SHIFT}")
+            self.dirty_config = True
+            self.sv_cutoff_method = SVThresholdMethod.RELU_SHIFT_AUTOMATIC
+            self.sv_cutoff_args = tuple()
+        else:
+            logger.info(f"Singular values cutoff method unchanged: {self.sv_cutoff_method}")
+            logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
+        return self
+
     def with_constant_learning_rate(self, learning_rate: float) -> "Loraks":
         self.learning_rate_func = lambda _: learning_rate
         return self
 
     def with_linear_learning_rate(self, min_learning_rate: float, max_learning_rate: float) -> "Loraks":
         self.learning_rate_func = lambda i: (
-                min_learning_rate + (max_learning_rate - min_learning_rate) * i / self.max_num_iter)
+                min_learning_rate + (max_learning_rate - min_learning_rate) * (1.0 - i / self.max_num_iter)
+        )
         return self
 
-    def with_device(self, device: torch.device) -> "Loraks":
+    def with_device(self, device: Union[torch.device, str]) -> "Loraks":
+        if isinstance(device, str):
+            device = torch.device(device)
         if not isinstance(device, torch.device):
             raise ValueError("Device must be a torch.device object")
         if self.device != device:
@@ -255,6 +297,23 @@ class Loraks:
         if self.operator_type == OperatorType.S:
             self.matrix_operator_shape = tuple(2*d for d in self.matrix_operator_shape)
 
+    def _get_operator_matrix_size(self) -> tuple[int, int]:
+        """
+        Returns the size of the C/S-matrix which is, in other words, the neighborhood size and the number
+        of sampled points we use along the sampling directions.
+        This method can only be called from within the reconstruct method when we have already set the shape of the
+        k-space.
+        """
+        if self.k_space_shape is None:
+            raise ValueError("k_space_shape must be set before calling this function")
+        if self.patch_shape is None:
+            raise ValueError("patch_shape must be set before calling this function")
+        if self.sample_directions is None:
+            raise ValueError("sample_directions must be set before calling this function")
+        if self.operator_type is None:
+            raise ValueError("operator_type must be set before calling this function")
+        return calculate_matrix_size(self.k_space_shape[1:], self.patch_shape, self.sample_directions, self.operator_type)
+
     def _get_available_cpu_memory(self):
         """
         Returns the total available memory on the CPU in bytes.
@@ -267,7 +326,17 @@ class Loraks:
         """
         return torch.cuda.get_device_properties(self.device).total_memory
 
+    def _assert_enough_memory(self):
+        m_width, m_height = self._get_operator_matrix_size()
+        logger.info(f"Matrix size: {m_width} x {m_height}")
+        # TODO: Calculate mem requirements
+
     def _prepare(self):
+        """
+        Sets up the necessary configuration for the reconstruction.
+        This method can only be called from within the reconstruct method when we have already set the shape of the
+        k-space.
+        """
         if not self.dirty_config:
             logger.info("No configuration changes detected. Skipping preparation.")
             return
@@ -290,12 +359,9 @@ class Loraks:
         if self.svd_algorithm is None:
             logger.info("No SVD algorithm specified. Using default.")
             # God, I hope this makes sense. For calculating the size of q, we calculate the
-            # width of the c/s-matrix and take a portion of it
-            neighborhood_size = 1
-            for i in range(len(self.patch_shape)):
-                neighborhood_size *= self.patch_shape[i] if self.patch_shape[i] > 0 else self.k_space_shape[i + 1]
-            if self.operator_type is OperatorType.S:
-                neighborhood_size *= 2
+            # size of the c/s-matrix and take a portion of it.
+            m_width, m_height = self._get_operator_matrix_size()
+            neighborhood_size = min(m_width, m_height)
             # This gives a good reduction for size of the low-rank calculation
             self.with_torch_lowrank_algorithm(int(100 * neighborhood_size / (100 + neighborhood_size)), 2)
 
@@ -314,26 +380,23 @@ class Loraks:
             self.dirty_config = True
             self.k_space_shape = k_space.shape
         self._prepare()
+        self._assert_enough_memory()
         self._initialize_matrix_indices()
 
         operator_func = c_operator if self.operator_type == OperatorType.C else s_operator
         svd_func = get_lowrank_algorithm_function(self.svd_algorithm, self.svd_algorithm_args)
         sv_threshold_func = get_sv_threshold_function(self.sv_cutoff_method, self.sv_cutoff_args)
-
         loss_func = create_loss_func(operator_func, svd_func, sv_threshold_func)
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.lambda_factor = 0.3
         batch_size = self.k_space_shape[0]
-        progress_bar = tqdm.trange(self.max_num_iter, desc="Optimization")
-
         k_input = k_space.contiguous()
         k_out = torch.empty_like(k_input)
 
         for b in range(batch_size):
-            k = k_input[b].clone().to(device).requires_grad_()
-            sampling_mask_batch = sampling_mask[b].to(device)
-            k_sampled_points = k_input[b].to(device) * sampling_mask_batch
+            progress_bar = tqdm.trange(self.max_num_iter, desc="Optimization")
+            k = k_input[b].clone().to(self.device).requires_grad_()
+            sampling_mask_batch = sampling_mask[b].to(self.device)
+            k_sampled_points = k_input[b].to(self.device) * sampling_mask_batch
 
             # iterations
             for i in progress_bar:
@@ -352,10 +415,13 @@ class Loraks:
                 k.grad.zero_()
 
                 progress_bar.postfix = (
-                    f"loss low rank: {1e3 * loss_1.item():.2f} -- loss data: {1e3 * loss_2.item():.2f} -- "
-                    f"total_loss: {1e3 * loss.item():.2f}"
+                    f"LR: {self.learning_rate_func(i):.6f} -- "
+                    f"LowRank Loss: {1e3 * loss_1.item():.2f} -- "
+                    f"Data Loss: {1e3 * loss_2.item():.2f} -- "
+                    f"Total Loss: {1e3 * loss.item():.2f}"
                 )
-            # k is our converged best guess candidate, need to unprep / reshape
+
+            # k is our converged best guess candidate, need to unwrap / reshape
             k_out[b] = k.detach().cpu()
         return k_out
 
