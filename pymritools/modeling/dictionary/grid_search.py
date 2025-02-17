@@ -140,6 +140,100 @@ def setup_b1(settings: EmcFitSettings):
     return b1_data, name
 
 
+def fit_r2_fn(
+        input_data: torch.Tensor, db_mag: torch.Tensor,
+        t2_vals: torch.Tensor, b1_vals: torch.Tensor, t1_vals: torch.Tensor = torch.tensor([1.5]),
+        b1_data: torch.Tensor = None, batch_size: int = 1000, device: torch.device = torch.get_default_device()):
+    # mask nonzero values
+    data_shape = input_data.shape
+    input_data = input_data.reshape((-1, data_shape[-1]))
+
+    # can save some computations if we get bet data or data with 0 voxels
+    mask_nii_nonzero = torch.sum(torch.abs(input_data), dim=-1) > 1e-8
+    in_data_masked = input_data[mask_nii_nonzero]
+    # get data size
+    batch_dim_size = in_data_masked.shape[0]
+
+    b1_in = True if b1_data is not None else False
+    if b1_in:
+        in_b1_masked = torch.reshape(b1_data, (-1,))[mask_nii_nonzero]
+    else:
+        in_b1_masked = None
+
+    # set batch processing
+    num_batches = int(np.ceil(batch_dim_size / batch_size))
+
+    # get value combinations per curve
+    t1t2b1_vals = torch.tensor([(t1, t2, b1) for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals])
+
+    # allocate
+    t2 = torch.zeros(batch_dim_size, dtype=t2_vals.dtype, device=torch.device("cpu"))
+    l2 = torch.zeros(batch_dim_size, dtype=t2_vals.dtype, device=torch.device("cpu"))
+    b1 = torch.zeros(batch_dim_size, dtype=b1_vals.dtype, device=torch.device("cpu"))
+    t2_unmasked = torch.zeros(input_data.shape[0], dtype=t2_vals.dtype, device=torch.device("cpu"))
+    l2_unmasked = torch.zeros(input_data.shape[0], dtype=t2_vals.dtype, device=torch.device("cpu"))
+    b1_unmasked = torch.zeros(input_data.shape[0], dtype=b1_vals.dtype, device=torch.device("cpu"))
+    # rho_theta = torch.zeros(batch_dim_size, dtype=rho_s.dtype, device=device)
+
+    # reshape db to [t1, t2, b1, etl]
+    db_mag = torch.reshape(db_mag, (t1_vals.shape[0], t2_vals.shape[0], b1_vals.shape[0], -1))
+
+    if not b1_in:
+        # take whole database to gpu in case we arent regularizing with b1
+        fit_db = db_mag.to(device)[None]
+    else:
+        fit_db = None
+    # batch process
+    for idx_b in tqdm.trange(num_batches, desc="Batch Processing"):
+        start = idx_b * batch_size
+        end = min(start + batch_size, batch_dim_size)
+        data_batch = in_data_masked[start:end].to(device)
+
+        # b1 penalty
+        if b1_in:
+            # if regularizing get b1 from closest matching to b1 input
+            b1_batch = in_b1_masked[start:end]
+            b1_penalty = torch.sqrt(torch.square(b1_vals[:, None] - b1_batch[None, :]))
+            b1_min_idxs = torch.min(b1_penalty, dim=0).indices
+            b1[start:end] = b1_vals[b1_min_idxs]
+            # reduce db size by matching b1s, and restore batch dim
+            fit_db = torch.movedim(db_mag[:, :, b1_min_idxs], 2, 0).to(device)
+            # essentially left with [batch, t1, t2, etl], restore b1
+            fit_db = fit_db[:, :, :, None]
+
+        # l2 norm difference of magnitude data vs magnitude database
+        # calculate difference, dims db [batch, t1s, t2s, b1s, t], nii-batch [batch,t]
+        l2_norm_diff = torch.linalg.vector_norm(
+            fit_db - data_batch[:, None, None, None, :], dim=-1)
+
+        # find minimum l2 in db dim
+        l2_flat = torch.reshape(l2_norm_diff, (end - start, -1))
+
+        min_l2 = torch.min(l2_flat, dim=1)
+
+        min_idx_l2 = min_l2.indices.to(torch.device("cpu"))
+        min_vals_l2 = min_l2.values.to(torch.device("cpu"))
+
+        # populate maps
+        if not b1_in:
+            t2[start:end] = t1t2b1_vals[min_idx_l2, 1]
+            b1[start:end] = t1t2b1_vals[min_idx_l2, 2]
+        else:
+            t2[start:end] = t2_vals[min_idx_l2]
+        l2[start:end] = min_vals_l2
+        # rho_theta[start:end] = rho_db[min_idx_l2]
+
+    # fill in the whole tensor
+    t2_unmasked[mask_nii_nonzero] = t2.cpu()
+    l2_unmasked[mask_nii_nonzero] = l2.cpu()
+    b1_unmasked[mask_nii_nonzero] = b1.cpu()
+    # rho_theta_unmasked[mask_nii_nonzero] = rho_theta.cpu()
+    t2_unmasked = torch.reshape(t2_unmasked, data_shape[:-1])
+    l2_unmasked = torch.reshape(l2_unmasked, data_shape[:-1])
+    b1_unmasked = torch.reshape(b1_unmasked, data_shape[:-1])
+    return t2_unmasked, b1_unmasked, l2_unmasked
+
+
 def fit(settings: FitSettings):
     # set device
     if settings.use_gpu and torch.cuda.is_available():
