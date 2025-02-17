@@ -155,7 +155,7 @@ def extract_noise_mask(input_data: torch.Tensor, erode_iter: int = 2):
         err = f"Input data should be a torch tensor"
         raise AttributeError(err)
 
-    msg = "no mask file provided, using autodmri to extract mask"
+    msg = "using autodmri to extract mask"
     log_module.info(msg)
     # use echo across all 3 dimensions
     if input_data.shape.__len__() > 4:
