@@ -2,6 +2,7 @@ import logging
 import pathlib as plib
 
 import numpy as np
+import torch
 from dataclasses import dataclass
 from simple_parsing import field
 from scipy.ndimage import gaussian_filter
@@ -9,7 +10,7 @@ from scipy.ndimage import gaussian_filter
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.basic import BaseClass
 from pymritools.utils import nifti_load, nifti_save
-
+from pymritools.processing.denoising.mppca import extract_noise_mask, extract_noise_stats_from_mask
 log_module = logging.getLogger(__name__)
 
 
@@ -32,29 +33,123 @@ class Settings(BaseClass):
     )
 
 
-def afi_b1(settings: Settings):
+def check_cast_signals(signal_e1: float | torch.Tensor, signal_e2: float | torch.Tensor):
+    if isinstance(signal_e1, (float, int)):
+        signal_e1 = torch.tensor([signal_e1])
+    if isinstance(signal_e2, (float, int)):
+        signal_e2 = torch.tensor([signal_e2])
+    if signal_e1.shape != signal_e2.shape:
+        msg = f"afi signal echo images need to have equal shape, but found: {signal_e1.shape} and {signal_e2.shape}"
+        raise AttributeError(msg)
+    return signal_e1, signal_e2
+
+
+def variance_r(signal_e1: float | torch.Tensor, signal_e2: float| torch.Tensor,
+               sig_se1: float, sig_se2: float) -> torch.Tensor:
+    # calculate the variance in the r value / map from the afi signal equation (r = sig1 / sig2)
+    signal_e1, signal_e2 = check_cast_signals(signal_e1, signal_e2)
+    div = signal_e1**2
+    div[div < 1e-9] = 1
+    return torch.divide(
+        sig_se1 * signal_e2 + sig_se2 * signal_e1,
+        div)**2
+
+
+def variance_alpha(
+        signal_e1: float | torch.Tensor, signal_e2: float | torch.Tensor,
+        sig_se1: float, sig_se2: float, ratio_tr_n: float = 10.0) -> torch.Tensor:
+    # calculate the variance in the apparent flip angle, as error propagation through the afi equation
+    signal_e1, signal_e2 = check_cast_signals(signal_e1, signal_e2)
+    signal_e1[torch.abs(signal_e1) < 1e-9] = 1
+    # get r
+    ratio_signal_r = torch.divide(
+        signal_e2, signal_e1
+    )
+
+    a = - (ratio_tr_n - 1) * (ratio_tr_n + 1)
+    b = (ratio_signal_r - 1) * (ratio_signal_r + 1) * (ratio_tr_n - ratio_signal_r) ** 2
+    b[torch.abs(b) < 1e-9] = 1
+    tmp = torch.abs(a/b) * variance_r(signal_e1=signal_e1, signal_e2=signal_e2, sig_se1=sig_se1, sig_se2=sig_se2)
+    return tmp
+
+
+def variance_b1(value_sigma_alpha, value_set_alpha: float = 60.0):
+    return (18000 / np.pi / value_set_alpha)**2 * value_sigma_alpha
+
+
+def calculate_error_map(
+        b1_data: torch.Tensor, mask: torch.Tensor, flip_angle_set_deg: float,  path_visuals: plib.Path | str = None):
+    # get individual echoes
+    signal_afi_e1 = b1_data[..., 0]
+    signal_afi_e2 = b1_data[..., 1]
+
+    # get noise voxels and noise stats estimate to estimate the mean noise value
+    noise_sigma_1, noise_n = extract_noise_stats_from_mask(input_data=signal_afi_e1, mask=mask,
+                                                           path_visuals=path_visuals, )
+    # get noise voxels and noise stats estimate to estimate the mean noise value
+    noise_sigma_2, noise_n_2 = extract_noise_stats_from_mask(input_data=signal_afi_e2, mask=mask,
+                                                             path_visuals=path_visuals, )
+    # calculate error map
+    map_err_alpha = variance_alpha(
+        signal_e1=signal_afi_e1, signal_e2=signal_afi_e2,
+        sig_se1=noise_sigma_1, sig_se2=noise_sigma_2
+    )
+
+    return torch.sqrt(variance_b1(value_sigma_alpha=map_err_alpha, value_set_alpha=flip_angle_set_deg))
+
+
+def calculate_b1(b1_data: torch.Tensor, r_tr21: float, flip_angle_set_deg: float, smoothing_kernel: float = 3, ) -> torch.Tensor:
+    # calculate ratio
+    b1_data[..., 0][torch.abs(b1_data[..., 0]) < 1e-9] = 1
+    r = torch.divide(
+        b1_data[..., 1], b1_data[..., 0],
+    )
+    rtr = r_tr21 - r
+    rtr[torch.abs(rtr) < 1e-9] = 1
+    arg = torch.divide(
+        r * r_tr21 - 1, rtr
+    )
+    alpha = torch.arccos(torch.clip(arg, -1, 1))
+    alpha *= 180 / np.pi
+
+    # smooth
+    alpha_filtered = smooth_b1(alpha=alpha, smoothing_kernel=smoothing_kernel)
+    return alpha_filtered / flip_angle_set_deg * 100
+
+
+def smooth_b1(alpha: torch.Tensor, smoothing_kernel: float) -> torch.Tensor:
+    return torch.from_numpy(gaussian_filter(alpha.numpy(), sigma=smoothing_kernel, axes=(0, 1, 2)))
+
+
+def processing(settings: Settings):
     # load file
     b1_data, b1_img = nifti_load(settings.input_file)
-    # calculate ratio
-    r = np.divide(
-        b1_data[..., 1], b1_data[..., 0],
-        where=np.abs(b1_data[..., 0]) > 1e-9, out=np.zeros_like(b1_data[..., 1])
-    )
-    arg = np.divide(
-            r * settings.ratio_tr2_tr1 - 1, settings.ratio_tr2_tr1 - r,
-            where=np.abs(settings.ratio_tr2_tr1 - r) > 1e-9, out=np.zeros_like(r)
-        )
-    alpha = np.arccos(np.clip(arg, -1, 1))
-    alpha *= 180 / np.pi
-    alpha_filtered = gaussian_filter(alpha, sigma=settings.smoothing_kernel, axes=(0, 1, 2))
 
-    b1 = alpha / settings.flip_angle * 100
-    b1_f = alpha_filtered / settings.flip_angle * 100
+    # estimate noise voxels
+    noise_mask = extract_noise_mask(input_data=b1_data, erode_iter=0)
+
+    # calculate b1
+    b1 = calculate_b1(
+        b1_data=b1_data, r_tr21=settings.ratio_tr2_tr1,
+        flip_angle_set_deg=settings.flip_angle, smoothing_kernel=settings.smoothing_kernel
+    )
+
+    # calculate error map
+    b1_err = calculate_error_map(
+        b1_data=b1_data, mask=noise_mask, flip_angle_set_deg=settings.flip_angle, path_visuals=settings.out_path
+    )
+    # calculate relative error
+    b1_rel_err = torch.nan_to_num(
+        torch.divide(
+            b1, b1_err
+        ),
+        nan=0.0, posinf=0.0, neginf=0.0
+    )
 
     # save
-    nifti_save(data=b1, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi_unfilt")
-    nifti_save(data=b1_f, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi")
+    nifti_save(data=b1, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi")
     nifti_save(data=b1_data[..., 0], img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi_ref")
+    nifti_save(data=b1_rel_err, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_rel_err")
 
 
 def main():

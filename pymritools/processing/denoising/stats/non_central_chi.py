@@ -1,5 +1,7 @@
 import torch
 import logging
+import scipy.special as ssp
+import numpy as np
 
 log_module = logging.getLogger(__name__)
 
@@ -21,6 +23,12 @@ def get_sigma_from_noise_vox(noise_voxel_data: torch.tensor) -> float:
     c = 1 / num_pts * torch.sum(noise_voxel_data ** 2, dim=0)
     d = torch.sqrt(b - c)
     return (a * d).item()
+
+
+def mean_ncc(sigma, n):
+    a = ssp.factorial2(2 * n - 1)
+    b = np.power(2, n - 1) * ssp.factorial(n - 1)
+    return np.sqrt(np.pi / 2) * sigma * a / b
 
 
 def noise_dist_jean(x: torch.Tensor, sigma: torch.Tensor | float, n: torch.Tensor | int):
