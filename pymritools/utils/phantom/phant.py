@@ -219,9 +219,10 @@ class Phantom:
                 for y in np.arange(-ac_central_radius, ac_central_radius)
                 if x**2 + y**2 <= ac_central_radius**2
             ])
-        i = np.array([[x, y] for x in np.arange(self.shape[0]) for y in np.arange(self.shape[1])])
+        i = torch.from_numpy(np.array([[x, y] for x in np.arange(self.shape[0]) for y in np.arange(self.shape[1])]))
         for e in range(self.num_echoes):
-            indices = torch.from_numpy(rng.choice(i, size=int(i.shape[0] / acceleration), replace=False))
+            permuted_indices = torch.randperm(i.shape[0])
+            indices = i[permuted_indices[:int(i.shape[0] / acceleration)]]
             k_us[i_central[:, 0], i_central[:, 1], ..., e] = k_fs[i_central[:, 0], i_central[:, 1], ..., e]
             k_us[indices[:, 0], indices[:, 1], ..., e] = k_fs[indices[:, 0], indices[:, 1], ..., e]
         return torch.squeeze(k_us)
