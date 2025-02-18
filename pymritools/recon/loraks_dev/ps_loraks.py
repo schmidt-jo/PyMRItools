@@ -385,7 +385,7 @@ class Loraks:
 
         operator_func = c_operator if self.operator_type == OperatorType.C else s_operator
         svd_func = get_lowrank_algorithm_function(self.svd_algorithm, self.svd_algorithm_args)
-        sv_threshold_func = get_sv_threshold_function(self.sv_cutoff_method, self.sv_cutoff_args)
+        sv_threshold_func = get_sv_threshold_function(self.sv_cutoff_method, self.sv_cutoff_args, self.device)
         loss_func = create_loss_func(operator_func, svd_func, sv_threshold_func)
 
         batch_size = self.k_space_shape[0]
