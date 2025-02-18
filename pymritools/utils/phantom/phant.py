@@ -211,7 +211,7 @@ class Phantom:
             k_us.unsqueeze_(-1)
             k_fs.unsqueeze_(-1)
         rng = np.random.default_rng(self.seed)
-        i = np.array([[x, y] for x in np.arange(256) for y in np.arange(256)])
+        i = np.array([[x, y] for x in np.arange(self.shape[0]) for y in np.arange(self.shape[1])])
         for e in range(self.num_echoes):
             indices = torch.from_numpy(rng.choice(i, size=int(i.shape[0] / acceleration), replace=False))
             k_us[indices[:, 0], indices[:, 1], ..., e] = k_fs[indices[:, 0], indices[:, 1], ..., e]
