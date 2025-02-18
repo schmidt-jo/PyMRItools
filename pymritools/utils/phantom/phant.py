@@ -139,7 +139,7 @@ class Phantom:
         # set image
         path = plib.Path(__file__).absolute().parent.joinpath("jupiter_512").with_suffix(".png")
         for s in shape:
-            if s > 512:
+            if s > 500:
                 path = plib.Path(__file__).absolute().parent.joinpath("jupiter").with_suffix(".png")
                 break
         phantom._set_image(Image.open(path).convert("L"))
