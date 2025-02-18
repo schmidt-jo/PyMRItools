@@ -34,6 +34,9 @@
 - [x] Implement different subsampling schemes for each echo on the SL phantom
 - [x] Do we want a tensor norm that is indifferent to the actual size/dimensionality? What do we expect when calculating norms in C-Space and in K-Space?
 
+
+- [ ] Check Licensing
+
 # Experiments and Results
 
 Datasets:
