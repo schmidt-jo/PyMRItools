@@ -138,6 +138,10 @@ class Phantom:
         phantom = cls(shape=shape, num_coils=num_coils, num_echoes=num_echoes)
         # set image
         path = plib.Path(__file__).absolute().parent.joinpath("jupiter_512").with_suffix(".png")
+        for s in shape:
+            if s > 512:
+                path = plib.Path(__file__).absolute().parent.joinpath("jupiter").with_suffix(".png")
+                break
         phantom._set_image(Image.open(path).convert("L"))
         phantom._build_coil_imgs()
         phantom._build_echo_imgs()
