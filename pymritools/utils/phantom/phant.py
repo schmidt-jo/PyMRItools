@@ -204,16 +204,25 @@ class Phantom:
         k_us[:, y_u::acceleration] = k_fs[:, y_u::acceleration]
         return torch.squeeze(k_us)
 
-    def sub_sample_random(self, acceleration: int) -> torch.Tensor:
+    def sub_sample_random(self, acceleration: int, ac_central_radius: int = 5) -> torch.Tensor:
         k_fs = self.get_2d_k_space()
         k_us = torch.zeros_like(k_fs)
         if self.num_echoes <= 1:
             k_us.unsqueeze_(-1)
             k_fs.unsqueeze_(-1)
         rng = np.random.default_rng(self.seed)
+        # always fill center
+        i_central = np.array(
+            [
+                [x + int(self.shape[0] / 2), y + int(self.shape[1] / 2)]
+                for x in np.arange(-ac_central_radius, ac_central_radius)
+                for y in np.arange(-ac_central_radius, ac_central_radius)
+                if x**2 + y**2 <= ac_central_radius**2
+            ])
         i = np.array([[x, y] for x in np.arange(self.shape[0]) for y in np.arange(self.shape[1])])
         for e in range(self.num_echoes):
             indices = torch.from_numpy(rng.choice(i, size=int(i.shape[0] / acceleration), replace=False))
+            k_us[i_central[:, 0], i_central[:, 1], ..., e] = k_fs[i_central[:, 0], i_central[:, 1], ..., e]
             k_us[indices[:, 0], indices[:, 1], ..., e] = k_fs[indices[:, 0], indices[:, 1], ..., e]
         return torch.squeeze(k_us)
 
