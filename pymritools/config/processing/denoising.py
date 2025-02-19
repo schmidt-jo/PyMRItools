@@ -1,5 +1,3 @@
-from email.policy import default
-
 from pymritools.config import BaseClass
 from dataclasses import dataclass
 import logging
@@ -94,4 +92,44 @@ class SettingsMPK(BaseClass):
         alias="-ns", default=1.0,
         help="The estimated noise distribution is stretched by this factor above its bandwidth. "
              "That way singular values above the distribution bandwidth will get affected by the filter"
+    )
+
+
+@dataclass
+class SettingsKLC(BaseClass):
+    """
+    Configuration for klc - pca - kspace filter denoising
+    """
+    in_k_space: str = field(
+        alias="-i", default="",
+        help="Input k-space .pt file"
+    )
+    in_noise_scans: str = field(
+        alias="-in", default="",
+        help="Input noise scans file."
+    )
+    in_affine: str = field(
+        alias="-ia", default="",
+        help="input affine matrix, necessary if input file is .pt, optional if .nii"
+    )
+
+    file_prefix: str = field(
+        default="d", alias="-fp",
+        help=f"Output file prefix appended to name after denoising"
+    )
+    # flags & vars
+    batch_size: int = field(
+        alias="-b", default=200,
+        help=f"Batch size for processing"
+    )
+    line_patch_size: int = field(
+        alias="-lp", default=0,
+        help=f"Patch size along the readout line (pca matrices formed from these patches and channel dimension). "
+             f"If 0, channel dim will be matched (default)."
+    )
+    noise_dist_area_threshold: float = field(
+        alias="-ndth", default=0.85,
+        help=f"Threshold area. We build a smooth function downweighting all eigenvalues below this threshold. "
+             f"Its defined as the area under the eigenvalue distribution curve of the noise. "
+             f"Eigenvalue within this area will be attributed to noise in the filtering process."
     )
