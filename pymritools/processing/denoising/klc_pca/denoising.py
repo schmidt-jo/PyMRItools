@@ -17,6 +17,46 @@ from pymritools.utils.functions import interpolate
 log_module = logging.getLogger(__name__)
 
 
+def weighting_fn(input_tensor: torch.Tensor, cutoff: float, percent_range: float = 5.0):
+    """
+    Computes the weighting function value for a PyTorch tensor based on the cutoff and the percent range.
+
+    Parameters:
+        input_tensor (torch.Tensor): The tensor of input values to evaluate.
+        cutoff (float): The cutoff value.
+        percent_range (float): The percentage range around the cutoff for smoothing (default is 5%).
+
+    Returns:
+        torch.Tensor: A tensor of the computed weighting values. Values will be 0 below the lower bound,
+                      1 above the upper bound, and vary smoothly between them.
+    """
+    # Calculate the lower and upper bounds for the transition region
+    lower_bound = cutoff * (1 - percent_range / 100)
+    upper_bound = cutoff * (1 + percent_range / 100)
+
+    # Mask for values below the lower bound
+    below_lower = input_tensor <= lower_bound
+    # Mask for values above the upper bound
+    above_upper = input_tensor >= upper_bound
+
+    # Compute the normalized value for smoothstep
+    t = (input_tensor - lower_bound) / (upper_bound - lower_bound)
+    # Clamp `t` to be between 0 and 1 (for safety, though not strictly necessary)
+    t = torch.clamp(t, 0, 1)
+
+    # Apply the smoothstep formula: t^2 * (3 - 2 * t)
+    smooth = t * t * (3 - 2 * t)
+
+    # Combine the results:
+    # - Assign 0 where input is below the lower bound
+    # - Assign 1 where input is above the upper bound
+    # - Use smoothstep in between
+    weighting = torch.where(below_lower, torch.tensor(0.0, dtype=torch.float32),
+                            torch.where(above_upper, torch.tensor(1.0, dtype=torch.float32), smooth))
+
+    return weighting
+
+
 def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
             line_patch_size: int = 0, batch_size: int = 100,
             noise_dist_area_threshold: float = 0.85, visualization_path: plib.Path | str = None,
@@ -51,17 +91,20 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
 
     hist[0] = 0
     hist /= hist.max()
-    for smooth_iter in range(3):
-        w_ind = torch.nonzero(torch.cumsum(hist, dim=0) / torch.sum(hist) < noise_dist_area_threshold)[-1]
-        hist[:w_ind] = 1
-        hist[-hist.shape[0] // 30:] = 0
-        hist = torch.from_numpy(
-            gaussian_filter(hist.numpy(), sigma=5)
-        )
-        hist /= hist.max()
-        hist[-hist.shape[0] // 30:] = 0
-
-    weighting_function = 1 - hist
+    cs = torch.cumsum(hist, dim=0) / torch.sum(hist)
+    cutoff_ind = torch.nonzero(cs < 0.85)[-1].item()
+    cutoff_val = bins[cutoff_ind].item()
+    # for smooth_iter in range(3):
+    #     w_ind = torch.nonzero(torch.cumsum(hist, dim=0) / torch.sum(hist) < noise_dist_area_threshold)[-1]
+    #     hist[:w_ind] = 1
+    #     hist[-hist.shape[0] // 30:] = 0
+    #     hist = torch.from_numpy(
+    #         gaussian_filter(hist.numpy(), sigma=5)
+    #     )
+    #     hist /= hist.max()
+    #     hist[-hist.shape[0] // 30:] = 0
+    #
+    # weighting_function = 1 - hist
 
     if visualization_path is not None:
         visualization_path = plib.Path(visualization_path).absolute()
@@ -70,10 +113,12 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
             go.Bar(x=bins, y=hist, name="histogram")
         )
         fig.add_trace(
-            go.Bar(x=bins, y=weighting_function, name="weighting function")
+            go.Scatter(x=bins, y=weighting_fn(bins, cutoff_val, 15.0), name="weighting function")
         )
         fig.add_trace(
-            go.Scatter(x=bins, y=weighting_function, mode='markers', name="cutoff")
+            go.Scatter(
+                x=[cutoff_val, cutoff_val], y=[0, 1], mode="lines", name="cutoff val"
+            )
         )
         fn = visualization_path.joinpath(f"noise-s-vals-histogram").with_suffix(".html")
         logging.info(f"write file: {fn}")
@@ -83,7 +128,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
 
     denoised_data, _ = denoise_data(
         k_space=k_space, line_patch_size=line_patch_size,
-        ev_noise=bins, ev_weighting_fn=weighting_function,
+        ev_cutoff=cutoff_val, ev_cutoff_percent_range=15.0,
         batch_size=batch_size, device=device, lr_svd=lr_svd
     )
 
@@ -92,7 +137,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
 
 
 def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
-            ev_noise: torch.Tensor = None, ev_weighting_fn: torch.Tensor = None,
+            ev_cutoff: float = None, ev_cutoff_percent_range: float = 15,
             batch_size: int = 100, device: torch.device = torch.get_default_device(),
             lr_svd: bool = False):
 
@@ -154,20 +199,6 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
     s_vals = torch.zeros((b, matrix_shape[0], m))
     denoised_lines = torch.zeros_like(sampled_k_lines).view(sampled_k_lines.shape[0], -1)
 
-    # check weighting func
-    if ev_noise is None and ev_weighting_fn is not None:
-        log_module.info(f"Given eigenvalue weighting function but no noise eigenvalues. resetting to no weighting.")
-        ev_weighting_fn = None
-    if ev_noise is not None and ev_weighting_fn is None:
-        log_module.info(f"Given eigenvalues but no weighting function. resetting to no weighting.")
-        ev_noise = None
-    if ev_noise is None and ev_weighting_fn is None:
-        ev_noise = torch.linspace(0, 1, 10, device=device)
-        ev_weighting_fn = torch.ones_like(ev_noise, device=device)
-    else:
-        ev_noise = ev_noise.to(device)
-        ev_weighting_fn = ev_weighting_fn.to(device)
-
     for i in tqdm.trange(num_batches, desc=f"Batch processing :: batch size {batch_size}"):
         batch_start = i * batch_size
         batch_end = min(b, (i + 1) * batch_size)
@@ -192,10 +223,12 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
         # and we want to compute an interpolated weighting for the singular values we just calculated
         # to know which ones might belong to noise
         # if the weighting is not given we just keep everything and return only the s-vals
-        s_wfn = torch.squeeze(
-            interpolate(
-                x=(s ** 2 / m).unsqueeze(1), xp=ev_noise, fp=ev_weighting_fn.unsqueeze(0)
-            )
+        # ToDo: build weighting function based on function definition for easier calculation.
+        # No need to interpolate the weighting if we have an easy soft cutoff threshold function definition.
+        s_wfn = weighting_fn(
+            input_tensor=s**2 / m,
+            cutoff=2*s**2 / m if ev_cutoff is None else ev_cutoff,
+            percent_range=ev_cutoff_percent_range
         )
         # recon with weighted singular values
         d = torch.matmul(torch.einsum("ilm, im -> ilm", u, (s*s_wfn).to(u.dtype)), v)
