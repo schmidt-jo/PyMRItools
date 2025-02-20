@@ -10,9 +10,8 @@ from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.processing import DenoiseSettingsKLC
 
 from pymritools.utils import torch_load, torch_save, nifti_save, fft, root_sum_of_squares
-
-from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.processing.denoising.mppca_k_filter.functions import interpolate
+from pymritools.utils.matrix_indexing import get_linear_indices
+from pymritools.utils.functions import interpolate
 
 log_module = logging.getLogger(__name__)
 

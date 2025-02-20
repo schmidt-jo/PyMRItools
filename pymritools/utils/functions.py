@@ -4,6 +4,38 @@ import logging
 log_module = logging.getLogger(__name__)
 
 
+def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Tensor:
+    """
+    Interpolate a function fp at points xp in a multidimensional context
+
+    Parameters:
+    x (torch.Tensor): Tensor of the new sampling points with shape [batch, a, b]
+    xp (torch.Tensor): 1D Tensor of original sample points with shape [c]
+    fp (torch.Tensor): 2D Tensor of function values at xp with shape [a, c]
+
+    Returns:
+    torch.Tensor: Interpolated values with shape [batch, a, b]
+    """
+    while len(x.shape) < 3:
+        # in case there is no batch dim we fill
+        x = x.unsqueeze(0)
+    batch, a, b = x.shape
+    # find closest upper adjacent indices of x in xp, then the next lower one
+    indices = torch.searchsorted(xp, x.view(-1, b))
+    indices = torch.clamp(indices, 1, xp.shape[0] - 1)
+    # find adjacent left and right points on originally sampled axes xp
+    x0 = xp[indices - 1]
+    x1 = xp[indices]
+    # find values of originally sampled function considering its differing for each idx_a
+    fp_expanded = fp.unsqueeze(0).expand(batch, -1, -1)
+    y0 = fp_expanded.gather(2, indices.view(batch, a, b) - 1)
+    y1 = fp_expanded.gather(2, indices.view(batch, a, b))
+    # get the slope
+    slope = (y1 - y0) / (x1 - x0).view(batch, a, b)
+    interpolated_values = slope * (x - x0.view(batch, a, b)) + y0
+    return interpolated_values
+
+
 def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.Tensor):
     norm_factor = torch.linalg.norm(data, dim=dim_t, keepdim=True)
     # normalize
