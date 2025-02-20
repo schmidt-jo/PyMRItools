@@ -68,7 +68,8 @@ def get_sv_threshold_function(method: SVThresholdMethod, args: Tuple, device: to
                 raise ValueError("ReLU shift automatic method does not take arguments.")
             def func(singular_values: torch.Tensor):
                 scaled_cum_sum = torch.cumsum(singular_values, dim=0)/torch.sum(singular_values)
-                idx = torch.nonzero(scaled_cum_sum < 0.95)[-1].item()
+                idx = torch.nonzero(scaled_cum_sum < 0.9)[-1].item()
+                print(f"Using cutoff index {idx} with value {singular_values[idx]}")
                 return torch.relu(singular_values - singular_values[idx])
             return func
         case _:
