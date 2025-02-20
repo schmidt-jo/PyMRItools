@@ -303,7 +303,8 @@ def load_pulseq_rd(
             k_space, _ = denoise(
                 k_space=torch.from_numpy(k_space), noise_scans=noise_scans,
                 device=device, batch_size=50 if num_coils > 50 else 100,
-                line_patch_size=32 if num_coils >= 32 else num_coils
+                line_patch_size=32 if num_coils >= 32 else num_coils,
+                lr_svd=False
             ).cpu().numpy()
     else:
         psi_l_inv, noise_scans = None, None
