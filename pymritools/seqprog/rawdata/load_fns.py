@@ -10,6 +10,7 @@ from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
 from pymritools.config.seqprog import Sampling, PulseqParameters2D
 from pymritools.seqprog.rawdata.utils import remove_oversampling
+from pymritools.processing.denoising.klc_pca.denoising import denoise
 
 log_module = logging.getLogger(__name__)
 
@@ -90,6 +91,18 @@ def get_whitening_matrix(noise_data_n_samples_channel):
     return np.linalg.inv(psi_l)
 
 
+def noise_whitening(noise_scans: np.ndarray, device: torch.device = torch.get_default_device(),):
+    psi_l_inv = torch.from_numpy(
+        get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
+    ).to(device=device, dtype=torch.complex128)
+    noise_scans = torch.einsum(
+        "imn, lm -> iln",
+        torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex128),
+        psi_l_inv
+    )
+    return psi_l_inv, noise_scans
+
+
 def get_affine(
         geom: Geometry,
         voxel_sizes_mm: np.ndarray,
@@ -157,7 +170,7 @@ def get_affine(
 def load_pulseq_rd(
         pulseq_config: PulseqParameters2D, sampling_config: Sampling,
         data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, split_read_polarity: bool = True,
-        use_gpu: bool = True, gpu_device: int = 0):
+        use_gpu: bool = True, gpu_device: int = 0, denoise_k_lines: bool = True):
     if torch.cuda.is_available() and use_gpu:
         device = torch.device(f'cuda:{gpu_device}')
     else:
@@ -278,17 +291,24 @@ def load_pulseq_rd(
     # # with undersampled in the 0 filled regions data, remove artifacts
     # k_space *= k_sampling_mask[:, :, None, None, :]
     if noise_scans is not None:
-        psi_l_inv = torch.from_numpy(
-            get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-        ).to(device=device, dtype=torch.complex128)
-        noise_scans = torch.einsum(
-            "imn, lm -> iln",
-            torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex128),
-            psi_l_inv
-        )
-    log_module.info(f"remove oversampling")
+        # get whitening matrix and pre-whiten noise data
+        psi_l_inv, noise_scans = noise_whitening(noise_scans=noise_scans, device=device)
+    else:
+        psi_l_inv, noise_scans = None, None
 
+    if denoise_k_lines:
+        # want to use denoising on k-space lines, might be beneficial to do this before removing oversampling
+        # since the noise should be decorrelated between samples, but the sampled signal has stronger auto-correlation
+        # between sampled points with smaller sampling distance, i.e. smoothness
+        # k-space hast dimensions (n_read * os_factor, n_phase, n_slice, num_coils, etl), exactly like needed
+        k_space = denoise(
+            k_space=torch.from_numpy(k_space), noise_scans=torch.from_numpy(noise_scans),
+            device=device
+        ).cpu().numpy()
+
+    log_module.info(f"remove oversampling")
     k_space_rm_os = np.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
+    k_space_rm_os_d = np.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
     # do some batched processing slice wise use gpu if available
     for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
         batch_k = torch.from_numpy(k_space[:, :, idx_slice]).to(device=device, dtype=torch.complex128)
