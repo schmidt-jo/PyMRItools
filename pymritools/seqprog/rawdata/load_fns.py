@@ -1,5 +1,6 @@
 import logging
 
+import numpy
 import torch
 from scipy.spatial.transform import Rotation
 import numpy as np
@@ -91,7 +92,8 @@ def get_whitening_matrix(noise_data_n_samples_channel):
     return np.linalg.inv(psi_l)
 
 
-def noise_whitening(noise_scans: np.ndarray, device: torch.device = torch.get_default_device(),):
+def noise_whitening(noise_scans: np.ndarray, device: torch.device = torch.get_default_device(),
+                    ) -> (torch.Tensor, numpy.ndarray):
     psi_l_inv = torch.from_numpy(
         get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
     ).to(device=device, dtype=torch.complex128)
@@ -100,7 +102,7 @@ def noise_whitening(noise_scans: np.ndarray, device: torch.device = torch.get_de
         torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex128),
         psi_l_inv
     )
-    return psi_l_inv, noise_scans
+    return psi_l_inv, noise_scans.cpu()
 
 
 def get_affine(
@@ -293,22 +295,21 @@ def load_pulseq_rd(
     if noise_scans is not None:
         # get whitening matrix and pre-whiten noise data
         psi_l_inv, noise_scans = noise_whitening(noise_scans=noise_scans, device=device)
+        if denoise_k_lines:
+            # want to use denoising on k-space lines, might be beneficial to do this before removing oversampling
+            # since the noise should be decorrelated between samples, but the sampled signal has stronger auto-correlation
+            # between sampled points with smaller sampling distance, i.e. smoothness
+            # k-space hast dimensions (n_read * os_factor, n_phase, n_slice, num_coils, etl), exactly like needed
+            k_space, _ = denoise(
+                k_space=torch.from_numpy(k_space), noise_scans=noise_scans,
+                device=device, batch_size=50 if num_coils > 50 else 100,
+                line_patch_size=32 if num_coils >= 32 else num_coils
+            ).cpu().numpy()
     else:
         psi_l_inv, noise_scans = None, None
 
-    if denoise_k_lines:
-        # want to use denoising on k-space lines, might be beneficial to do this before removing oversampling
-        # since the noise should be decorrelated between samples, but the sampled signal has stronger auto-correlation
-        # between sampled points with smaller sampling distance, i.e. smoothness
-        # k-space hast dimensions (n_read * os_factor, n_phase, n_slice, num_coils, etl), exactly like needed
-        k_space = denoise(
-            k_space=torch.from_numpy(k_space), noise_scans=torch.from_numpy(noise_scans),
-            device=device
-        ).cpu().numpy()
-
     log_module.info(f"remove oversampling")
     k_space_rm_os = np.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
-    k_space_rm_os_d = np.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
     # do some batched processing slice wise use gpu if available
     for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
         batch_k = torch.from_numpy(k_space[:, :, idx_slice]).to(device=device, dtype=torch.complex128)
@@ -355,7 +356,6 @@ def load_pulseq_rd(
         fov_mm=fov,
         slice_gap_mm=gap
     )
-
     return k_space, k_sampling_mask, aff, noise_scans, echo_numbers_bu, echo_numbers_bd
 
 
@@ -441,13 +441,10 @@ def load_siemens_rd(
 
     # decorrelate channels
     if noise_scans is not None:
-        psi_l_inv = torch.from_numpy(
-            get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-        ).to(device=device, dtype=torch.complex128)
-        noise_scans = torch.einsum(
-            "imn, lm -> iln", torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex128),
-            psi_l_inv
-        )
+        # get whitening matrix and pre-whiten noise data
+        psi_l_inv, noise_scans = noise_whitening(noise_scans=noise_scans, device=device)
+    else:
+        psi_l_inv, noise_scans = None, None
 
     k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, n_echoes), dtype=torch.complex128)
     # do some batched processing slice wise use gpu if available
