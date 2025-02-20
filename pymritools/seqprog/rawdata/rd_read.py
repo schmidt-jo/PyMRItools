@@ -172,7 +172,6 @@ def siemens_rd_to_torch(config: RD):
     torch_save(k_sampling_mask, path_out, "k_sampling_mask")
 
 
-
 def siemens():
     # setup logging
     setup_program_logging(name="Raw Data to torch", level=logging.INFO)
