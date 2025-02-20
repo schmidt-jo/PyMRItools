@@ -17,6 +17,7 @@
 - [ ] Can we express a complex C matrix with a real valued one and get usable results from the SVD
 - [ ] Use linear indexing and matrix operators in AC - LORAKS
 - [ ] Make input floating point depth configurable to `tf32` for memory efficiency?
+- [ ] Chose c-matrix method to be complex or real valued
  
 
 - [x] Fix a requirement to the input shape: `shape = (m, ne, nc, nz, ny, nx)`
