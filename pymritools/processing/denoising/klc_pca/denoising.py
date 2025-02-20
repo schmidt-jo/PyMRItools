@@ -20,7 +20,7 @@ log_module = logging.getLogger(__name__)
 def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
             line_patch_size: int = 0, batch_size: int = 100,
             noise_dist_area_threshold: float = 0.85, visualization_path: plib.Path | str = None,
-            device: torch.device = torch.get_default_device()):
+            device: torch.device = torch.get_default_device(), lr_svd: bool = False):
     log_module.info("deduce noise threshold from noise scans")
     log_module.info(f"assume noise scan dims (num_noise_scans, n_channels, n_samples) :: got {noise_scans.shape}")
     # we combine first the num_noise scans and samples as ist shold be uncorrelated iid noise
@@ -38,7 +38,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
     log_module.info(f"\t\tget singular values")
     _, noise_s_vals = denoise_data(
         k_space=noise_scans[:, None, None, :, :], device=device, batch_size=batch_size,
-        line_patch_size=line_patch_size
+        line_patch_size=line_patch_size, lr_svd=lr_svd
     )
 
     log_module.info(f"\t\tdeduce noise s-val distribution")
@@ -84,7 +84,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
     denoised_data, _ = denoise_data(
         k_space=k_space, line_patch_size=line_patch_size,
         ev_noise=bins, ev_weighting_fn=weighting_function,
-        batch_size=batch_size, device=device
+        batch_size=batch_size, device=device, lr_svd=lr_svd
     )
 
     noise = k_space - denoised_data
@@ -93,7 +93,8 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
 
 def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
             ev_noise: torch.Tensor = None, ev_weighting_fn: torch.Tensor = None,
-            batch_size: int = 100, device: torch.device = torch.get_default_device()):
+            batch_size: int = 100, device: torch.device = torch.get_default_device(),
+            lr_svd: bool = False):
 
     log_module.info(f"Denoising k-space lines via patches across channels (nc).")
     log_module.info(f"Assume 5D data (nr, npe, ns, nc, ne). Found input shape: {k_space.shape}.")
@@ -137,7 +138,10 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
     # want to build matrix neighborhood in 2D
     nv = matrix_shape[1] // nc
     matrix_shape = (matrix_shape[0], nv, nc)
-    m = min(nv, nc)
+    if lr_svd:
+        m = 10
+    else:
+        m = min(nv, nc)
 
     log_module.debug(f"\t\tset count matrix for recombination of patches.")
     count_matrix = torch.bincount(indices)
@@ -148,7 +152,6 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
     num_batches = int(np.ceil(b / batch_size))
     # allocate
     s_vals = torch.zeros((b, matrix_shape[0], m))
-
     denoised_lines = torch.zeros_like(sampled_k_lines).view(sampled_k_lines.shape[0], -1)
 
     # check weighting func
@@ -177,7 +180,11 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
         ).to(device)
 
         # do svd
-        u, s, v = torch.linalg.svd(batch_k_lines, full_matrices=False)
+        if lr_svd:
+            u, s, v = torch.svd_lowrank(A=batch_k_lines, q=m, niter=2)
+            v = v.mH
+        else:
+            u, s, v = torch.linalg.svd(batch_k_lines, full_matrices=False)
 
         # we assume we have a weighting function that weights singular values based on a weighting function
         # ev_weighting_function, defined at the eigenvalues (svals**2) ev_noise.
