@@ -133,3 +133,9 @@ class SettingsKLC(BaseClass):
              f"Its defined as the area under the eigenvalue distribution curve of the noise. "
              f"Eigenvalue within this area will be attributed to noise in the filtering process."
     )
+    ev_cutoff_percent_range: float = field(
+        alias="-ecpr", default=15.0,
+        help=f"Around the threshold the eigenvalues are weighted from 0 (below) to 1 (above) "
+             f"to perform the noise filtering, using a smoothstep function. "
+             f"This parameter defines the width in percentage of the threshold of the step."
+    )

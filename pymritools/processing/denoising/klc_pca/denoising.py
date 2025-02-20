@@ -59,7 +59,8 @@ def weighting_fn(input_tensor: torch.Tensor, cutoff: float, percent_range: float
 
 def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
             line_patch_size: int = 0, batch_size: int = 100,
-            noise_dist_area_threshold: float = 0.85, visualization_path: plib.Path | str = None,
+            noise_dist_area_threshold: float = 0.85, ev_cutoff_percent_range: float = 15.0,
+            visualization_path: plib.Path | str = None,
             device: torch.device = torch.get_default_device(), lr_svd: bool = False):
     log_module.info("deduce noise threshold from noise scans")
     log_module.info(f"assume noise scan dims (num_noise_scans, n_channels, n_samples) :: got {noise_scans.shape}")
@@ -92,7 +93,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
     hist[0] = 0
     hist /= hist.max()
     cs = torch.cumsum(hist, dim=0) / torch.sum(hist)
-    cutoff_ind = torch.nonzero(cs < 0.85)[-1].item()
+    cutoff_ind = torch.nonzero(cs < noise_dist_area_threshold)[-1].item()
     cutoff_val = bins[cutoff_ind].item()
     # for smooth_iter in range(3):
     #     w_ind = torch.nonzero(torch.cumsum(hist, dim=0) / torch.sum(hist) < noise_dist_area_threshold)[-1]
@@ -113,7 +114,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
             go.Bar(x=bins, y=hist, name="histogram")
         )
         fig.add_trace(
-            go.Scatter(x=bins, y=weighting_fn(bins, cutoff_val, 15.0), name="weighting function")
+            go.Scatter(x=bins, y=weighting_fn(bins, cutoff_val, ev_cutoff_percent_range), name="weighting function")
         )
         fig.add_trace(
             go.Scatter(
@@ -128,7 +129,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
 
     denoised_data, _ = denoise_data(
         k_space=k_space, line_patch_size=line_patch_size,
-        ev_cutoff=cutoff_val, ev_cutoff_percent_range=15.0,
+        ev_cutoff=cutoff_val, ev_cutoff_percent_range=ev_cutoff_percent_range,
         batch_size=batch_size, device=device, lr_svd=lr_svd
     )
 
@@ -280,6 +281,7 @@ def denoise_from_cli(settings: DenoiseSettingsKLC):
         k_space=k_space, noise_scans=noise_scans,
         line_patch_size=0, batch_size=settings.batch_size,
         noise_dist_area_threshold=settings.noise_dist_area_threshold,
+        ev_cutoff_percent_range=settings.ev_cutoff_percent_range,
         visualization_path=path_figs,
         device=device
     )
