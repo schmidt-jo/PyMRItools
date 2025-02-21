@@ -199,7 +199,7 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
     # allocate
     s_vals = torch.zeros((b, matrix_shape[0], m))
     denoised_lines = torch.zeros_like(sampled_k_lines).view(sampled_k_lines.shape[0], -1)
-
+    torch.cuda.empty_cache()
     for i in tqdm.trange(num_batches, desc=f"Batch processing :: batch size {batch_size}"):
         batch_start = i * batch_size
         batch_end = min(b, (i + 1) * batch_size)
@@ -239,6 +239,7 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
         denoised_lines[batch_start:batch_end] = denoised_lines[batch_start:batch_end].index_add(
             1, indices, d_lines.view(bs, -1).cpu()
         )
+        torch.cuda.empty_cache()
 
     # move back dims, started here (ny, nz, ne, nx, nc)
     denoised_lines = denoised_lines.view(n_lines, ns, ne, nr, nc)
