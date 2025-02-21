@@ -126,7 +126,7 @@ class Parameters2D(Serializable):
         default=True, help="Toggle interleaved slice acquisition order."
     )
     sampling_pattern: str = field(
-        default="interleaved_lines", choices=["interleaved_lines", "weighted_random"],
+        default="random", choices=["interleaved_lines", "random", "grappa", "weighted_random"],
         help="Set phase encode sampling pattern between successive echoes."
     )
     use_navs: bool = field(
