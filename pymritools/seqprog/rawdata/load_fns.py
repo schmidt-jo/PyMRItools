@@ -307,7 +307,7 @@ def load_pulseq_rd(
             # k-space hast dimensions (n_read * os_factor, n_phase, n_slice, num_coils, etl), exactly like needed
             k_space, _ = denoise(
                 k_space=k_space, noise_scans=noise_scans,
-                device=device, batch_size=50 if num_coils > 50 else 100,
+                device=device, batch_size=100,
                 line_patch_size=16,
                 lr_svd=False
             )
@@ -315,7 +315,7 @@ def load_pulseq_rd(
         psi_l_inv, noise_scans = None, None
 
     log_module.info(f"remove oversampling")
-    k_space_rm_os = np.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
+    k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
     # do some batched processing slice wise use gpu if available
     for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
         batch_k = k_space[:, :, idx_slice].to(device=device)
@@ -323,12 +323,12 @@ def load_pulseq_rd(
         batch_rmos = remove_oversampling(
             data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
         )
-        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu().numpy()
+        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu()
 
     # fft bandpass filter for oversampling removal not consistent
     # with undersampled in the 0 filled regions data, remove artifacts
     # extend mask to full dims
-    k_space = k_space_rm_os * k_sampling_mask[:, :, None, None, :]
+    k_space = k_space_rm_os.numpy() * k_sampling_mask[:, :, None, None, :]
 
     # correct gradient directions - at the moment we have reversed z dir
     k_space = np.flip(k_space, axis=2)
