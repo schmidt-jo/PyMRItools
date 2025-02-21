@@ -439,10 +439,10 @@ class Sequence2D(abc.ABC):
 
     def _noise_pre_scan(self):
         # make delay
-        post_delay = DELAY.make_delay(delay_s=0.1, system=self.system)
+        post_delay = DELAY.make_delay(delay_s=0.05, system=self.system)
         # build adc block
         acq = ADC.make_adc(system=self.system, num_samples=1000, dwell=self.params.dwell)
-        # use 2 noise scans
+        # use number of noise scans
         for k in range(self.params.number_noise_scans):
             # add to sequence
             self.sequence.add_block(acq.to_simple_ns())
@@ -715,8 +715,8 @@ class Sequence2D(abc.ABC):
             k_start = k_central_phase - k_half_central_lines
             k_end = k_central_phase + k_half_central_lines
 
-            # different sampling choices ["weighted_sampling", "interleaved_lines", "grappa"]
-            if self.params.sampling_pattern.startswith("weighted"):
+            # different sampling choices ["weighted_sampling", "random", "interleaved_lines", "grappa"]
+            if self.params.sampling_pattern.startswith("weighted") or self.params.sampling_pattern.startswith("random"):
                 # The rest of the lines we will use tse style phase step blip between the echoes of one echo train
                 # Trying random sampling, ie. pick random line numbers for remaining indices,
                 # we dont want to pick the same positive as negative phase encodes to account
@@ -727,8 +727,8 @@ class Sequence2D(abc.ABC):
                 k_remaining = np.arange(0, k_start)
                 # build array with dim [num_slices, num_outer_lines] to sample different random scheme per slice
                 # hardcode weighting
-                weighting_factor = 0.3
-                log_module.info(f"\t\t-weighted random sampling of k-space phase encodes, factor: {weighting_factor}")
+                weighting_factor = 0.3 if self.params.sampling_pattern.startswith("weighted") else 0.0
+                log_module.info(f"\t\t-random sampling of k-space phase encodes, central weighting factor: {weighting_factor}")
                 # random encodes for different echoes - random choice weighted towards center
                 weighting = np.clip(np.power(np.linspace(0, 1, k_start), weighting_factor), 1e-5, 1)
                 weighting /= np.sum(weighting)
