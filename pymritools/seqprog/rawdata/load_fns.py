@@ -96,10 +96,10 @@ def noise_whitening(noise_scans: np.ndarray, device: torch.device = torch.get_de
                     ) -> (torch.Tensor, numpy.ndarray):
     psi_l_inv = torch.from_numpy(
         get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
-    ).to(device=device, dtype=torch.complex128)
+    ).to(device=device, dtype=torch.complex64)
     noise_scans = torch.einsum(
         "imn, lm -> iln",
-        torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex128),
+        torch.from_numpy(noise_scans).to(device=device, dtype=torch.complex64),
         psi_l_inv
     )
     return psi_l_inv, noise_scans.cpu()
@@ -292,21 +292,25 @@ def load_pulseq_rd(
     # # fft bandpass filter for oversampling removal not consistent
     # # with undersampled in the 0 filled regions data, remove artifacts
     # k_space *= k_sampling_mask[:, :, None, None, :]
+    k_space = torch.from_numpy(k_space).to(dtype=torch.complex64)
     if noise_scans is not None:
         # get whitening matrix and pre-whiten noise data
         psi_l_inv, noise_scans = noise_whitening(noise_scans=noise_scans, device=device)
+        for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
+            batch_k = k_space[:, :, idx_slice].to(device=device)
+            if noise_scans is not None:
+                k_space[:, :, idx_slice] = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv).cpu()
         if denoise_k_lines:
             # want to use denoising on k-space lines, might be beneficial to do this before removing oversampling
-            # since the noise should be decorrelated between samples, but the sampled signal has stronger auto-correlation
+            # since the noise should be uncorrelated between samples, but the sampled signal has stronger auto-correlation
             # between sampled points with smaller sampling distance, i.e. smoothness
             # k-space hast dimensions (n_read * os_factor, n_phase, n_slice, num_coils, etl), exactly like needed
             k_space, _ = denoise(
-                k_space=torch.from_numpy(k_space), noise_scans=noise_scans,
+                k_space=k_space, noise_scans=noise_scans,
                 device=device, batch_size=50 if num_coils > 50 else 100,
                 line_patch_size=16,
                 lr_svd=False
             )
-            k_space = k_space.cpu().numpy()
     else:
         psi_l_inv, noise_scans = None, None
 
@@ -314,9 +318,7 @@ def load_pulseq_rd(
     k_space_rm_os = np.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
     # do some batched processing slice wise use gpu if available
     for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
-        batch_k = torch.from_numpy(k_space[:, :, idx_slice]).to(device=device, dtype=torch.complex128)
-        if noise_scans is not None:
-            batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv)
+        batch_k = k_space[:, :, idx_slice].to(device=device)
         # remove oversampling, use gpu if set
         batch_rmos = remove_oversampling(
             data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
