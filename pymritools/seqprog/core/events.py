@@ -704,7 +704,7 @@ class ADC(Event):
                  ):
         adc_ns = pp.make_adc(
             num_samples=num_samples,
-            delay=delay_s,
+            delay=max(delay_s, system.adc_dead_time),
             duration=duration_s,
             dwell=dwell,
             freq_offset=freq_offset_hz,
