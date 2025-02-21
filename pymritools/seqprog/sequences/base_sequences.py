@@ -439,10 +439,10 @@ class Sequence2D(abc.ABC):
 
     def _noise_pre_scan(self):
         # make delay
-        post_delay = DELAY.make_delay(delay_s=0.1, system=self.system)
+        post_delay = DELAY.make_delay(delay_s=0.05, system=self.system)
         # build adc block
         acq = ADC.make_adc(system=self.system, num_samples=1000, dwell=self.params.dwell)
-        # use 2 noise scans
+        # use number of noise scans
         for k in range(self.params.number_noise_scans):
             # add to sequence
             self.sequence.add_block(acq.to_simple_ns())
