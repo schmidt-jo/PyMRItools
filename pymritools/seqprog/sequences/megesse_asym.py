@@ -166,7 +166,10 @@ class MEGESSE(Sequence2D):
             # need to flip signs
             # assumes trapezoidal gradients - only takes first trapezoid on longer kernels
             sbb.grad_read.amplitude[:4] *= -1
-            sbb.grad_read.area[0] *= -1
+            if isinstance(sbb.grad_read.area, float | int):
+                sbb.grad_read.area *= -1
+            else:
+                sbb.grad_read.area[0] *= -1
             # area_read = np.sum(block_acq.grad_read.area)
             # area_rewind = - 0.5 * area_read
 
@@ -190,7 +193,7 @@ class MEGESSE(Sequence2D):
         self._set_slice_delay(t_total_etl=t_total_etl)
 
     def _calculate_echo_timings(self):
-        # have 2 * etl echoes
+        # have num echoes * etl echoes
         # find midpoint of rf
         t_start = self.block_excitation.rf.t_delay_s + self.block_excitation.rf.t_duration_s / 2
         # find time between exc and mid first refocus (not symmetrical)
