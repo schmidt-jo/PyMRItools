@@ -327,6 +327,8 @@ def load_pulseq_rd(
         # with undersampled in the 0 filled regions data, remove artifacts
         # extend mask to full dims
         k_space = k_space_rm_os.numpy() * k_sampling_mask[:, :, None, None, :]
+    else:
+        k_space = k_space.cpu().numpy()
 
     # correct gradient directions - at the moment we have reversed z dir
     k_space = np.flip(k_space, axis=2)
