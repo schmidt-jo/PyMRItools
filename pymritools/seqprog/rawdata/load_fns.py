@@ -296,9 +296,6 @@ def load_pulseq_rd(
     if noise_scans is not None:
         # get whitening matrix and pre-whiten noise data
         psi_l_inv, noise_scans = noise_whitening(noise_scans=noise_scans, device=device)
-        # for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
-        for _, idx_slice in tqdm.tqdm(enumerate([k_space.shape[2] // 2]), desc="slice wise processing"):
-            batch_k = k_space[:, :, idx_slice].to(device=device)
     else:
         psi_l_inv, noise_scans = None, None
 
