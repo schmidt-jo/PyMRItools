@@ -4,7 +4,6 @@ import pathlib as plib
 import torch
 import numpy as np
 import tqdm
-from scipy.ndimage import gaussian_filter
 import plotly.graph_objects as go
 
 from pymritools.config import setup_program_logging, setup_parser
@@ -12,7 +11,6 @@ from pymritools.config.processing import DenoiseSettingsKLC
 
 from pymritools.utils import torch_load, torch_save, nifti_save, fft, root_sum_of_squares
 from pymritools.utils.matrix_indexing import get_linear_indices
-from pymritools.utils.functions import interpolate
 
 log_module = logging.getLogger(__name__)
 
@@ -51,8 +49,13 @@ def weighting_fn(input_tensor: torch.Tensor, cutoff: float, percent_range: float
     # - Assign 0 where input is below the lower bound
     # - Assign 1 where input is above the upper bound
     # - Use smoothstep in between
-    weighting = torch.where(below_lower, torch.tensor(0.0, dtype=torch.float32),
-                            torch.where(above_upper, torch.tensor(1.0, dtype=torch.float32), smooth))
+    weighting = torch.where(
+        condition=below_lower, input=torch.zeros_like(smooth),
+        other=torch.where(
+            condition=above_upper, input=torch.ones_like(smooth),
+            other=smooth
+        )
+    )
 
     return weighting
 
@@ -64,7 +67,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
             device: torch.device = torch.get_default_device(), lr_svd: bool = False):
     log_module.info("deduce noise threshold from noise scans")
     log_module.info(f"assume noise scan dims (num_noise_scans, n_channels, n_samples) :: got {noise_scans.shape}")
-    # we combine first the num_noise scans and samples as ist shold be uncorrelated iid noise
+    # we combine first the num_noise scans and samples as it should be uncorrelated iid noise
     noise_scans = torch.movedim(noise_scans, 1, 2).contiguous()
     noise_scans = noise_scans.view(-1, noise_scans.shape[-1])
     ns, nc = noise_scans.shape
@@ -74,6 +77,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
     noise_scans = noise_scans[:nb * k_space.shape[0]]
     # get into correct shape
     noise_scans = noise_scans.view(nb, k_space.shape[0], nc)
+    m = min(nc, line_patch_size)
     # input assumes (nr, npe, ns, nc, ne) - take batch num to be echoes
     noise_scans = torch.movedim(noise_scans, 0, -1)
     log_module.info(f"\t\tget singular values")
@@ -85,7 +89,7 @@ def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
     log_module.info(f"\t\tdeduce noise s-val distribution")
     # get histogram
     hist, bins = torch.histogram(
-        (noise_s_vals ** 2 / nc).view(-1),
+        (noise_s_vals ** 2 / m).view(-1),
         bins=200
     )
     bins = bins[:-1] + torch.diff(bins) / 2
@@ -147,7 +151,7 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
     log_module.info(f"Assume read dimension is first dimension.")
     # assuming k-space dims [x, y, z, ch, t], cast if not the case
     while k_space.shape.__len__() < 5:
-        k_space.unsqueeze(-1)
+        k_space = k_space.unsqueeze(-1)
         log_module.info(f"\t\tExpanding shape to {k_space.shape}.")
 
     nr, npe, ns, nc, ne = k_space.shape
@@ -228,7 +232,7 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
         # No need to interpolate the weighting if we have an easy soft cutoff threshold function definition.
         s_wfn = weighting_fn(
             input_tensor=s**2 / m,
-            cutoff=2*s**2 / m if ev_cutoff is None else ev_cutoff,
+            cutoff=2*s.max()**2 / m if ev_cutoff is None else ev_cutoff,
             percent_range=ev_cutoff_percent_range
         )
         # recon with weighted singular values
@@ -250,6 +254,11 @@ def denoise_data(k_space: torch.Tensor, line_patch_size: int = 0,
     # build denoised data
     denoised_data = torch.zeros_like(k_space)
     denoised_data[mask] = denoised_lines.contiguous().view(-1)
+
+    # move back dims svals (ny, nz, ne, num_patches, m)
+    s_vals = s_vals.view(n_lines, ns, ne, -1, m)
+    s_vals = torch.movedim(s_vals, -2, 0)
+    s_vals = torch.movedim(s_vals, -1, -2).contiguous()
     return denoised_data, s_vals
 
 
