@@ -245,5 +245,10 @@ class RD(BaseClass):
         help="Split read-polarity, i.e. produce separate k_space for each readout direction. " 
              "The polarities must include 'bu' for blip up and 'bd' for bd in sample/trajectory identifiers"
     )
+    remove_os: bool = field(
+        alias="-rmos", default=True,
+        help="Remove oversampling from kollected k-space. "
+             "We might want to turn this off for some denoising procedures to extract oversampled signal lines."
+    )
 
 
