@@ -302,21 +302,25 @@ def load_pulseq_rd(
     else:
         psi_l_inv, noise_scans = None, None
 
-    log_module.info(f"remove oversampling")
-    k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
+    if remove_os:
+        k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
+    else:
+        k_space_rm_os = None
     # do some batched processing slice wise use gpu if available
-    for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
-        batch_k = k_space[:, :, idx_slice].to(device=device)
-        if noise_scans is not None:
-            # pre - whiten
-            batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv).cpu()
-            k_space[:, :, idx_slice] = batch_k
-        if remove_os:
-            # remove oversampling, use gpu if set
-            batch_k = remove_oversampling(
-                data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
-            )
-            k_space_rm_os[:, :, idx_slice] = batch_k.cpu()
+
+    if noise_scans is not None or remove_os:
+        for idx_slice in tqdm.trange(n_slice, desc=f"slice wise processing :: pre-whiten {noise_scans is not None} :: remove os {remove_os}"):
+            batch_k = k_space[:, :, idx_slice].to(device=device)
+            if noise_scans is not None:
+                # pre - whiten
+                batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv).cpu()
+                k_space[:, :, idx_slice] = batch_k
+            if remove_os:
+                # remove oversampling, use gpu if set
+                batch_k = remove_oversampling(
+                    data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
+                )
+                k_space_rm_os[:, :, idx_slice] = batch_k.cpu()
 
     if remove_os:
         # fft bandpass filter for oversampling removal not consistent
