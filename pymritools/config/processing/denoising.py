@@ -123,12 +123,12 @@ class SettingsKLC(BaseClass):
         help=f"Batch size for processing"
     )
     line_patch_size: int = field(
-        alias="-lp", default=0,
+        alias="-lp", default=20,
         help=f"Patch size along the readout line (pca matrices formed from these patches and channel dimension). "
              f"If 0, channel dim will be matched (default)."
     )
     noise_dist_area_threshold: float = field(
-        alias="-ndth", default=0.85,
+        alias="-ndth", default=0.9,
         help=f"Threshold area. We build a smooth function downweighting all eigenvalues below this threshold. "
              f"Its defined as the area under the eigenvalue distribution curve of the noise. "
              f"Eigenvalue within this area will be attributed to noise in the filtering process."
