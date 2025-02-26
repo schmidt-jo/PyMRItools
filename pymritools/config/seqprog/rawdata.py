@@ -252,3 +252,21 @@ class RD(BaseClass):
     )
 
 
+@dataclass
+class RMOS(BaseClass):
+    input_file: str = field(
+        alias="-i", default="",
+        help="Input Raw data file in .dat format."
+    )
+    data_in_kspace: bool = field(
+        alias="-dk", default=True,
+        help="Toggle data in k or image space."
+    )
+    os_factor: int = field(
+        alias="-os", default=2,
+        help="Set oversampling factor."
+    )
+    dim: int = field(
+        alias="-dim", default=-1,
+        help="Dimension of oversampling / read direction to reduce. "
+    )
