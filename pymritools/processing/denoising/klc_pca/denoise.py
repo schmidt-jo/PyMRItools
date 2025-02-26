@@ -61,8 +61,8 @@ def weighting_fn(input_tensor: torch.Tensor, cutoff: float, percent_range: float
 
 
 def denoise(k_space: torch.Tensor, noise_scans: torch.Tensor,
-            line_patch_size: int = 0, batch_size: int = 100,
-            noise_dist_area_threshold: float = 0.85, ev_cutoff_percent_range: float = 15.0,
+            line_patch_size: int = 20, batch_size: int = 100,
+            noise_dist_area_threshold: float = 0.9, ev_cutoff_percent_range: float = 15.0,
             visualization_path: plib.Path | str = None,
             device: torch.device = torch.get_default_device(), lr_svd: bool = False):
     log_module.info("deduce noise threshold from noise scans")
@@ -284,17 +284,20 @@ def denoise_from_cli(settings: DenoiseSettingsKLC):
     # load data
     in_path = plib.Path(settings.in_k_space).absolute()
     k_space = torch_load(in_path)
+    k_space = torch.movedim(k_space, settings.line_dir, 0)
     noise_scans = torch_load(settings.in_noise_scans)
     affine = torch_load(settings.in_affine)
 
     denoised_k, noise = denoise(
         k_space=k_space, noise_scans=noise_scans,
-        line_patch_size=0, batch_size=settings.batch_size,
+        line_patch_size=settings.line_patch_size, batch_size=settings.batch_size,
         noise_dist_area_threshold=settings.noise_dist_area_threshold,
         ev_cutoff_percent_range=settings.ev_cutoff_percent_range,
         visualization_path=path_figs,
         device=device
     )
+    denoised_k = torch.movedim(denoised_k, 0, settings.line_dir)
+    noise = torch.movedim(noise, 0, settings.line_dir)
 
     # save
     if settings.visualize:
@@ -309,10 +312,10 @@ def denoise_from_cli(settings: DenoiseSettingsKLC):
 
 def main():
     # setup logging
-    setup_program_logging(name="MP distribution k-space filter denoising", level=logging.INFO)
+    setup_program_logging(name="k-space line filter denoising based on SVT", level=logging.INFO)
     # setup parser
     parser, args = setup_parser(
-        prog_name="MP distribution k-space filter denoising",
+        prog_name="k-space line channels SVT denoising",
         dict_config_dataclasses={"settings": DenoiseSettingsKLC}
     )
     # get config
