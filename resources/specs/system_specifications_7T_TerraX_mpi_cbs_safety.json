@@ -10,5 +10,6 @@
     "rf_raster_time": 1e-06,
     "rf_ringdown_time": 3e-05,
     "adc_dead_time": 2e-05,
+    "adc_raster_time": 1e-7,
     "gamma": 42577478.518
 }
