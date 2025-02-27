@@ -270,3 +270,27 @@ class RMOS(BaseClass):
         alias="-dim", default=-1,
         help="Dimension of oversampling / read direction to reduce. "
     )
+
+
+@dataclass
+class RSOS(BaseClass):
+    input_file: str = field(
+        alias="-i", default="",
+        help="Input Raw data file in .dat format."
+    )
+    input_affine: str = field(
+        alias="-ia", default="",
+        help="Input Affine to create Nifti header for output, uses I matrix if not provided."
+    )
+    data_in_kspace: bool = field(
+        alias="-dk", default=True,
+        help="Toggle data in k or image space."
+    )
+    dim_img: tuple = field(
+        alias="-dim", default=(0, 1),
+        help="Dimension of image space to FFT."
+    )
+    dim_c: int = field(
+        alias="-dc", default=-2,
+        help="Dimension of channels to reduce via rsos. "
+    )
