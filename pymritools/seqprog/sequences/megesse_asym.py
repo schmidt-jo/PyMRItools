@@ -16,7 +16,7 @@ class MEGESSE(Sequence2D):
 
         log_module.info(f"Init MEGESSE Sequence")
         # set number of GRE echoes beside SE
-        self.num_gre: int = 2
+        self.num_gre: int = 4
         self.num_e_per_rf: int = 1 + self.num_gre
 
         # timing
