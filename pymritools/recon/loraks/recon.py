@@ -44,7 +44,7 @@ def load_data(settings: PyLoraksConfig):
             input_k_space=k_space,
             sampling_pattern=sampling_pattern,
             num_compressed_channels=settings.coil_compression,
-            use_ac_data=True, device=device
+            use_ac_data=True, device=device, batch_size=20
         )
     # get shape
     while k_space.shape.__len__() < 5:
