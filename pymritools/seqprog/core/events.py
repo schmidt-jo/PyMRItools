@@ -702,29 +702,44 @@ class ADC(Event):
                  num_samples: int = 0, delay_s: float = 0, duration_s: float = 0,
                  dwell: float = 0, freq_offset_hz: float = 0, phase_offset_rad: float = 0.0
                  ):
-        adc_ns = pp.make_adc(
-            num_samples=num_samples,
-            delay=delay_s,
-            duration=duration_s,
-            dwell=dwell,
-            freq_offset=freq_offset_hz,
-            phase_offset=phase_offset_rad,
-            system=system
-        )
+        # we want to make an ADC event and need to consider a couple of things:
+        # 1) the dwell time including oversampling needs to be set to the ADC raster time (usually 100 ns)
+        # 2) the sample "centers" are shifted by 0.5 dwell time, ie. are in the center of the dwell period,
+        #       which we want to take into account to hit the central k-space
+        # 3) the adc delay needs to match the adc dead time (coded like this in the pypulseq code),
+        #       afaik this only needs to be taken into account when trying to apply multiple ADCs consecutively,
+        #       but since its only a couple of nanoseconds we will use this regardless
+        # set an instance
         adc_instance = cls()
+        # fix the system
         adc_instance.system = system
-        adc_instance.num_samples = adc_ns.num_samples
-        adc_instance.t_delay_s = adc_ns.delay
-        adc_instance.t_dwell_s = adc_ns.dwell
-        adc_instance.t_duration_s = adc_ns.dwell * adc_ns.num_samples
-        adc_instance.t_dead_time_s = adc_ns.dead_time
-        adc_instance.freq_offset_hz = adc_ns.freq_offset
-        adc_instance.phase_offset_rad = adc_ns.phase_offset
+        # sanity checks
+        if (dwell < 1e-9 and duration_s < 1e-9) or (dwell > 1e-9 and duration_s > 1e-9):
+            err = f"Set either dwell time or duration."
+            log_module.error(err)
+            raise ValueError(err)
+        if duration_s > 1e-9:
+            dwell = duration_s / num_samples
+
+        if adc_instance.system.adc_dead_time > delay_s:
+            msg = (f'Specified ADC delay {delay_s * 1e6:.2f} us is less than the '
+                   f'ADC dead time {system.adc_dead_time * 1e6:.0f} us. '
+                   f'Delay was increased to the dead time.')
+            log_module.info(msg)
+            delay_s = system.adc_dead_time
+
+        adc_instance.num_samples = num_samples
+        adc_instance.t_delay_s = delay_s
+        adc_instance.t_dwell_s = dwell
+        adc_instance.t_duration_s = dwell * num_samples
+        adc_instance.t_dead_time_s = system.adc_dead_time
+        adc_instance.freq_offset_hz = freq_offset_hz
+        adc_instance.phase_offset_rad = phase_offset_rad
         adc_instance.set_on_raster()
         return adc_instance
 
     def get_duration(self):
-        return self.t_duration_s + self.t_delay_s + self.t_dead_time_s
+        return self.t_duration_s + self.t_delay_s
 
     def to_simple_ns(self):
         return types.SimpleNamespace(
