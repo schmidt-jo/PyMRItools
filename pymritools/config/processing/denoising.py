@@ -132,7 +132,7 @@ class SettingsKLC(BaseClass):
              f"If 0, channel dim will be matched (default)."
     )
     noise_dist_area_threshold: float = field(
-        alias="-ndth", default=0.9,
+        alias="-ndth", default=0.85,
         help=f"Threshold area. We build a smooth function downweighting all eigenvalues below this threshold. "
              f"Its defined as the area under the eigenvalue distribution curve of the noise. "
              f"Eigenvalue within this area will be attributed to noise in the filtering process."
