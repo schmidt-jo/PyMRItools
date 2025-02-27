@@ -16,6 +16,7 @@ Do PCA based channel compression for faster computation of LORAKS
 """
 
 import torch
+import numpy as np
 import logging
 import tqdm
 
@@ -51,7 +52,7 @@ def shape_input(input_k_space: torch.Tensor, sampling_pattern: torch.Tensor):
 
 def compress_channels_2d(
         input_k_space: torch.tensor, sampling_pattern: torch.tensor,
-        num_compressed_channels: int, use_ac_data: bool = True,
+        num_compressed_channels: int, use_ac_data: bool = True, batch_size: int = 15,
         device: torch.device = torch.get_default_device()
     ) -> torch.tensor:
     log_module.info(f"GCC channel compression")
@@ -60,8 +61,6 @@ def compress_channels_2d(
         input_k_space=input_k_space, sampling_pattern=sampling_pattern
     )
     nx, ny, nz, nc, ne = input_k_space.shape
-    # get to device
-    input_k_space = input_k_space.to(device)
     # check if we are actually provided fewer channels
     if nc <= num_compressed_channels:
         msg = (f"\t\tinput data has fewer channels ({nc}) than set for compression ({num_compressed_channels})! "
@@ -80,45 +79,64 @@ def compress_channels_2d(
     # get all fs dimensions into img space
     in_comp_data = fft(input_data=sampled_data, img_to_k=False, axes=(0,))
 
+    # get all batch dimensions up front (z and e) (ne, nz, nx, ny, nc)
+    in_comp_data = torch.movedim(in_comp_data, 2, 0)
+    in_comp_data = torch.movedim(in_comp_data, -1, 0)
+    in_comp_data = torch.reshape(in_comp_data, (-1, nx, in_comp_data.shape[-2], nc))
+
+    input_k_space = torch.movedim(input_k_space, 2, 0)
+    input_k_space = torch.movedim(input_k_space, -1, 0)
+    input_k_space = torch.reshape(input_k_space, (-1, nx, ny, nc))
+
+    b_dim = in_comp_data.shape[0]
     # shape [ne * nz, nx, sy, nc]
-    out_comp_data = torch.zeros((nx, ny, nz, num_compressed_channels, ne), dtype=input_k_space.dtype, device=device)
+    out_comp_data = torch.zeros((b_dim, nx, ny, num_compressed_channels), dtype=input_k_space.dtype, device="cpu")
 
-    # do slice wise computation
-    for idx_z in tqdm.trange(nz):
-        for idx_e in range(ne):
-            # we do the compression for each fs spatial location (x and z) using all echoes for each coil
-            # move dims to front (nx, ny, ne, nc), first 1 is essentially batch dims
-            # (nx, sy, nc, ne) -> (nx, sy, ne, nc)
-            # in_comp = torch.movedim(icd, -1, 0)
-            # (nx, sy, ne, nc) -> (sy * ne, nc)
-            # in_comp = torch.reshape(in_comp, (nx, -1, nc))
-            # (nx, sy * ne, nc) - > (nz * nx, sy * ne, nc)
-            # in_comp_data = torch.reshape(in_comp_data, (-1, in_comp_data.shape[-2], nc))
-            # perform svd
-            icd = torch.movedim(in_comp_data[:, :, idx_z, :, idx_e], -1, -2)
-            u, s, vh = torch.linalg.svd(icd, full_matrices=False)
+    num_batches = int(np.ceil(b_dim / batch_size))
 
-            # take first num_comp_c rows of uH as initial compression matrices
-            a_gcc_0 = u.mH[..., :num_compressed_channels, :]
+    # do batch wise computation
+    for idx_b in tqdm.trange(num_batches, desc="batch processing"):
+        start = idx_b * batch_size
+        end = min((idx_b + 1) * batch_size, b_dim)
+        # we do the compression for each fs spatial location (x and z) using all echoes for each coil
+        # move dims to front (nx, ny, ne, nc), first 1 is essentially batch dims
+        # (nx, sy, nc, ne) -> (nx, sy, ne, nc)
+        # in_comp = torch.movedim(icd, -1, 0)
+        # (nx, sy, ne, nc) -> (sy * ne, nc)
+        # in_comp = torch.reshape(in_comp, (nx, -1, nc))
+        # (nx, sy * ne, nc) - > (nz * nx, sy * ne, nc)
+        # in_comp_data = torch.reshape(in_comp_data, (-1, in_comp_data.shape[-2], nc))
+        # perform svd
+        batch = in_comp_data[start:end].to(device)
+        u, s, vh = torch.linalg.svd(torch.movedim(batch, -1, -2), full_matrices=False)
 
-            # align a matrices
-            a_x = a_gcc_0.clone()
-            for i in range(a_x.shape[0] - 1):
-                c = torch.matmul(a_x[i+1], a_x[i].mH)
-                uc, sc, vhc = torch.linalg.svd(c, full_matrices=False)
-                p = torch.matmul(vhc.mH, uc.mH)
-                a_x[i+1] = torch.matmul(p, a_x[i+1])
+        # take first num_comp_c rows of uH as initial compression matrices
+        a_gcc_0 = u.mH[..., :num_compressed_channels, :]
 
-            # prep input k-space data
-            uncomp_data = fft(input_k_space[:, :, idx_z, :, idx_e], img_to_k=False, axes=(0,))
-            # do the coil compression at each location of all slice data!
-            out_comp_data[:, :, idx_z, :, idx_e] = torch.einsum("xdc, xyc -> xyd", a_x, uncomp_data)
-            # out_d = torch.matmul(a_x[:, None], uncomp_data[:, :, :, None])
-            # out_comp_data[:, :, idx_z, :, idx_e] = torch.squeeze(out_d)
+        # align a matrices
+        a_x = a_gcc_0.clone()
+        for i in range(a_x.shape[1] - 1):
+            c = torch.matmul(a_x[:, i+1], a_x[:, i].mH)
+            uc, sc, vhc = torch.linalg.svd(c, full_matrices=False)
+            p = torch.matmul(vhc.mH, uc.mH)
+            a_x[:, i+1] = torch.matmul(p, a_x[:, i+1])
+
+        # prep input k-space data
+        uncomp_data = fft(input_k_space[start:end].to(device), img_to_k=False, axes=(1,))
+        # do the coil compression at each location of all slice data!
+        out_comp_data[start:end] = torch.einsum("bxdc, bxyc -> bxyd", a_x, uncomp_data).cpu()
+        # out_d = torch.matmul(a_x[:, None], uncomp_data[:, :, :, None])
+        # out_comp_data[:, :, idx_z, :, idx_e] = torch.squeeze(out_d)
+
+    # reshape data
+    out_comp_data = torch.reshape(out_comp_data, (ne, nz, nx, ny, num_compressed_channels))
+    out_comp_data = torch.movedim(out_comp_data, 0, -1)
+    out_comp_data = torch.movedim(out_comp_data, 0, 2)
 
     # reverse fft in x dim
     out_comp_data = fft(out_comp_data, img_to_k=True, axes=(0,))
     out_comp_data = torch.movedim(out_comp_data, 0, read_dir)
+    torch.cuda.empty_cache()
     return out_comp_data.cpu()
 
 
