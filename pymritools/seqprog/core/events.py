@@ -69,7 +69,8 @@ class RF(Event):
         signal = rf.amplitude * np.exp(1j * rf.phase)
         # calculate raster with assigned duration, we set the signal to be rastered on rf raster of 1 us
         delta_t = system.rf_raster_time
-        t_array_s = rf_instance.set_on_raster(np.arange(0, int(duration_s * 1e6)) * 1e-6)
+        # calculate mid - time points of rf
+        t_array_s = rf_instance.set_on_raster(np.arange(0, int(duration_s * 1e6)) * 1e-6) + 5e-7
         # interpolate signal to new time
         signal_interp = np.interp(
             t_array_s,
@@ -77,8 +78,8 @@ class RF(Event):
             fp=signal
         )
         # make sure to start and end with 0
-        signal_interp[0] = 0
-        signal_interp[-1] = 0
+        # signal_interp[0] = 0
+        # signal_interp[-1] = 0
 
         # normalise flip angle
         flip = np.sum(np.abs(signal_interp)) * delta_t * 2 * np.pi
@@ -180,7 +181,8 @@ class RF(Event):
         rf_instance.t_duration_s = duration_s
         rf_instance.t_ringdown_s = system.rf_ringdown_time
         rf_instance.t_dead_time_s = system.rf_dead_time
-        rf_instance.t_array_s = rf_instance.set_on_raster(np.linspace(0, duration_s, rf_simple_ns.signal.shape[0]))
+        # rf_instance.t_array_s = rf_instance.set_on_raster(np.linspace(0, duration_s, rf_simple_ns.signal.shape[0]))
+        rf_instance.t_array_s = rf_simple_ns.t
 
         rf_instance.bandwidth_hz = time_bw_prod / duration_s
         rf_instance.time_bandwidth = time_bw_prod
