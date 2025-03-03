@@ -211,7 +211,7 @@ class MEGESSE(Sequence2D):
                 self.block_refocus.rf.t_delay_s + self.block_refocus.rf.t_duration_s / 2)
                 + self.block_acquisition.get_duration() / 2
         )
-        assert t_ref_e1 == t_ref_e
+        assert np.allclose(t_ref_e1, t_ref_e)
         t_e2e = self.block_acquisition.get_duration() / 2 + self.block_acquisition_neg_polarity.get_duration() / 2
         # we need to add the e2e time for each additional GRE readout
         # echo time of first se is twice the bigger time of 1) between excitation and first ref
