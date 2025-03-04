@@ -4,7 +4,7 @@ from typing import Tuple
 
 from PIL import Image
 import numpy as np
-from scipy.ndimage import zoom
+from scipy.ndimage import zoom, gaussian_filter
 import torch
 
 from pymritools.utils import fft, gaussian_2d_kernel
@@ -24,6 +24,7 @@ class Phantom:
         self._img: np.ndarray = np.empty(shape)
         self._cs: np.ndarray = np.ones((*shape, num_coils))
         self._e: np.ndarray = np.ones((*shape, num_echoes))
+        self._p: np.ndarray = np.ones((*shape, num_coils, num_echoes))
 
     # __ private
     def _set_image(self, img: Image):
@@ -74,6 +75,17 @@ class Phantom:
                     self._cs = self._get_terra_cs()
                 case _:
                     raise ValueError(f"Unknown phantom mode: {cs_mode}, choose one of 'random', 'terra'")
+
+    def _build_phase_imgs(self):
+        # build phase images
+        # set some circle in the middle to random numbers and then smooth
+        phase = np.random.random((*self.shape, self.num_coils, self.num_echoes)) * np.pi * 2 * gaussian_2d_kernel(
+            size_x=self.shape[0], size_y=self.shape[1], center_x=self.shape[0] // 2, center_y=self.shape[1] // 2,
+            sigma=min(self.shape) // 3
+        ).numpy()[:, :, None, None]
+        phase = gaussian_filter(phase, sigma=5, axes=(0, 1))
+        phase = gaussian_filter(phase, sigma=3, axes=(0, 1))
+        self._p = phase * np.pi / np.max(phase)
 
     def _get_terra_cs(self) -> np.ndarray:
         if self.num_coils > 64:
@@ -131,6 +143,7 @@ class Phantom:
         phantom._set_image(Image.open(path).convert("L"))
         phantom._build_coil_imgs(cs_mode=cs_mode)
         phantom._build_echo_imgs()
+        phantom._build_phase_imgs()
         return phantom
 
     @classmethod
@@ -149,7 +162,7 @@ class Phantom:
 
     # __ public
     def get_2d_image(self) -> torch.Tensor:
-        data = self._img[:, :, None, None] * self._cs[:, :, :, None] * self._e[:, :, None, :]
+        data = self._img[:, :, None, None] * self._cs[:, :, :, None] * self._e[:, :, None, :] * np.exp(1j * self._p)
         return torch.squeeze(torch.from_numpy(data))
 
     def get_2d_k_space(self) -> torch.Tensor:
