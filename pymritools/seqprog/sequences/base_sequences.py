@@ -441,7 +441,9 @@ class Sequence2D(abc.ABC):
         # make delay
         post_delay = DELAY.make_delay(delay_s=0.05, system=self.system)
         # build adc block
-        acq = ADC.make_adc(system=self.system, num_samples=1000, dwell=self.params.dwell)
+        acq = ADC.make_adc(
+            system=self.system, num_samples=1000, dwell=self.params.dwell, delay_s=self.system.adc_dead_time
+        )
         # use number of noise scans
         for k in range(self.params.number_noise_scans):
             # add to sequence
@@ -564,6 +566,7 @@ class Sequence2D(abc.ABC):
     #             log_module.warning(warn)
 
     # sampling & k - space
+    # ToDo: use EPI style phase steps in between GRE readouts to inject different sampling patterns per GRE
     def _write_sampling_pattern_entry(self, slice_num: int, pe_num: int, echo_num: int,
                                       acq_type: str = "", echo_type: str = "", echo_type_num: int = -1,
                                       nav_acq: bool = False):

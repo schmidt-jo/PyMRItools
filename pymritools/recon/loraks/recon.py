@@ -6,7 +6,7 @@ import torch
 from pymritools.config.recon import PyLoraksConfig
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.utils import torch_save, torch_load, root_sum_of_squares, nifti_save, fft
-from pymritools.processing.coil_compression import compress_channels
+from pymritools.processing.coil_compression import compress_channels_2d
 from pymritools.recon.loraks.algorithms import ac_loraks, loraks
 
 log_module = logging.getLogger(__name__)
@@ -38,13 +38,13 @@ def load_data(settings: PyLoraksConfig):
     # # if sampling_pattern.shape.__len__() < 3:
     # #     # sampling pattern supposed to be x, y, t
     # #     sampling_pattern = sampling_pattern[:, :, None]
-
+    device = torch.device(f"cuda:{settings.gpu_device}") if settings.use_gpu and torch.cuda.is_available() else torch.device("cpu")
     if settings.coil_compression is not None:
-        k_space = compress_channels(
+        k_space = compress_channels_2d(
             input_k_space=k_space,
             sampling_pattern=sampling_pattern,
             num_compressed_channels=settings.coil_compression,
-            use_ac_data=True, use_gcc_along_read=False
+            use_ac_data=True, device=device, batch_size=20
         )
     # get shape
     while k_space.shape.__len__() < 5:

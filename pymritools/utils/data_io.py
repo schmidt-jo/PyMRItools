@@ -57,7 +57,14 @@ def torch_save(
 
 def torch_load(path_to_file: str | plib.Path) -> torch.Tensor:
     path_to_file = set_load_path(path_to_file, suffix=".pt")
-    return torch.load(path_to_file, map_location="cpu")
+    ld = torch.load(path_to_file, map_location="cpu", weights_only=False)
+    if ld.dtype == torch.int or ld.dtype == torch.bool:
+        return ld
+    if torch.is_complex(ld):
+        ld = ld.to(torch.complex64)
+    else:
+        ld = ld.to(torch.float32)
+    return ld
 
 
 def nifti_load(path_to_file: str | plib.Path) -> (np.ndarray, nib.Nifti1Image):

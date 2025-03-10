@@ -210,6 +210,7 @@ class Parameters2D(Serializable):
     @property
     def dwell(self) -> float:
         return self.acquisition_time / self.resolution_n_read / self.oversampling
+
     @property
     def excitation_rf_rad_fa(self) -> float:
         return self.excitation_rf_fa / 180.0 * np.pi

@@ -22,6 +22,7 @@ class MEGESSE(Sequence2D):
         # timing
         self.t_delay_exc_ref1: DELAY = DELAY()
         self.t_delay_ref1_se1: DELAY = DELAY()
+        self.t_delay_e2e: DELAY = DELAY()
 
         # its possible to redo the sampling scheme with adjusted etl
         # that is change sampling per readout, we would need pe blips between the gesse samplings,
@@ -173,7 +174,6 @@ class MEGESSE(Sequence2D):
             # area_read = np.sum(block_acq.grad_read.area)
             # area_rewind = - 0.5 * area_read
 
-
     def _build_variant(self):
         log_module.info(f"build -- calculate minimum ESP")
         self._calculate_echo_timings()
@@ -205,33 +205,51 @@ class MEGESSE(Sequence2D):
                 self.block_refocus_1.get_duration() - (
                 self.block_refocus_1.rf.t_delay_s + self.block_refocus_1.rf.t_duration_s / 2)
                 + self.block_acquisition.get_duration() / 2)
+        # sanity check for other block
+        t_ref_e = (
+                self.block_refocus.get_duration() - (
+                self.block_refocus.rf.t_delay_s + self.block_refocus.rf.t_duration_s / 2)
+                + self.block_acquisition.get_duration() / 2
+        )
+        assert np.allclose(t_ref_e1, t_ref_e)
         t_e2e = self.block_acquisition.get_duration() / 2 + self.block_acquisition_neg_polarity.get_duration() / 2
         # we need to add the e2e time for each additional GRE readout
         # echo time of first se is twice the bigger time of 1) between excitation and first ref
-        # 2) between first ref and se
-        esp_1 = 2 * np.max([t_exc_1ref, t_ref_e1])
+        # 2) between first ref and se and e2e
+        esp_1 = 2 * np.max([t_exc_1ref, t_ref_e1, t_e2e])
 
         # time to either side between excitation - ref - se needs to be equal, calculate appropriate delays
+        # we want this to be a multiple of the E2E time, such that we have symmetrical timings throughout the sequence
         if t_exc_1ref < esp_1 / 2:
-            delay_ref_e = 0.0
-            self.t_delay_exc_ref1 = DELAY.make_delay(esp_1 / 2 - t_exc_1ref, system=self.system)
+            delay_exc_ref = esp_1 / 2 - t_exc_1ref
+            self.t_delay_exc_ref1 = DELAY.make_delay(delay_exc_ref, system=self.system)
         else:
+            delay_exc_ref = 0
+        if t_ref_e1 < esp_1 / 2:
             delay_ref_e = esp_1 / 2 - t_ref_e1
             self.t_delay_ref1_se1 = DELAY.make_delay(delay_ref_e, system=self.system)
-
+        else:
+            delay_ref_e = 0
+        if t_e2e < esp_1 / 2:
+            delay_e2e = esp_1 / 2 - t_e2e
+            self.t_delay_e2e = DELAY.make_delay(delay_e2e, system=self.system)
+        else:
+            delay_e2e = 0
+        # we get a spacing between every event (exc - ref, ref - e, e - e, e - ref)
+        t_delta = esp_1 / 2
         # write echo times to array
         self.te.append(esp_1)
         for _ in range(self.num_gre):
-            self.te.append(self.te[-1] + t_e2e)
+            self.te.append(self.te[-1] + t_e2e + delay_e2e)
         # after this a rf pulse is played out and we can iteratively add the rest of the echoes
         for k in np.arange(self.num_e_per_rf, self.params.etl * self.num_e_per_rf, self.num_e_per_rf):
             # take last echo time (gre sampling after se) need to add time from gre to rf and from rf to gre (equal)
             # if we would need to add an delay (if ref to e is quicker than from excitation to ref),
             # we would do it before the echoes and after the echoes to symmetrize
-            self.te.append(self.te[k - 1] + 2 * (t_ref_e1 + delay_ref_e))
+            self.te.append(self.te[k - 1] + 2 * (t_ref_e + delay_ref_e))
             # take this time and add time between gre and se / readout to readout
             for _ in range(self.num_gre):
-                self.te.append(self.te[-1] + t_e2e)
+                self.te.append(self.te[-1] + t_e2e + delay_e2e)
         te_print = [f'{1000 * t:.2f}' for t in self.te]
         log_module.info(f"echo times: {te_print} ms")
         # deliberately set esp weird to catch it upon processing when dealing with megesse style sequence
@@ -275,6 +293,9 @@ class MEGESSE(Sequence2D):
                     acq_type=id_acq, echo_type=e_types[num_readout],
                     echo_type_num=idx_echo
                 )
+            if num_readout < self.num_e_per_rf - 1:
+                # add inter echo delay
+                self.sequence.add_block(self.t_delay_e2e.to_simple_ns())
 
     def _loop_slices(self, idx_pe_n: int, no_adc: bool = False):
         for idx_slice in range(self.params.resolution_slice_num):

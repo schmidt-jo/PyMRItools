@@ -122,8 +122,12 @@ class SettingsKLC(BaseClass):
         alias="-b", default=200,
         help=f"Batch size for processing"
     )
+    line_dir: int = field(
+        alias="-ld", default=0,
+        help=f"Patches are build 1D along the read dimension (usually fully sampled), dimension is given here."
+    )
     line_patch_size: int = field(
-        alias="-lp", default=0,
+        alias="-lp", default=20,
         help=f"Patch size along the readout line (pca matrices formed from these patches and channel dimension). "
              f"If 0, channel dim will be matched (default)."
     )

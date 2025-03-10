@@ -11,7 +11,6 @@ from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
 from pymritools.config.seqprog import Sampling, PulseqParameters2D
 from pymritools.seqprog.rawdata.utils import remove_oversampling
-from pymritools.processing.denoising.klc_pca.denoising import denoise
 
 log_module = logging.getLogger(__name__)
 
@@ -172,7 +171,7 @@ def get_affine(
 def load_pulseq_rd(
         pulseq_config: PulseqParameters2D, sampling_config: Sampling,
         data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, split_read_polarity: bool = True,
-        use_gpu: bool = True, gpu_device: int = 0, denoise_k_lines: bool = True):
+        use_gpu: bool = True, gpu_device: int = 0, remove_os: bool = True,):
     if torch.cuda.is_available() and use_gpu:
         device = torch.device(f'cuda:{gpu_device}')
     else:
@@ -296,39 +295,36 @@ def load_pulseq_rd(
     if noise_scans is not None:
         # get whitening matrix and pre-whiten noise data
         psi_l_inv, noise_scans = noise_whitening(noise_scans=noise_scans, device=device)
-        for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
-            batch_k = k_space[:, :, idx_slice].to(device=device)
-            if noise_scans is not None:
-                k_space[:, :, idx_slice] = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv).cpu()
-        if denoise_k_lines:
-            # want to use denoising on k-space lines, might be beneficial to do this before removing oversampling
-            # since the noise should be uncorrelated between samples, but the sampled signal has stronger auto-correlation
-            # between sampled points with smaller sampling distance, i.e. smoothness
-            # k-space hast dimensions (n_read * os_factor, n_phase, n_slice, num_coils, etl), exactly like needed
-            k_space, _ = denoise(
-                k_space=k_space, noise_scans=noise_scans,
-                device=device, batch_size=100,
-                line_patch_size=16,
-                lr_svd=False
-            )
     else:
         psi_l_inv, noise_scans = None, None
 
-    log_module.info(f"remove oversampling")
-    k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
+    if remove_os:
+        k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, etl), dtype=k_space.dtype)
+    else:
+        k_space_rm_os = None
     # do some batched processing slice wise use gpu if available
-    for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
-        batch_k = k_space[:, :, idx_slice].to(device=device)
-        # remove oversampling, use gpu if set
-        batch_rmos = remove_oversampling(
-            data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
-        )
-        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu()
 
-    # fft bandpass filter for oversampling removal not consistent
-    # with undersampled in the 0 filled regions data, remove artifacts
-    # extend mask to full dims
-    k_space = k_space_rm_os.numpy() * k_sampling_mask[:, :, None, None, :]
+    if noise_scans is not None or remove_os:
+        for idx_slice in tqdm.trange(n_slice, desc=f"slice wise processing :: pre-whiten {noise_scans is not None} :: remove os {remove_os}"):
+            batch_k = k_space[:, :, idx_slice].to(device=device)
+            if noise_scans is not None:
+                # pre - whiten
+                batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv).cpu()
+                k_space[:, :, idx_slice] = batch_k
+            if remove_os:
+                # remove oversampling, use gpu if set
+                batch_k = remove_oversampling(
+                    data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
+                )
+                k_space_rm_os[:, :, idx_slice] = batch_k.cpu()
+
+    if remove_os:
+        # fft bandpass filter for oversampling removal not consistent
+        # with undersampled in the 0 filled regions data, remove artifacts
+        # extend mask to full dims
+        k_space = k_space_rm_os.numpy() * k_sampling_mask[:, :, None, None, :]
+    else:
+        k_space = k_space.cpu().numpy()
 
     # correct gradient directions - at the moment we have reversed z dir
     k_space = np.flip(k_space, axis=2)

@@ -245,5 +245,52 @@ class RD(BaseClass):
         help="Split read-polarity, i.e. produce separate k_space for each readout direction. " 
              "The polarities must include 'bu' for blip up and 'bd' for bd in sample/trajectory identifiers"
     )
+    remove_os: bool = field(
+        alias="-rmos", default=True,
+        help="Remove oversampling from kollected k-space. "
+             "We might want to turn this off for some denoising procedures to extract oversampled signal lines."
+    )
 
 
+@dataclass
+class RMOS(BaseClass):
+    input_file: str = field(
+        alias="-i", default="",
+        help="Input Raw data file in .dat format."
+    )
+    data_in_kspace: bool = field(
+        alias="-dk", default=True,
+        help="Toggle data in k or image space."
+    )
+    os_factor: int = field(
+        alias="-os", default=2,
+        help="Set oversampling factor."
+    )
+    dim: int = field(
+        alias="-dim", default=-1,
+        help="Dimension of oversampling / read direction to reduce. "
+    )
+
+
+@dataclass
+class RSOS(BaseClass):
+    input_file: str = field(
+        alias="-i", default="",
+        help="Input Raw data file in .dat format."
+    )
+    input_affine: str = field(
+        alias="-ia", default="",
+        help="Input Affine to create Nifti header for output, uses I matrix if not provided."
+    )
+    data_in_kspace: bool = field(
+        alias="-dk", default=True,
+        help="Toggle data in k or image space."
+    )
+    dim_img: tuple = field(
+        alias="-dim", default=(0, 1),
+        help="Dimension of image space to FFT."
+    )
+    dim_c: int = field(
+        alias="-dc", default=-2,
+        help="Dimension of channels to reduce via rsos. "
+    )

@@ -16,14 +16,212 @@ Do PCA based channel compression for faster computation of LORAKS
 """
 
 import torch
+import numpy as np
 import logging
 import tqdm
+
+from pymritools.utils import fft
 
 log_module = logging.getLogger(__name__)
 
 
-def compress_channels(input_k_space: torch.tensor, sampling_pattern: torch.tensor,
-                      num_compressed_channels: int, use_ac_data: bool = True, use_gcc_along_read: bool = False
+def shape_input(input_k_space: torch.Tensor, sampling_pattern: torch.Tensor):
+    # check input
+    while input_k_space.shape.__len__() < 5:
+        input_k_space = torch.unsqueeze(input_k_space, -1)
+    while sampling_pattern.shape.__len__() < 5:
+        sampling_pattern = torch.unsqueeze(sampling_pattern, -2)
+    read_dir = -1
+    for i in range(2):
+        sp = torch.movedim(sampling_pattern, i, 0)
+        num_samples = torch.sum(sp[:, sp.shape[1] // 2, sp.shape[2] // 2], dim=0)
+        num_samples = torch.unique(num_samples)[0].item()
+        if num_samples == sp.shape[0] and read_dir < 0:
+            read_dir = i
+    if read_dir < 0:
+        err = (f"Could not deduce read dimension from input "
+               f"(no middle sampled line in x-y-z corresponds to the shape dim).")
+        log_module.error(err)
+        raise AttributeError(err)
+    log_module.info(f"found read dir for channel compression: {['x', 'y'][i]}")
+
+    input_k_space = torch.movedim(input_k_space, read_dir, 0)
+    sampling_pattern = torch.movedim(sampling_pattern, read_dir, 0)
+    return input_k_space, sampling_pattern, read_dir
+
+
+def compress_channels_2d(
+        input_k_space: torch.tensor, sampling_pattern: torch.tensor,
+        num_compressed_channels: int, use_ac_data: bool = True, batch_size: int = 15,
+        device: torch.device = torch.get_default_device()
+    ) -> torch.tensor:
+    log_module.info(f"GCC channel compression")
+    """ k-space is assumed to be provided in dims [x, y, z, ch, t (optional)]"""
+    input_k_space, sampling_pattern, read_dir = shape_input(
+        input_k_space=input_k_space, sampling_pattern=sampling_pattern
+    )
+    nx, ny, nz, nc, ne = input_k_space.shape
+    # check if we are actually provided fewer channels
+    if nc <= num_compressed_channels:
+        msg = (f"\t\tinput data has fewer channels ({nc}) than set for compression ({num_compressed_channels})! "
+               f"No compression done.")
+        log_module.info(msg)
+        return input_k_space.cpu()
+    # get sampled data
+    sampled_data = get_sampled_data(
+        input_k_space=input_k_space, sampling_pattern=sampling_pattern, use_ac_data=use_ac_data
+    )
+    # check reduction - our use case always will have reduced y dims, x dim should be fully sampled but in k-space
+    # z dim should be fully sampled but in img space (2d sequence and sorting)
+
+    # deduce here the sampled dims. we want to do gcc in all fs dimensions, for know we hardcode the use case
+    # need to revisit this if we want to automate this more
+    # get all fs dimensions into img space
+    in_comp_data = fft(input_data=sampled_data, img_to_k=False, axes=(0,))
+
+    # get all batch dimensions up front (z and e) (ne, nz, nx, ny, nc)
+    in_comp_data = torch.movedim(in_comp_data, 2, 0)
+    in_comp_data = torch.movedim(in_comp_data, -1, 0)
+    in_comp_data = torch.reshape(in_comp_data, (-1, nx, in_comp_data.shape[-2], nc))
+
+    input_k_space = torch.movedim(input_k_space, 2, 0)
+    input_k_space = torch.movedim(input_k_space, -1, 0)
+    input_k_space = torch.reshape(input_k_space, (-1, nx, ny, nc))
+
+    b_dim = in_comp_data.shape[0]
+    # shape [ne * nz, nx, sy, nc]
+    out_comp_data = torch.zeros((b_dim, nx, ny, num_compressed_channels), dtype=input_k_space.dtype, device="cpu")
+
+    num_batches = int(np.ceil(b_dim / batch_size))
+
+    # do batch wise computation
+    for idx_b in tqdm.trange(num_batches, desc="batch processing"):
+        start = idx_b * batch_size
+        end = min((idx_b + 1) * batch_size, b_dim)
+        # we do the compression for each fs spatial location (x and z) using all echoes for each coil
+        # move dims to front (nx, ny, ne, nc), first 1 is essentially batch dims
+        # (nx, sy, nc, ne) -> (nx, sy, ne, nc)
+        # in_comp = torch.movedim(icd, -1, 0)
+        # (nx, sy, ne, nc) -> (sy * ne, nc)
+        # in_comp = torch.reshape(in_comp, (nx, -1, nc))
+        # (nx, sy * ne, nc) - > (nz * nx, sy * ne, nc)
+        # in_comp_data = torch.reshape(in_comp_data, (-1, in_comp_data.shape[-2], nc))
+        # perform svd
+        batch = in_comp_data[start:end].to(device)
+        u, s, vh = torch.linalg.svd(torch.movedim(batch, -1, -2), full_matrices=False)
+
+        # take first num_comp_c rows of uH as initial compression matrices
+        a_gcc_0 = u.mH[..., :num_compressed_channels, :]
+
+        # align a matrices
+        a_x = a_gcc_0.clone()
+        for i in range(a_x.shape[1] - 1):
+            c = torch.matmul(a_x[:, i+1], a_x[:, i].mH)
+            uc, sc, vhc = torch.linalg.svd(c, full_matrices=False)
+            p = torch.matmul(vhc.mH, uc.mH)
+            a_x[:, i+1] = torch.matmul(p, a_x[:, i+1])
+
+        # prep input k-space data
+        uncomp_data = fft(input_k_space[start:end].to(device), img_to_k=False, axes=(1,))
+        # do the coil compression at each location of all slice data!
+        out_comp_data[start:end] = torch.einsum("bxdc, bxyc -> bxyd", a_x, uncomp_data).cpu()
+        # out_d = torch.matmul(a_x[:, None], uncomp_data[:, :, :, None])
+        # out_comp_data[:, :, idx_z, :, idx_e] = torch.squeeze(out_d)
+
+    # reshape data
+    out_comp_data = torch.reshape(out_comp_data, (ne, nz, nx, ny, num_compressed_channels))
+    out_comp_data = torch.movedim(out_comp_data, 0, -1)
+    out_comp_data = torch.movedim(out_comp_data, 0, 2)
+
+    # reverse fft in x dim
+    out_comp_data = fft(out_comp_data, img_to_k=True, axes=(0,))
+    out_comp_data = torch.movedim(out_comp_data, 0, read_dir)
+    torch.cuda.empty_cache()
+    return out_comp_data.cpu()
+
+
+def get_sampled_data(input_k_space: torch.Tensor, sampling_pattern: torch.Tensor, use_ac_data: bool = True):
+    nx, ny, nz, nc, nt = input_k_space.shape
+    log_module.info(f"extract sampled data location from sampling mask")
+    if use_ac_data:
+        log_module.info(f"\t\tUsing only AC region")
+    # find ac data - we look for fully contained neighborhoods starting from middle position of the sampling mask
+    # assuming ACs data is equal for all echoes (potentially except first)
+    # Here we have a specific implementation for the sampling patterns used in jstmc mese and megesse sequences.
+    # In the mese case, the second echo usually has higher SNR. In the megesse case,
+    # the first echo is sampled with partial fourier in read direction.
+    # Hence we skip the first echo.
+    mid_x = int(nx / 2)
+    mid_y = int(ny / 2)
+    # make sure sampling pattern is bool
+    sampling_mask = sampling_pattern.clone().to(torch.bool)
+    if use_ac_data:
+        # move from middle out
+        lrbt = [mid_x, mid_x, mid_y, mid_y]
+        boundaries = [nx, nx, ny, ny]
+        dir = [-1, 1, -1, 1]
+        cont_lrbt = [True, True, True, True]
+        for _ in torch.arange(1, max(mid_x, mid_y) + 1):
+            for idx_dir in range(len(lrbt)):
+                pos = lrbt[idx_dir] + dir[idx_dir]
+                # for each direction, check within range
+                if 0 <= pos < boundaries[idx_dir]:
+                    if idx_dir < 2:
+                        pos_x = pos
+                        pos_y = mid_y
+                    else:
+                        pos_x = mid_x
+                        pos_y = pos
+                    if sampling_mask[pos_x, pos_y, 0, 0, 0] and cont_lrbt[idx_dir]:
+                        # sampling pattern true and still looking
+                        lrbt[idx_dir] = pos
+                    elif not sampling_mask[pos_x, pos_y, 0, 0, 0] and cont_lrbt[idx_dir]:
+                        # sampling pattern false, toggle looking
+                        cont_lrbt[idx_dir] = False
+        # extract ac region
+        data_mask = torch.zeros_like(sampling_mask[:, :, 0, 0, 0])
+        data_mask[lrbt[0]:lrbt[1], lrbt[2]:lrbt[3]] = True
+        # check detected region
+        data_mask = data_mask[:, :, None, None, None].expand(-1, -1, nz, nc, nt)
+    else:
+        # use all available sampled data
+        data_mask = sampling_mask.expand(-1, -1, nz, nc, -1)
+    if torch.nonzero(data_mask).shape[0] < 100:
+        err = f"\t\tNumber of available sampled data / AC region detected too small (<100 voxel). exiting"
+        log_module.error(err)
+        raise AttributeError(err)
+    sampled_data = input_k_space.clone()
+    sampled_data[~data_mask] = 0
+    s_y = data_mask[mid_x, :, 0, 0, 0].to(torch.int).sum()
+    s_x = data_mask[:, mid_y, 0, 0, 0].to(torch.int).sum()
+
+    # find readout direction, assume fs (edges can be unsampled):
+    if s_y < ny - 5 and s_x < nx - 5:
+        err = f"\t\tneither read nor phase ACs region is fully sampled."
+        log_module.error(err)
+        raise AttributeError(err)
+    elif s_y < ny - 5:
+        read_dim = 0
+        n_read = nx
+        n_phase = ny
+        mid = mid_x
+    else:
+        read_dim = 1
+        n_read = ny
+        n_phase = nx
+        mid = mid_y
+    # move fs dim first
+    sampled_data = torch.movedim(sampled_data, read_dim, 0)
+    data_mask = torch.movedim(data_mask, read_dim, 0)
+
+    # reduce non fs dimension
+    sampled_data = sampled_data[:, data_mask[mid].expand(-1, -1, nc, -1)]
+    sampled_data = torch.reshape(sampled_data, (n_read, -1, nz, nc, nt))
+    return sampled_data
+
+
+def compress_channels_arxv(input_k_space: torch.tensor, sampling_pattern: torch.tensor,
+                      num_compressed_channels: int, use_ac_data: bool = True, use_gcc_along_read: bool = True
                       ) -> torch.tensor:
     """ k-space is assumed to be provided in dims [x, y, z, ch, t (optional)]"""
     # set path for plotting
@@ -118,32 +316,15 @@ def compress_channels(input_k_space: torch.tensor, sampling_pattern: torch.tenso
     ac_data = ac_data[:, ac_mask[mid].expand(-1, -1, nch, -1)]
     ac_data = torch.reshape(ac_data, (n_read, -1, nz, nch, nt))
     # we do the compression slice wise and additionally try to deduce the compression matrix from highest snr data,
-    # chose first third of echoes here but skip first one.
-    dim_t = max(int(input_k_space.shape[-1] / 3), 2)
-    ac_data = ac_data[:, :, :, :, 1:dim_t]
+    # skip last third of echoes.
+    dim_t = int(input_k_space.shape[-1] / 3)
+    if dim_t > 0:
+        ac_data = ac_data[:, :, :, :, :-dim_t]
     if use_gcc_along_read:
-        # we want to compute coil compression along slice and fs read dim, create hybrid data with slice
+        # we want to compute coil compression along fs read dim, create hybrid data with slice
         # and read in img domain
-        in_comp_data = torch.fft.fftshift(
-            torch.fft.ifft(
-                torch.fft.ifftshift(
-                    in_comp_data,
-                    dim=0
-                ),
-                dim=0
-            ),
-            dim=0
-        )
-        ac_data = torch.fft.fftshift(
-            torch.fft.ifft(
-                torch.fft.ifftshift(
-                    ac_data,
-                    dim=0
-                ),
-                dim=0
-            ),
-            dim=0
-        )
+        in_comp_data = fft(in_comp_data, img_to_k=False, axes=(0,))
+        ac_data = fft(ac_data, img_to_k=False, axes=(0,))
     # allocate output_data
     compressed_data = torch.zeros(
         (n_read, n_phase, nz, num_compressed_channels, nt),

@@ -23,7 +23,7 @@ class MEGESSE(Sequence2D):
 
         log_module.info(f"Init MEGESSE Sequence")
         # set number of GRE echoes beside SE
-        self.num_gre: int = 2
+        self.num_gre: int = 3
         # number of readouts per refocusing (symmetrically placed)
         self.num_e_per_rf: int = 1 + 2 * self.num_gre
 
@@ -231,7 +231,10 @@ class MEGESSE(Sequence2D):
             # need to flip signs
             # assumes trapezoidal gradients - only takes first trapezoid on longer kernels
             sbb.grad_read.amplitude[:4] *= -1
-            sbb.grad_read.area[0] *= -1
+            if isinstance(sbb.grad_read.area, float | int):
+                sbb.grad_read.area *= -1
+            else:
+                sbb.grad_read.area[0] *= -1
             # area_read = np.sum(block_acq.grad_read.area)
             # area_rewind = - 0.5 * area_read
 

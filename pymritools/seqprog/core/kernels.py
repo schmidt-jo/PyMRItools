@@ -310,47 +310,101 @@ class Kernel:
     @classmethod
     def acquisition_fs(cls, params: PulseqParameters2D, system: Opts,
                        invert_grad_read_dir: bool = False):
-        # block : adc + read grad
+        # build a block : adc + read grad
         log_module.info("setup acquisition")
+
+        # some things to consider when building ADC + readout gradient pair:
+        # 1) the dwell time including oversampling needs to be set to the ADC raster time (usually 100 ns)
+        # 2) the sample "centers" are shifted by 0.5 dwell time, ie. are in the center of the dwell period,
+        #       which we want to take into account to hit the central k-space
+        # 3) the adc delay needs to match the adc dead time (coded like this in the pypulseq code),
+        #       afaik this only needs to be taken into account when trying to apply multiple ADCs consecutively,
+        #       but since its only a couple of nanoseconds we will use this regardless
+
+        # we are given the number of readout samples (resolution_n_read), an oversampling factor and the delta_k_read
+        # the k-space resolution we need to cover between (effective, non oversampled) samples.
+        # The params class makes sure that the dwell time including oversampling is a multiple of the adc raster time,
+        # the ADC event constructor should also raster the used times onto the ADC raster.
         adc = events.ADC.make_adc(
             num_samples=int(params.resolution_n_read * params.oversampling),
             dwell=params.dwell,
-            system=system
+            system=system,
+            delay_s=system.adc_dead_time
         )
-        # calculate time for oversampling * dwell
+
+        # On top the accompanying gradient has a raster time (usually around 10 us) which might be slightly bigger
+        # than the ADC dead time (usually 20 us). However, since they are in the same order of magnitude,
+        # for now we assume that ramping the gradient will probably take longer than the raster time, respectively,
+        # adc dead time, hence we will throw an error if in trouble but for now not concern ourselves
+        # too much with the possible situation, that the gradient is ready before the ADC dead time passed.
+
+        # Above ADC needs the gradient moment delta_k between the samples as flat area in effect
+        # when starting the sampling. We want the central sample to hit the middle of the block duration.
+
+        # When considering a k-space line in read direction from -n_read/2 to + n_read/2,
+        # the 0th/middle sample can be assigned to the positive half of the samples,
+        # (basically [-k, -k+1, ..., -1, 0, 1, ..., k-2, k-1])
+        # hence we have one less sample in plus (n-1) then minus (n) direction, when n is n_read/2.
+
+        # we need to adress this when the readout gradient is inverted (i.e. its not just negating gradient amplitude).
+        # if we reverse the direction of the gradient we need to go from k - 1, ..., 0, ... -k
+        # hence the middle 0 points is hit at different time
+        # we made sure n_read is divisible by 2.
+
+        # From Pulseq: According to the information from Klaus Scheffler and indirectly from Siemens this
+        # is the present convention - the samples are shifted by 0.5 dwell,
+        # i.e. the sampling point is hit in the middle of the dwell duration
+
+        # to accommodate the above sample shifting pragmatically, we increase the readout gradient duration a little,
+        # i.e. as if 1 additional sample needs to be taken.
+        # If we make sure the central sample is in the middle of the gradient,
+        # this makes pre-phasing etc. gradient calculation straight forward later on.
+
+        # calculate extended read gradient flat time
         t_adc_extended = int((params.resolution_n_read + 1) * params.oversampling) * params.dwell
-        # In case we want to turn around the readout (bipolar readout directions, we want to make sure that
-        # there is enough room for a k-space line shift (on even samples, the zero sample is considered positive,
-        # i.e. there is one more negative sample number than positives)
+        # to get the same gradient amplitude during ADC readout we adjust the flat area to incorporate
+        # this additional sample / extended flat time
         flat_area = (
-                            params.delta_k_read * (params.resolution_n_read + 1)
-                    ) * np.power(-1, int(invert_grad_read_dir))
-        # make at least oversampling * dwell and adc dead time to fit into the falling ramp
-        # since we need to shift the adc samples correctly depending on the grad direction
-        # ramp_times = adc.t_dead_time_s + params.oversampling * adc.t_dwell_s
-        # both adjustments together should prohibit adc stretching out of gradient flat time
+            params.delta_k_read * (params.resolution_n_read + 1)
+        ) * np.power(-1, int(invert_grad_read_dir))
+        # calculate amplitude
+        amp = flat_area / t_adc_extended
+        # use this to calculate the ramp time and put it on the gradient raster
+        ramp_time = np.abs(amp / system.max_slew)
+        # prolong the ramp time to mitigate some eddy current effects (especially for bipolar readouts)
+        ramp_time = set_on_grad_raster_time(system=system, time=3*ramp_time)
+
+        # both adjustments together should prohibit adc stretching out of gradient flat time regardless of polarity
+        # build gradient using the adjustments
         grad_read = events.GRAD.make_trapezoid(
             channel=params.read_dir,
-            ramp_time=None,
+            ramp_time=ramp_time,
             flat_area=flat_area,
             flat_time=t_adc_extended,
             system=system
         )
+
         # want to set adc symmetrically into grad read, and we want the middle adc sample to hit k space center.
         t_mid_grad = grad_read.t_mid
-        # The 0th line counts as a positive line, hence we have one less line in plus then minus direction.
-        # we need to adress this when the readout gradient is inverted (i.e. its not just negating gradient amplitude)
-        # if k = n_read / 2, we have the sampling points range from -k ,..., 0, ... k-1
-        # if we reverse the direction of the gradient we need to go from k - 1, ..., 0, ... -k
-        # hence the middle 0 points is hit at different times
-        # From Pulseq: According to the information from Klaus Scheffler and indirectly from Siemens this
-        # is the present convention - the samples are shifted by 0.5 dwell
-        # we made sure n_read is divisible by 2.
+        # calculate number of points before midpoint is hit (dependent on readout polarity)
         n_adc_mid = int((params.resolution_n_read / 2 - int(invert_grad_read_dir) / 2) * params.oversampling)
+        # calculate the time to the midpoint
         t_adc_mid = n_adc_mid * adc.t_dwell_s
+        if np.abs(t_adc_mid) % system.adc_raster_time > 1e-9:
+            err = f"Found adc samples to not be aligned to adc raster time"
+            log_module.error(err)
+            raise ValueError(err)
+
         # if we want to hit t_mid grad after n_adc_mid samples (plus a sample start shift of 0.5 dwell), we need to
         # calculate the right adc start delay
-        delay = t_mid_grad - t_adc_mid - adc.t_dwell_s / 2
+        # sanity check if the adc half sample time still falls on adc raster
+        t_adc_half_dwell = adc.t_dwell_s / 2
+        if np.abs(t_adc_half_dwell) % system.adc_raster_time > 1e-9:
+            err = f"Found adc samples to not be aligned to adc raster time"
+            log_module.error(err)
+            raise ValueError(err)
+
+        delay = t_mid_grad - t_adc_mid - t_adc_half_dwell
 
         if delay < 0:
             err = f"adc longer than read gradient"
