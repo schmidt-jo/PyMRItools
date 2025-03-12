@@ -140,13 +140,67 @@ class SimulationData:
         # setup axes in [m] positions along z axes
         self.sample_axis: torch.Tensor = torch.linspace(
             -params.length_z, params.length_z, params.sample_number
-        ).to(self.device)
+        )
         sample = torch.from_numpy(
             stats.gennorm(24).pdf(self.sample_axis.cpu().numpy() / params.length_z * 1.1) + 1e-6
         )
         # build bulk magnetization along axes positions
-        self.sample: torch.Tensor = torch.divide(sample, torch.max(sample)).to(self.device)
+        self.sample: torch.Tensor = torch.divide(sample, torch.max(sample))
 
+        self.t1_vals: torch.Tensor = torch.empty(1)
+        self.t2_vals: torch.Tensor = torch.empty(1)
+        self.b0_vals: torch.Tensor = torch.empty(1)
+        self.b1_vals: torch.Tensor = torch.empty(1)
+
+        self._get_vals_from_settings(settings=settings)
+        # declare
+        self.m_init: torch.Tensor = torch.empty(1)
+        self.magnetization_propagation: torch.Tensor = torch.empty(1)
+        self.gamma = torch.Tensor = torch.empty(1)
+
+        # signal tensor is supposed to hold all acquisition points for all reads
+        self.signal_tensor: torch.Tensor = torch.empty(1)
+        self.signal_mag: torch.Tensor = torch.empty(1)
+        self.signal_phase: torch.Tensor = torch.empty(1)
+
+        # use init method
+        self.init_tensors(etl=params.etl, acquisition_number=params.acquisition_number, gamma_hz=params.gamma_hz)
+        self.set_device()
+
+    def init_tensors(self,
+                     etl: int, acquisition_number: int,
+                     gamma_hz: float = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6):
+        # set magnetization vector and initialize magnetization, insert axes for [t1, t2, b1, b0] number of simulations
+        m_init = torch.zeros((self.sample.shape[0], 4))
+        m_init[:, 2] = self.sample
+        m_init[:, 3] = self.sample
+        # save initial state - extend to simulation dimensions [t1, t2, b1, b0
+        self.m_init: torch.Tensor = m_init[None, None, None, None].to(self.device)
+        # set initial state as magnetization propagation tensor, this one is used
+        # to iteratively calculate the magnetization sate along the axis
+        self.magnetization_propagation: torch.tensor = self.m_init.clone()
+
+        self.gamma = torch.tensor(gamma_hz, device=self.device)
+
+        # signal tensor is supposed to hold all acquisition points for all reads
+        self.signal_tensor: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, self.num_b0s, etl, acquisition_number),
+            dtype=torch.complex128, device=self.device
+        )
+
+        # allocate magnitude and phase results
+        # set emc data tensor -> dims: [t1s, t2s, b1s, ETL]
+        self.signal_mag: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, self.num_b0s, etl),
+            device=self.device
+        )
+        self.signal_phase: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, self.num_b0s, etl),
+            device=self.device
+        )
+        self._set_num_params()
+
+    def _get_vals_from_settings(self, settings):
         # set values with some error catches
         # t1
         if isinstance(settings.t1_list, list):
@@ -156,54 +210,29 @@ class SimulationData:
         self.t1_vals: torch.Tensor = t1_vals
         self.num_t1s: int = self.t1_vals.shape[0]
         # b1
-        self.b1_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b1_list).to(
-            self.device)
+        self.b1_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b1_list)
         self.num_b1s: int = self.b1_vals.shape[0]
+        # b0
+        self.b0_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b0_list)
+        self.num_b0s: int = self.b0_vals.shape[0]
         # t2
         array_t2 = self._build_tensors_from_list_of_lists_args(settings.t2_list)
         array_t2 /= 1000.0  # cast to s
-        self.t2_vals: torch.Tensor = array_t2.to(self.device)
+        self.t2_vals: torch.Tensor = array_t2
         self.num_t2s: int = self.t2_vals.shape[0]
+
+    def _set_num_params(self):
         # sim info
         # set total number of simulated curves
-        num_curves = self.num_t1s * self.num_t2s * self.num_b1s
+        num_curves = self.num_t1s * self.num_t2s * self.num_b1s * self.num_b0s
         log_module.info(f"\t\t- total number of entries to simulate: {num_curves}")
         self.total_num_sim: int = num_curves
 
-        # set magnetization vector and initialize magnetization, insert axes for [t1, t2, b1] number of simulations
-        m_init = torch.zeros((params.sample_number, 4))
-        m_init[:, 2] = self.sample
-        m_init[:, 3] = self.sample
-        # save initial state
-        self.m_init: torch.Tensor = m_init[None, None, None].to(self.device)
-        # set initial state as magnetization propagation tensor, this one is used
-        # to iteratively calculate the magnetization sate along the axis
-        self.magnetization_propagation: torch.tensor = self.m_init.clone()
-
-        self.gamma = torch.tensor(params.gamma_hz, device=self.device)
-
-        # signal tensor is supposed to hold all acquisition points for all reads
-        self.signal_tensor: torch.Tensor = torch.zeros(
-            (self.num_t1s, self.num_t2s, self.num_b1s, params.etl, params.acquisition_number),
-            dtype=torch.complex128, device=self.device
-        )
-
-        # allocate magnitude and phase results
-        # set emc data tensor -> dims: [t1s, t2s, b1s, ETL]
-        self.signal_mag: torch.Tensor = torch.zeros(
-            (self.num_t1s, self.num_t2s, self.num_b1s, params.etl),
-            device=self.device
-        )
-        self.signal_phase: torch.Tensor = torch.zeros(
-            (self.num_t1s, self.num_t2s, self.num_b1s, params.etl),
-            device=self.device
-        )
-
     @property
     def complete_param_list(self) -> list:
-        return [(t1, t2, b1) for t1 in self.t1_vals
-                for t2 in self.t2_vals for b1 in self.b1_vals]
-
+        return [(t1, t2, b1, b0) for t1 in self.t1_vals
+                for t2 in self.t2_vals for b1 in self.b1_vals
+                for b0 in self.b0_vals]
 
     @staticmethod
     def _build_tensors_from_list_of_lists_args(val_list) -> torch.tensor:
@@ -239,12 +268,22 @@ class SimulationData:
             log_module.error(err)
             raise AttributeError(err)
 
-    def set_device(self):
+    def set_device(self, device: torch.device = None):
         """
         push all tensors to given torch device
         :param device: torch device (cpu or gpu)
         :return: nothing
         """
-        for _, value in vars(self).items():
-            if torch.is_tensor(value):
-                value.to(self.device)
+        if device is not None:
+            self.device = device
+        self.t1_vals = self.t1_vals.to(self.device)
+        self.t2_vals = self.t2_vals.to(self.device)
+        self.b1_vals = self.b1_vals.to(self.device)
+        self.b0_vals = self.b0_vals.to(self.device)
+
+        self.signal_tensor = self.signal_tensor.to(self.device)
+        self.signal_mag = self.signal_mag.to(self.device)
+        self.signal_phase = self.signal_phase.to(self.device)
+
+        self.sample = self.sample.to(self.device)
+        self.sample_axis = self.sample_axis.to(self.device)
