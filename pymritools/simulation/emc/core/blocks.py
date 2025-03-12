@@ -103,10 +103,10 @@ class GradPulse:
         pulse_t_us = torch.concatenate(
             (t_delay_us, torch.from_numpy(kernel.rf.t_array_s + kernel.rf.t_delay_s) * 1e6), dim=0
         )
-        pulse_shape = torch.from_numpy(kernel.rf.signal)
+        pulse_shape = torch.from_numpy(kernel.rf.signal).to(torch.complex64)
         pulse_shape *= torch.exp(1j * torch.full_like(pulse_shape, kernel.rf.phase_rad))
         num_samples = pulse_shape.shape[0]
-        pulse_shape = torch.concatenate((torch.zeros(2), pulse_shape), dim=0)
+        pulse_shape = torch.concatenate((torch.zeros(2, dtype=pulse_shape.dtype), pulse_shape), dim=0)
 
         rf_duration_us = kernel.rf.t_duration_s * 1e6
         # interpolate the pulse with given sampling steps (should only 0 pad front if sampling steps are equal)
