@@ -33,16 +33,20 @@ class SimulationSettings(BaseClass):
     )
 
     t1_list: list = field(
-        alias="var_t1", default_factory=lambda: [1.5],
+        alias="-var_t1", default_factory=lambda: [1.5],
         help="T1 to simulate [s]. List of all values."
     )
     t2_list: list = field(
-        alias="var_t2", default_factory=lambda: [[25, 30, 0.5], [30, 35, 1]],
+        alias="-var_t2", default_factory=lambda: [[25, 30, 0.5], [30, 35, 1]],
         help="T2 to simulate [ms], List of ranges [(start_1, end_1, step_1), ..., (start_n, end_n, step_n)]"
     )
     b1_list: list = field(
-        alias="var_b1", default_factory=lambda: [0.6, 1.0],
-        help="B1 to simulate/ List of all values."
+        alias="-var_b1", default_factory=lambda: [0.6, 1.6, 0.1],
+        help="B1 to simulate, List of ranges [(start_1, end_1, step_1), ..., (start_n, end_n, step_n)]."
+    )
+    b0_list: list = field(
+        alias="-var_b0", default_factory=lambda: [[0, 1, 2]],
+        help="B0 to simulate, List of ranges [(start_1, end_1, step_1), ..., (start_n, end_n, step_n)]."
     )
 
     # options

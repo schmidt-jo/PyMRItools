@@ -2,6 +2,7 @@ import logging
 import pathlib as plib
 
 import torch
+import tqdm
 import numpy as np
 
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
@@ -65,13 +66,18 @@ def pulseq_rd_to_torch(config: RD):
 
     if config.visualize:
         # transform into image
-        img = fft(k_space, img_to_k=False, axes=(0, 1))
+        img = torch.zeros_like(k_space)
+        for i in tqdm.trange(img.shape[2], desc="\t\t- FFT"):
+            img[:, :, i] = fft(k_space[:, :, i], img_to_k=False, axes=(0, 1))
         if config.debug:
             for i in np.random.randint(low=0, high=img.shape[3], size=(3,)):
-                nifti_save(data=np.abs(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"naive_recon_mag_ch-{i}")
-                nifti_save(data=np.angle(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out, file_name=f"naive_recon_phase_ch-{i}")
+                nifti_save(data=np.abs(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out,
+                           file_name=f"naive_recon_mag_ch-{i}")
+                nifti_save(data=np.angle(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out,
+                           file_name=f"naive_recon_phase_ch-{i}")
         # do rSoS
-        img = root_sum_of_squares(img, dim_channel=-2)
+        for i in tqdm.trange(img.shape[2], desc="\t\t- rsos"):
+            img[:, :, i] = root_sum_of_squares(img[:, :, i], dim_channel=-2)
         # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
         nifti_save(data=k_sampling_mask.astype(float), img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
@@ -164,7 +170,8 @@ def siemens_rd_to_torch(config: RD):
         img = np.squeeze(root_sum_of_squares(img, dim_channel=-2))
         # nifti save
         nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
-        nifti_save(data=k_sampling_mask.astype(float)[:, :, :, 0], img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
+        nifti_save(data=k_sampling_mask.astype(float)[:, :, :, 0], img_aff=aff, path_to_dir=path_out,
+                   file_name="sampling_pattern")
 
     # save as torch tensor for recon
     torch_save(k_space, path_out, "k_space")
