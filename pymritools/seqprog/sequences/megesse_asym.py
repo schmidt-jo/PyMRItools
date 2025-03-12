@@ -37,7 +37,11 @@ class MEGESSE(Sequence2D):
 
         # add blip down acquisition
         self.block_acquisition_neg_polarity = Kernel.acquisition_fs(
-            params=self.params, system=self.system, invert_grad_read_dir=True
+            params=self.params, system=self.system, invert_grad_read_dir=True, relax_grad_stress=True
+        )
+        # redo acquisition setup, relax gradient stress
+        self.block_acquisition = Kernel.acquisition_fs(
+            params=self.params, system=self.system, invert_grad_read_dir=False, relax_grad_stress=True
         )
         # add id
         self.id_bd_acq: str = "bd_fs"
