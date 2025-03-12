@@ -1469,10 +1469,10 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     if config.visualize:
         logging.info("Plotting")
         # pyp_seq.plot(time_range=(0, 4e-3 * jstmc_seq.params.tr), time_disp='s')
-        sequence.plot_sequence(t_start_s=0, t_end_s=4*sequence.params.tr*1e-3, sim_grad_moments=True)
+        sequence.plot_sequence(t_start_s=0, t_end_s=2*sequence.params.tr*1e-3, sim_grad_moments=True)
         sequence.plot_sequence(
             t_start_s=(sequence.params.number_central_lines+2)*sequence.params.tr*1e-3,
-            t_end_s=(sequence.params.number_central_lines+6)*sequence.params.tr*1e-3,
+            t_end_s=(sequence.params.number_central_lines+4)*sequence.params.tr*1e-3,
             sim_grad_moments=True
         )
         sequence.plot_sampling()
