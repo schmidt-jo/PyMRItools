@@ -309,7 +309,7 @@ class Kernel:
 
     @classmethod
     def acquisition_fs(cls, params: PulseqParameters2D, system: Opts,
-                       invert_grad_read_dir: bool = False):
+                       invert_grad_read_dir: bool = False, relax_grad_stress: bool = False):
         # build a block : adc + read grad
         log_module.info("setup acquisition")
 
@@ -372,7 +372,8 @@ class Kernel:
         # use this to calculate the ramp time and put it on the gradient raster
         ramp_time = np.abs(amp / system.max_slew)
         # prolong the ramp time to mitigate some eddy current effects (especially for bipolar readouts)
-        ramp_time = set_on_grad_raster_time(system=system, time=3*ramp_time)
+        relax = 4 if relax_grad_stress else 1
+        ramp_time = set_on_grad_raster_time(system=system, time=relax*ramp_time)
 
         # both adjustments together should prohibit adc stretching out of gradient flat time regardless of polarity
         # build gradient using the adjustments
