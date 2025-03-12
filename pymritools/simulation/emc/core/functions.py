@@ -12,7 +12,7 @@ def pulse_calibration_integral(
         rf_pulse: RFPulse,
         flip_angle_deg: float,
         phase: float,
-        b1_vals: typing.Union[torch.tensor, np.ndarray, float] = 1.0) -> torch.tensor:
+        b1_vals: typing.Union[torch.Tensor, np.ndarray, float] = 1.0) -> torch.Tensor:
     """
     Calibration of a given pulse object, i.e. pulse shape for a given flip angle and phase.
     Optionally a set of B1 transmit values can be given.
