@@ -22,7 +22,12 @@
   ],
   "b1_list": [
     0.6,
+    0.8,
     1.0
+  ],
+  "b0_list": [
+    0,
+    10
   ],
   "signal_fourier_sampling": false,
   "resample_pulse_to_dt_us": 5.0,

@@ -43,6 +43,7 @@ class Simulation(abc.ABC):
         self._fig_t1_idx: int = int(self.data.num_t1s / 2)  # t1
         self._fig_t2_idx: int = int(self.data.num_t2s / 2)  # t2
         self._fig_b1_idx: int = int(self.data.num_b1s / 2)  # b1
+        self._fig_b0_idx: int = int(self.data.num_b0s / 2)  # b0
 
         # setup plotting
         if self.settings.visualize:
@@ -106,8 +107,9 @@ class Simulation(abc.ABC):
         t1_choice_idx = min([self.data.magnetization_propagation.shape[0] - 1, self._fig_t1_idx])
         t2_choice_idx = min([self.data.magnetization_propagation.shape[1] - 1, self._fig_t2_idx])
         b1_choice_idx = min([self.data.magnetization_propagation.shape[2] - 1, self._fig_b1_idx])
+        b0_choice_idx = min([self.data.magnetization_propagation.shape[3] - 1, self._fig_b0_idx])
         mag_profile = self.data.magnetization_propagation[
-            t1_choice_idx, t2_choice_idx, b1_choice_idx
+            t1_choice_idx, t2_choice_idx, b1_choice_idx, b0_choice_idx
         ].clone().detach().cpu()
         self._fig_magnetization_profile_snaps.append({
             "name": snap_name,
