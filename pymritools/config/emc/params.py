@@ -129,6 +129,13 @@ class Parameters(Serializable):
             self.refocus_angle.append(self.refocus_angle[-1])
             self.refocus_phase.append(self.refocus_phase[-1])
 
+    def display(self):
+        # display via logging
+        s = "___ Params ___\n"
+        for k, v in self.to_dict().items():
+            s += f"\t\t\t{k}:".ljust(30) + f"{v}\n".rjust(55, ".")
+        log_module.info(s)
+
 
 class SimulationData:
     """
@@ -147,24 +154,56 @@ class SimulationData:
         # build bulk magnetization along axes positions
         self.sample: torch.Tensor = torch.divide(sample, torch.max(sample))
 
-        self.t1_vals: torch.Tensor = torch.empty(1)
-        self.t2_vals: torch.Tensor = torch.empty(1)
-        self.b0_vals: torch.Tensor = torch.empty(1)
-        self.b1_vals: torch.Tensor = torch.empty(1)
+        # set values with some error catches
+        # t1
+        if isinstance(settings.t1_list, list):
+            t1_vals = torch.tensor(settings.t1_list, device=self.device)
+        else:
+            t1_vals = torch.tensor([settings.t1_list], dtype=torch.float32, device=self.device)
+        self.t1_vals: torch.Tensor = t1_vals
+        self.num_t1s: int = self.t1_vals.shape[0]
+        # b1
+        self.b1_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b1_list)
+        self.num_b1s: int = self.b1_vals.shape[0]
+        # b0
+        self.b0_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b0_list)
+        self.num_b0s: int = self.b0_vals.shape[0]
+        # t2
+        array_t2 = self._build_tensors_from_list_of_lists_args(settings.t2_list)
+        array_t2 /= 1000.0  # cast to s
+        self.t2_vals: torch.Tensor = array_t2
+        self.num_t2s: int = self.t2_vals.shape[0]
 
-        self._get_vals_from_settings(settings=settings)
         # declare
-        self.m_init: torch.Tensor = torch.empty(1)
-        self.magnetization_propagation: torch.Tensor = torch.empty(1)
-        self.gamma = torch.Tensor = torch.empty(1)
+        # set magnetization vector and initialize magnetization, insert axes for [t1, t2, b1, b0] number of simulations
+        m_init = torch.zeros((self.sample.shape[0], 4))
+        m_init[:, 2] = self.sample
+        m_init[:, 3] = self.sample
+        # save initial state - extend to simulation dimensions [t1, t2, b1, b0
+        self.m_init: torch.Tensor = m_init[None, None, None, None].to(self.device)
+        # set initial state as magnetization propagation tensor, this one is used
+        # to iteratively calculate the magnetization sate along the axis
+        self.magnetization_propagation: torch.tensor = self.m_init.clone()
+
+        self.gamma = torch.tensor(params.gamma_hz, device=self.device)
 
         # signal tensor is supposed to hold all acquisition points for all reads
-        self.signal_tensor: torch.Tensor = torch.empty(1)
-        self.signal_mag: torch.Tensor = torch.empty(1)
-        self.signal_phase: torch.Tensor = torch.empty(1)
+        self.signal_tensor: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, self.num_b0s, params.etl, params.acquisition_number),
+            dtype=torch.complex128, device=self.device
+        )
 
-        # use init method
-        self.init_tensors(etl=params.etl, acquisition_number=params.acquisition_number, gamma_hz=params.gamma_hz)
+        # allocate magnitude and phase results
+        # set emc data tensor -> dims: [t1s, t2s, b1s, ETL]
+        self.signal_mag: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, self.num_b0s, params.etl),
+            device=self.device
+        )
+        self.signal_phase: torch.Tensor = torch.zeros(
+            (self.num_t1s, self.num_t2s, self.num_b1s, self.num_b0s, params.etl),
+            device=self.device
+        )
+        self._set_num_params()
         self.set_device()
 
     def init_tensors(self,
@@ -199,27 +238,6 @@ class SimulationData:
             device=self.device
         )
         self._set_num_params()
-
-    def _get_vals_from_settings(self, settings):
-        # set values with some error catches
-        # t1
-        if isinstance(settings.t1_list, list):
-            t1_vals = torch.tensor(settings.t1_list, device=self.device)
-        else:
-            t1_vals = torch.tensor([settings.t1_list], dtype=torch.float32, device=self.device)
-        self.t1_vals: torch.Tensor = t1_vals
-        self.num_t1s: int = self.t1_vals.shape[0]
-        # b1
-        self.b1_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b1_list)
-        self.num_b1s: int = self.b1_vals.shape[0]
-        # b0
-        self.b0_vals: torch.Tensor = self._build_tensors_from_list_of_lists_args(settings.b0_list)
-        self.num_b0s: int = self.b0_vals.shape[0]
-        # t2
-        array_t2 = self._build_tensors_from_list_of_lists_args(settings.t2_list)
-        array_t2 /= 1000.0  # cast to s
-        self.t2_vals: torch.Tensor = array_t2
-        self.num_t2s: int = self.t2_vals.shape[0]
 
     def _set_num_params(self):
         # sim info

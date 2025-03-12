@@ -282,6 +282,7 @@ def main():
     emc_path = plib.Path(settings.emc_params_file).absolute()
     if emc_path.is_file():
         params = EmcParameters.load(emc_path)
+        params.display()
     else:
         params = args.params
 
