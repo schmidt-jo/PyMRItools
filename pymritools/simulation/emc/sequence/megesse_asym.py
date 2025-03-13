@@ -8,7 +8,6 @@ import json
 import numpy as np
 
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.config.database import DB
 from pymritools.config.emc import EmcParameters, EmcSimSettings, SimulationData
 from pymritools.simulation.emc.sequence.base_sequence import Simulation
 from pymritools.simulation.emc.core import functions, GradPulse
@@ -72,8 +71,8 @@ class MEGESSE(Simulation):
         self.params.acquisition_number = 1
         self.params.bw = 1 / kernels["acq_bu"].adc.get_duration()
         self.gp_acquisition = GradPulse.prep_acquisition(params=self.params)
-        # prep sim data due to etl change
-        self.data = SimulationData(params=self.params, settings=self.settings, device=self.device)
+        # prep sim data due to etl change - we spawn on cpu and use the GPU memory in the batching
+        # self.data = SimulationData(params=self.params, settings=self.settings, device=torch.device("cpu"))
 
     def _prep_from_params(self):
         # excitation pulse
@@ -123,8 +122,8 @@ class MEGESSE(Simulation):
         # 1 gre, and then for every pulse in the etl there are 3 echoes -> etl = 3*etl + 1
         self.params.etl = self.num_echoes_per_rf * self.rf_etl
 
-        # prep sim data due to etl change
-        self.data = SimulationData(params=self.params, settings=self.settings, device=self.device)
+        # prep sim data due to etl change - we spawn on cpu and use the GPU memory in the batching
+        self.data = SimulationData(params=self.params, settings=self.settings, device=torch.device("cpu"))
 
     def _set_device(self):
         # set devices
@@ -174,6 +173,10 @@ class MEGESSE(Simulation):
         # need batch processing, take 10 t2 values at a time
         batch_size_t2 = 10
         num_batches = int(np.ceil(self.data.num_t2s / batch_size_t2))
+        # expand allocated mag vector
+        self.data.magnetization_propagation = self.data.magnetization_propagation.expand(
+            (self.data.num_t1s, self.data.num_t2s, self.data.num_b1s, self.data.num_b0s, -1, -1)
+        ).clone().contiguous()
         # ToDo: calculate GPU RAM dependencie and batch total number of values
         for nb in tqdm.trange(num_batches, desc="Batch Processing"):
             # --- starting sim matrix propagation --- #
@@ -183,9 +186,9 @@ class MEGESSE(Simulation):
             data = SimulationData(params=self.params, settings=self.settings, device=torch.device("cpu"))
 
             start = nb * batch_size_t2
-            end = min((nb + 1) * batch_size_t2, self.data.num_b1s)
-            data.t2_vals = self.data.b1_vals[start:end]
-            data.num_t2s = batch_size_t2
+            end = min((nb + 1) * batch_size_t2, self.data.num_t2s)
+            data.t2_vals = self.data.t2_vals[start:end]
+            data.num_t2s = end - start
             # init tensors on device
             data.init_tensors(
                 etl=self.params.etl,
@@ -212,9 +215,9 @@ class MEGESSE(Simulation):
                 grad=self.gp_excitation.data_grad,
                 sim_data=data, dt_s=self.gp_excitation.dt_sampling_steps_us * 1e-6
             )
-            if self.settings.visualize:
-                # save excitation profile snapshot
-                self.set_magnetization_profile_snap("excitation")
+            # if self.settings.visualize:
+            #     # save excitation profile snapshot
+            #     self.set_magnetization_profile_snap("excitation")
 
             # delay
             delay_exc_ref1 = functions.matrix_propagation_relaxation_multidim(
@@ -232,9 +235,9 @@ class MEGESSE(Simulation):
                     sim_data=data,
                     dt_s=self.gps_refocus[rf_idx].dt_sampling_steps_us * 1e-6
                 )
-                if self.settings.visualize:
-                    # save profile snapshot after pulse
-                    self.set_magnetization_profile_snap(snap_name=f"refocus_{rf_idx + 1}_post_pulse")
+                # if self.settings.visualize:
+                #     # save profile snapshot after pulse
+                #     self.set_magnetization_profile_snap(snap_name=f"refocus_{rf_idx + 1}_post_pulse")
 
                 # timing from ref to e
                 data = functions.propagate_matrix_mag_vector(mat_prop_ref_e_time, sim_data=data)
@@ -251,14 +254,14 @@ class MEGESSE(Simulation):
                 # delay to pulse
                 data = functions.propagate_matrix_mag_vector(mat_prop_ref_e_time, sim_data=data)
                 # fill in original data
-                self.data.magnetization_propagation[:, :, start:end] = data.magnetization_propagation
-                self.data.signal_mag[:, :, start:end] = data.signal_mag
-                self.data.signal_phase[:, :, start:end] = data.signal_phase
-                self.data.signal_tensor[:, :, start:end] = data.signal_tensor
+                self.data.magnetization_propagation[:, start:end] = data.magnetization_propagation.cpu()
+                self.data.signal_mag[:, start:end] = data.signal_mag.cpu()
+                self.data.signal_phase[:, start:end] = data.signal_phase.cpu()
+                self.data.signal_tensor[:, start:end] = data.signal_tensor.cpu()
 
-                if self.settings.visualize:
-                    # save excitation profile snapshot
-                    self.set_magnetization_profile_snap(snap_name=f"refocus_{rf_idx + 1}_post_acquisitions")
+                # if self.settings.visualize:
+                #     # save excitation profile snapshot
+                #     self.set_magnetization_profile_snap(snap_name=f"refocus_{rf_idx + 1}_post_acquisitions")
 
 
 def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
