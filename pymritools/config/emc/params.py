@@ -248,7 +248,7 @@ class SimulationData:
 
     @property
     def complete_param_list(self) -> list:
-        return [(t1, t2, b1, b0) for t1 in self.t1_vals
+        return [(t1.item(), t2.item(), b1.item(), b0.item()) for t1 in self.t1_vals
                 for t2 in self.t2_vals for b1 in self.b1_vals
                 for b0 in self.b0_vals]
 
@@ -298,6 +298,8 @@ class SimulationData:
         self.t2_vals = self.t2_vals.to(self.device)
         self.b1_vals = self.b1_vals.to(self.device)
         self.b0_vals = self.b0_vals.to(self.device)
+
+        self.magnetization_propagation = self.magnetization_propagation.to(self.device)
 
         self.signal_tensor = self.signal_tensor.to(self.device)
         self.signal_mag = self.signal_mag.to(self.device)
