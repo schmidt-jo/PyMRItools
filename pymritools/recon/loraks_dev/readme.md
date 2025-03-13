@@ -38,6 +38,12 @@
 
 - [ ] Check Licensing
 
+- Next steps
+  - [ ] Matrix-size vs GPU RAM size calculations, how to implement? Calculate channel reduction and call channel compression function?
+  - [ ] Fix datasets for experiments
+    - https://owncloud.gwdg.de/index.php/s/Q3XAWOpv3HPLEJW
+  - [ ] Run big datasets on MPCDF?
+
 # Experiments and Results
 
 Datasets:
