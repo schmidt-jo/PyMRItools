@@ -66,8 +66,8 @@ def pulseq_rd_to_torch(config: RD):
 
     if config.visualize:
         # transform into image
-        img = torch.zeros_like(k_space)
-        for i in tqdm.trange(img.shape[2], desc="\t\t- FFT"):
+        img = np.zeros_like(k_space)
+        for i in tqdm.trange(img.shape[2], desc="FFT"):
             img[:, :, i] = fft(k_space[:, :, i], img_to_k=False, axes=(0, 1))
         if config.debug:
             for i in np.random.randint(low=0, high=img.shape[3], size=(3,)):
@@ -76,10 +76,11 @@ def pulseq_rd_to_torch(config: RD):
                 nifti_save(data=np.angle(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out,
                            file_name=f"naive_recon_phase_ch-{i}")
         # do rSoS
-        for i in tqdm.trange(img.shape[2], desc="\t\t- rsos"):
-            img[:, :, i] = root_sum_of_squares(img[:, :, i], dim_channel=-2)
+        img_rsos = np.zeros_like(np.abs(img[:, :, :, 0]))
+        for i in tqdm.trange(img.shape[2], desc="rsos"):
+            img_rsos[:, :, i] = root_sum_of_squares(img[:, :, i], dim_channel=-2)
         # nifti save
-        nifti_save(data=img, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
+        nifti_save(data=img_rsos, img_aff=aff, path_to_dir=path_out, file_name="naive_rsos_recon")
         nifti_save(data=k_sampling_mask.astype(float), img_aff=aff, path_to_dir=path_out, file_name="sampling_pattern")
 
     # save as torch tensor for recon
