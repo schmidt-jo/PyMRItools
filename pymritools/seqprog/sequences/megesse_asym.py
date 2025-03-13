@@ -11,8 +11,8 @@ log_module = logging.getLogger(__name__)
 
 class MEGESSE(Sequence2D):
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
-        # init Base class
-        super().__init__(config=config, specs=specs, params=params)
+        # init Base class - relax gradient stress
+        super().__init__(config=config, specs=specs, params=params, relax_read_grad_stress=True)
 
         log_module.info(f"Init MEGESSE Sequence")
         # set number of GRE echoes beside SE
@@ -38,10 +38,6 @@ class MEGESSE(Sequence2D):
         # add blip down acquisition
         self.block_acquisition_neg_polarity = Kernel.acquisition_fs(
             params=self.params, system=self.system, invert_grad_read_dir=True, relax_grad_stress=True
-        )
-        # redo acquisition setup, relax gradient stress
-        self.block_acquisition = Kernel.acquisition_fs(
-            params=self.params, system=self.system, invert_grad_read_dir=False, relax_grad_stress=True
         )
         # add id
         self.id_bd_acq: str = "bd_fs"

@@ -34,7 +34,7 @@ class Sequence2D(abc.ABC):
     """
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D,
                  create_excitation_kernel: bool = True, create_refocus_1_kernel: bool = True,
-                 create_refocus_kernel: bool = True):
+                 create_refocus_kernel: bool = True, relax_read_grad_stress: bool = False,):
 
         self.config: PulseqConfig = config
         self.visualize: bool = config.visualize
@@ -92,7 +92,8 @@ class Sequence2D(abc.ABC):
         # acquisition
         self.block_acquisition: Kernel = Kernel.acquisition_fs(
             params=self.params,
-            system=self.system
+            system=self.system,
+            relax_grad_stress=relax_read_grad_stress
         )
         # refocusing - after first
         if create_refocus_kernel:
@@ -1298,8 +1299,31 @@ class Sequence2D(abc.ABC):
         else:
             fig.write_html(fig_path.as_posix())
 
-    def plot_sampling(self):
-        pass
+    def plot_sampling(self, file_suffix: str = "html"):
+        # trajectories
+        df_kt = self.sampling.df_trajectories
+
+        fig = go.Figure()
+        for acq in df_kt["acquisition"].unique():
+            df_acq = df_kt.filter(pl.col("acquisition") == acq)
+            fig.add_trace(
+                go.Scatter(
+                    x=df_acq["adc_sampling_num"],
+                    y=df_acq["k_traj_position"],
+                    mode="markers+lines",
+                    name=acq
+                )
+            )
+        fig.update_yaxes(title="Sample Position [1/FOV]")
+        fig.update_xaxes(title="Sample Number")
+
+        name = f"sequence_trajectories"
+        fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
+        log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
+        if file_suffix in ["png", "pdf"]:
+            fig.write_image(fig_path.as_posix())
+        else:
+            fig.write_html(fig_path.as_posix())
 
 # def _plot_grad_moments(self, grad_moments: np.ndarray, dt_in_us: int):
 #     ids = ["gx"] * grad_moments.shape[1] + ["gy"] * grad_moments.shape[1] + ["gz"] * grad_moments.shape[1] + \
