@@ -74,6 +74,7 @@ def recon(settings: PyLoraksConfig, mode: str):
 
     # load data
     k_space, sampling_mask, affine = load_data(settings=settings)
+    log_module.info(f"input data shape {k_space.shape}")
 
     log_module.info(f"___ Loraks Reconstruction ___")
     log_module.info(f"Radius - {settings.radius}; ")
