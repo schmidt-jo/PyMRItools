@@ -3,7 +3,7 @@ name: Deploy Documentation
 on:
   push:
     branches:
-      - feature/doc_pages
+      - dev
 
 permissions:
   contents: write

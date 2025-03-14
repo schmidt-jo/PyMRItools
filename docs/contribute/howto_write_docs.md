@@ -1,6 +1,8 @@
 # How to write documentation
 
-This guide explains how to write and contribute to the documentation for the Brain Segmentation project. It covers the documentation structure, how the configuration works, and how the documentation is automatically built and deployed.
+This guide explains how to write and contribute to the documentation for the PyMRITools project.
+It covers the documentation structure, how the configuration works,
+and how the documentation is automatically built and deployed.
 
 ## Documentation Structure
 

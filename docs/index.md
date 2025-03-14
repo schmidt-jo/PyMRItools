@@ -1,18 +1,12 @@
-# Brain Segmentation
+# PyMRITools - Python Tools for MRI
 
-Welcome to the Brain Segmentation project documentation.
+Welcome to the PyMRITools project documentation.
 
 ## Overview
 
-This project provides tools and algorithms for brain segmentation tasks.
-Brain segmentation is the process of identifying and isolating different structures within brain images, which is crucial for various medical and research applications.
+This project provides tools and algorithms for MRI data processing tasks.
 
 ## Getting Started
 
 - [Installation](installation.md)
 - [Contributing](contribute/contributing.md)
-
-## Features
-
-- Scale label images for brain segmentation
-- More features coming soon...

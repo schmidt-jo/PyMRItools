@@ -1,4 +1,4 @@
-# Contributing to Brain Segmentation
+# Contributing to the PyMRITools
 
 The most important thing first:
 

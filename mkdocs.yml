@@ -31,12 +31,14 @@ nav:
       - Overview: contribute/contributing.md
       - Writing Documentation: contribute/howto_write_docs.md
       - Writing Code: contribute/howto_write_code.md
-  - Creating Training Data:
-      - General Approach: training_data/overview.md
-      - CHARM Segmentation: training_data/charm.md
-      - SynthSeg Segmentation: training_data/synth_seg.md
+  - Tools:
+    - Simulation: simulation.md
+    - Sequence Programming: sequence_programming.md
+    - Reconstruction: recon.md
+    - Data Processing: processing.md
+    - Modeling: modeling.md
   - Automatic Code Documentation:
-    - API Reference: api.md
+      - API Reference: api.md
 
 # Plugins
 plugins:
@@ -44,7 +46,6 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-#          paths: [ src ]
           options:
             docstring_style: google
             show_source: true
