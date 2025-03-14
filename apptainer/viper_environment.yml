@@ -1,0 +1,17 @@
+name: mri_tools_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - poetry=1.8.3
+  - pip
+  - polars=1.8.2
+  - python-kaleido
+  - scipy=1.14.1
+  - numpy=2.0.0
+  - plotly=5.16.1
+  - simple-parsing=0.1.6
+  - tqdm=4.66.5
+  - nibabel=5.2.1
+  - wandb
+  - pytest
