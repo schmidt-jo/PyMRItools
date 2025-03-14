@@ -283,7 +283,7 @@ def ac_loraks(
 
     # get indices for operators on whole image to calculate the count matrix for reconstruction
     indices = get_idx_2d_square_neighborhood_patches_in_shape(
-        shape_2d=(n_read, n_phase),nb_size=2+radius, device=torch.device("cpu")
+        shape_2d=(n_read, n_phase), nb_size=2+radius, device=torch.device("cpu")
     )
     # get the indices within the ac region
     # convert to tensors
@@ -359,10 +359,10 @@ def ac_loraks(
         num_batches = int(np.ceil(n_echoes / batch_size_channels))
         iter_bar = tqdm.trange(num_batches, desc="batch_processing")
         for idx_b in iter_bar:
-            start = idx_b * batch_size_channels
-            end = np.min([(idx_b + 1) * batch_size_channels, n_echoes])
-            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, :, start:end].to(device)
-            batch_aha = aha[:, :, :, start:end].to(device)
+            # start = idx_b * batch_size_channels
+            # end = np.min([(idx_b + 1) * batch_size_channels, n_echoes])
+            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, :, idx_b::num_batches].to(device)
+            batch_aha = aha[:, :, :, idx_b::num_batches].to(device)
 
             # __ per slice calculations
             # __ for C
@@ -399,7 +399,7 @@ def ac_loraks(
                 iter_bar=iter_bar
             )
 
-            k_space_x_y_z_ch_t[:, :, idx_s, :, start:end] = xmin.cpu()
+            k_space_x_y_z_ch_t[:, :, idx_s, :, idx_b::num_batches] = xmin.cpu()
 
     return k_space_x_y_z_ch_t
 
