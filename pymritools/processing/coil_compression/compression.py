@@ -84,6 +84,17 @@ def compress_channels_2d(
     in_comp_data = torch.movedim(in_comp_data, -1, 0)
     in_comp_data = torch.reshape(in_comp_data, (-1, nx, in_comp_data.shape[-2], nc))
 
+    # check dims, we are using gcc along read direction across channels and phase encodes,
+    # hence our maximum compression level is the min out of both quantities
+    if num_compressed_channels > min(in_comp_data.shape[-2:]):
+        msg = (f"Using GCC on AC data along read dimension. "
+               f"Hence, compression matrix is calculated from matrices spanned by dims {in_comp_data.shape[-2:]}.\n"
+               f"Chosen compression level ({num_compressed_channels}) is above maximum achievable by this method. "
+               f"(Usually the number of AC lines).")
+        log_module.info(msg)
+        num_compressed_channels = min(in_comp_data.shape[-2:])
+        log_module.info(f"Changing compression level to: {num_compressed_channels}")
+
     input_k_space = torch.movedim(input_k_space, 2, 0)
     input_k_space = torch.movedim(input_k_space, -1, 0)
     input_k_space = torch.reshape(input_k_space, (-1, nx, ny, nc))
