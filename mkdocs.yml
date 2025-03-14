@@ -1,0 +1,50 @@
+site_name: PyMRITools
+site_description: Python MRI Tools Documentation
+site_author: Jochen Schmidt
+
+# Repository information
+repo_name: PyMRItools
+repo_url: https://github.com/schmidt-jo/PyMRItools
+edit_uri: edit/dev/docs/
+
+# Copyright
+copyright: Copyright &copy; 2025 Jochen Schmidt
+
+# Configuration
+theme:
+  name: readthedocs
+
+# Extensions
+markdown_extensions:
+  - admonition
+  - codehilite
+  - footnotes
+  - meta
+  - toc:
+      permalink: true
+
+# Navigation structure
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Contributing:
+      - Overview: contribute/contributing.md
+      - Writing Documentation: contribute/howto_write_docs.md
+      - Writing Code: contribute/howto_write_code.md
+  - Creating Training Data:
+      - General Approach: training_data/overview.md
+      - CHARM Segmentation: training_data/charm.md
+      - SynthSeg Segmentation: training_data/synth_seg.md
+  - Automatic Code Documentation:
+    - API Reference: api.md
+
+# Plugins
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+#          paths: [ src ]
+          options:
+            docstring_style: google
+            show_source: true

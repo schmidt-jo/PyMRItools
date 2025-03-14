@@ -17,6 +17,9 @@ dependencies:
   - nibabel=5.2.1
   - wandb
   - pytest
+  - mkdocs=1.6.1
+  - mkdocstrings
+  - mkdocstrings-python
   - pip:
       - torch
       - autodmri
