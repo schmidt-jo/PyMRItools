@@ -56,10 +56,6 @@ def compress_channels_2d(
         device: torch.device = torch.get_default_device()
     ) -> torch.tensor:
     log_module.info(f"GCC channel compression")
-    """ k-space is assumed to be provided in dims [x, y, z, ch, t (optional)]"""
-    input_k_space, sampling_pattern, read_dir = shape_input(
-        input_k_space=input_k_space, sampling_pattern=sampling_pattern
-    )
     nx, ny, nz, nc, ne = input_k_space.shape
     # check if we are actually provided fewer channels
     if nc <= num_compressed_channels:
@@ -67,6 +63,12 @@ def compress_channels_2d(
                f"No compression done.")
         log_module.info(msg)
         return input_k_space.cpu()
+    """ k-space is assumed to be provided in dims [x, y, z, ch, t (optional)]"""
+    input_k_space, sampling_pattern, read_dir = shape_input(
+        input_k_space=input_k_space, sampling_pattern=sampling_pattern
+    )
+    nx, ny, nz, nc, ne = input_k_space.shape
+
     # get sampled data
     sampled_data = get_sampled_data(
         input_k_space=input_k_space, sampling_pattern=sampling_pattern, use_ac_data=use_ac_data
