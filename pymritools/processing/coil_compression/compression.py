@@ -81,10 +81,12 @@ def compress_channels_2d(
     # get all fs dimensions into img space
     in_comp_data = fft(input_data=sampled_data, img_to_k=False, axes=(0,))
 
-    # get all batch dimensions up front (z and e) (ne, nz, nx, ny, nc)
+    # get all fully sampled dimensions up front (z and e) (ne, nz, nx, ny, nc) and combine echoes into acs
     in_comp_data = torch.movedim(in_comp_data, 2, 0)
-    in_comp_data = torch.movedim(in_comp_data, -1, 0)
-    in_comp_data = torch.reshape(in_comp_data, (-1, nx, in_comp_data.shape[-2], nc))
+    in_comp_data = torch.movedim(in_comp_data, -1, -2)
+    # in_comp_data = torch.movedim(in_comp_data, -1, 0)
+    # in_comp_data = torch.reshape(in_comp_data, (-1, nx, in_comp_data.shape[-2], nc))
+    in_comp_data = torch.reshape(in_comp_data, (nz, nx, -1, nc))
 
     # check dims, we are using gcc along read direction across channels and phase encodes,
     # hence our maximum compression level is the min out of both quantities
@@ -98,19 +100,19 @@ def compress_channels_2d(
         log_module.info(f"Changing compression level to: {num_compressed_channels}")
 
     input_k_space = torch.movedim(input_k_space, 2, 0)
-    input_k_space = torch.movedim(input_k_space, -1, 0)
-    input_k_space = torch.reshape(input_k_space, (-1, nx, ny, nc))
+    input_k_space = torch.movedim(input_k_space, -1, -2)
+    # input_k_space = torch.reshape(input_k_space, (-1, nx, ny, nc))
 
-    b_dim = in_comp_data.shape[0]
+    # b_dim = in_comp_data.shape[0]
     # shape [ne * nz, nx, sy, nc]
-    out_comp_data = torch.zeros((b_dim, nx, ny, num_compressed_channels), dtype=input_k_space.dtype, device="cpu")
+    out_comp_data = torch.zeros((nz, nx, ny, ne, num_compressed_channels), dtype=input_k_space.dtype, device="cpu")
 
-    num_batches = int(np.ceil(b_dim / batch_size))
+    # num_batches = int(np.ceil(b_dim / batch_size))
 
     # do batch wise computation
-    for idx_b in tqdm.trange(num_batches, desc="batch processing"):
-        start = idx_b * batch_size
-        end = min((idx_b + 1) * batch_size, b_dim)
+    for idx_b in tqdm.trange(nz, desc="slice - wise processing"):
+        # start = idx_b * batch_size
+        # end = min((idx_b + 1) * batch_size, b_dim)
         # we do the compression for each fs spatial location (x and z) using all echoes for each coil
         # move dims to front (nx, ny, ne, nc), first 1 is essentially batch dims
         # (nx, sy, nc, ne) -> (nx, sy, ne, nc)
@@ -120,7 +122,7 @@ def compress_channels_2d(
         # (nx, sy * ne, nc) - > (nz * nx, sy * ne, nc)
         # in_comp_data = torch.reshape(in_comp_data, (-1, in_comp_data.shape[-2], nc))
         # perform svd
-        batch = in_comp_data[start:end].to(device)
+        batch = in_comp_data[idx_b].to(device)
         u, s, vh = torch.linalg.svd(torch.movedim(batch, -1, -2), full_matrices=False)
 
         # take first num_comp_c rows of uH as initial compression matrices
@@ -135,16 +137,16 @@ def compress_channels_2d(
             a_x[:, i+1] = torch.matmul(p, a_x[:, i+1])
 
         # prep input k-space data
-        uncomp_data = fft(input_k_space[start:end].to(device), img_to_k=False, axes=(1,))
+        uncomp_data = fft(input_k_space[idx_b].to(device), img_to_k=False, axes=(0,))
         # do the coil compression at each location of all slice data!
-        out_comp_data[start:end] = torch.einsum("bxdc, bxyc -> bxyd", a_x, uncomp_data).cpu()
+        out_comp_data[idx_b] = torch.einsum("xdc, xyec -> xyed", a_x, uncomp_data).cpu()
         # out_d = torch.matmul(a_x[:, None], uncomp_data[:, :, :, None])
         # out_comp_data[:, :, idx_z, :, idx_e] = torch.squeeze(out_d)
 
     # reshape data
-    out_comp_data = torch.reshape(out_comp_data, (ne, nz, nx, ny, num_compressed_channels))
-    out_comp_data = torch.movedim(out_comp_data, 0, -1)
+    # out_comp_data = torch.reshape(out_comp_data, (ne, nz, nx, ny, num_compressed_channels))
     out_comp_data = torch.movedim(out_comp_data, 0, 2)
+    out_comp_data = torch.movedim(out_comp_data, -2, -1)
 
     # reverse fft in x dim
     out_comp_data = fft(out_comp_data, img_to_k=True, axes=(0,))
