@@ -1,6 +1,9 @@
 import time
 import logging
+import pathlib as plib
 
+import pickle
+import json
 import tqdm
 import torch
 
@@ -16,10 +19,83 @@ class MESE(Simulation):
     def __init__(self, params: EmcParameters, settings: EmcSimSettings):
         super().__init__(params=params, settings=settings)
 
+    def _prep_from_kernels(self, kernel_file: plib.Path):
+        with open(kernel_file, "rb") as f:
+            kernels = pickle.load(f)
+        # load tes
+        te_file = plib.Path(self.settings.te_file).absolute()
+        if not te_file.is_file():
+            err = f"Kernel file {te_file} does not exist"
+            log_module.error(err)
+            raise FileNotFoundError(err)
+        with open(te_file, "r") as f:
+            self.tes = json.load(f)
+
+        if self.settings.visualize:
+            kf = self.fig_path.joinpath("kernels")
+            kf.mkdir(exist_ok=True)
+            for k, v in kernels.items():
+                v.plot(path=kf, name=k, file_suffix="png")
+
+        # excitation
+        k = kernels["excitation"]
+        # build grad pulse
+        self.gp_excitation = GradPulse.prep_from_pulseq_kernel(
+            kernel=k, name="excitation", device=self.device, b1s=self.data.b1_vals, flip_angle_rad=torch.pi/2,
+        )
+        # fill params info
+        self.params.duration_excitation = k.rf.t_duration_s * 1e6
+        self.params.duration_excitation_rephase = (k.grad_slice.get_duration() - k.rf.t_delay_s - k.rf.t_duration_s) * 1e6
+
+        # refocus
+        k = kernels["refocus_1"]
+        self.gps_refocus = [
+            GradPulse.prep_from_pulseq_kernel(
+                kernel=k, name="refocus", pulse_number=0, device=self.device, b1s=self.data.b1_vals,
+                flip_angle_rad=self.params.refocus_angle[0] / 180 * torch.pi
+            )
+        ]
+        k = kernels["refocus"]
+        self.gps_refocus.extend([
+            GradPulse.prep_from_pulseq_kernel(
+                kernel=k, name="refocus", pulse_number=rfi+1, device=self.device, b1s=self.data.b1_vals,
+                flip_angle_rad=self.params.refocus_angle[rfi+1] / 180 * torch.pi
+            ) for rfi in range(self.params.etl-1)
+        ])
+        # fill params info
+        self.params.duration_refocus = k.rf.t_duration_s * 1e6
+        self.params.duration_crush = (k.grad_slice.get_duration() - k.rf.t_duration_s) * 1e6 / 2
+
+        # extract params from acquisition kernel
+        self.params.acquisition_number = 1
+        self.params.bw = 1 / kernels["acq"].adc.get_duration()
+        self.gp_acquisition = GradPulse.prep_acquisition(params=self.params)
+        # prep sim data due to etl change - we spawn on cpu and use the GPU memory in the batching
+        # self.data = SimulationData(params=self.params, settings=self.settings, device=torch.device("cpu"))
+
     def _prep(self):
         log_module.info("\t - MESE sequence")
         # prep pulse grad data - this holds the pulse data and timings
         log_module.info('\t - pulse gradient preparation')
+        # load kernels
+        kernel_file = plib.Path(self.settings.kernel_file).absolute()
+        if kernel_file.is_file():
+            msg = f"\t - Loading GradPulse data from Kernel file {kernel_file}"
+            log_module.info(msg)
+            self._prep_from_kernels(kernel_file=kernel_file)
+        else:
+            msg = f"\t -Loading GradPulse data from parameter arguments. (no kernel file provided)"
+            log_module.info(msg)
+            self._prep_from_params()
+
+        if self.settings.visualize:
+            log_module.info("\t - plot grad pulse data")
+            self.gp_excitation.plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
+            self.gps_refocus[0].plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
+            self.gps_refocus[1].plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
+            self.gp_acquisition.plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
+
+    def _prep_from_params(self):
         self.gp_excitation = GradPulse.prep_grad_pulse_excitation(
             pulse=self.pulse, params=self.params, settings=self.settings,
             b1_vals=self.data.b1_vals,
@@ -39,12 +115,6 @@ class MESE(Simulation):
             )
             self.gps_refocus.append(gp_refocus)
 
-        if self.settings.visualize:
-            log_module.info("\t - plot grad pulse data")
-            self.gp_excitation.plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
-            self.gps_refocus[0].plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
-            self.gps_refocus[1].plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
-            self.gp_acquisition.plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
 
     def _set_device(self):
         # set devices

@@ -61,6 +61,7 @@ processing_denoise_klc = "pymritools.processing.denoising.klc_pca.denoise:main"
 # modeling scripts
 modeling_mono_exponential_fit = "pymritools.modeling.decay.mexp:main"
 modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search:main"
+modeling_dictionary_grid_search_channels = "pymritools.modeling.dictionary.grid_search_channels:main"
 modeling_b1_afi = "pymritools.modeling.b1_afi.modeling:main"
 # sequence programing
 seqprog_mese = "pymritools.seqprog.sequences.mese:main"
