@@ -150,7 +150,7 @@ class DB:
 
     def get_torch_tensors_t1t2b1b0e(self):
         """
-        Returns torch tensors of magnitude and phase with dimensions [t1, t2, b1, echoes]
+        Returns torch tensors of magnitude and phase with dimensions [t1, t2, b1, b0, echoes]
         :return: mag, phase
         """
         mag, phase = self.get_numpy_arrays_t1t2b1b0e()

@@ -77,7 +77,17 @@ class FitSettings(BaseClass):
     )
     input_b1: str = field(
         alias="-b1", default="",
-        help="Path to input b1 map (.nii) file."
+        help="Path to input B1+ map (.nii) file if available."
+    )
+    input_b0: str = field(
+        alias="-b0", default="",
+        help="Path to input B0 map (.nii) if available (only used in MEGESSE fitting)."
+    )
+    input_affine: str = field(
+        alias="-ia", default="",
+        help="(optional) Input affine for .pt data input. "
+             "If input data is .pt data and no affine is given, the identity matrix is used. "
+             "Might lead to misalignment when loading into nifti viewers."
     )
     out_name: str = field(
         alias="-on", default="",
