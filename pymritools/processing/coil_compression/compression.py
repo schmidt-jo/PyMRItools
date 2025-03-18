@@ -81,72 +81,58 @@ def compress_channels_2d(
     # get all fs dimensions into img space
     in_comp_data = fft(input_data=sampled_data, img_to_k=False, axes=(0,))
 
-    # get all fully sampled dimensions up front (z and e) (ne, nz, nx, ny, nc) and combine echoes into acs
-    in_comp_data = torch.movedim(in_comp_data, 2, 0)
-    in_comp_data = torch.movedim(in_comp_data, -1, -2)
-    # in_comp_data = torch.movedim(in_comp_data, -1, 0)
-    # in_comp_data = torch.reshape(in_comp_data, (-1, nx, in_comp_data.shape[-2], nc))
-    in_comp_data = torch.reshape(in_comp_data, (nz, nx, -1, nc))
+    # we do slice wise processing (2d function), hence we do not account for geometric offsets in slice direction
+    # get slice dim as batch dim up front
+    # in_comp_data = torch.movedim(in_comp_data, 2, 0)
+    # we suppose the channel sensitivities are geometrically similar across echoes.
+    # We decide here to combine phase and echo data as to use all available data per slice
+    in_comp_data = torch.movedim(in_comp_data, -1, 2)
+    in_comp_data = torch.reshape(in_comp_data, (nx, -1, nz, nc))
+
+    # could also try to use the echo mean:
+    # in_comp_data = torch.mean(in_comp_data, dim=-1)
+    # we should be left with [nx, ny, nz, nc]
 
     # check dims, we are using gcc along read direction across channels and phase encodes,
     # hence our maximum compression level is the min out of both quantities
-    if num_compressed_channels > min(in_comp_data.shape[-2:]):
+    if num_compressed_channels > in_comp_data.shape[1]:
         msg = (f"Using GCC on AC data along read dimension. "
                f"Hence, compression matrix is calculated from matrices spanned by dims {in_comp_data.shape[-2:]}.\n"
                f"Chosen compression level ({num_compressed_channels}) is above maximum achievable by this method. "
                f"(Usually the number of AC lines).")
         log_module.info(msg)
-        num_compressed_channels = min(in_comp_data.shape[-2:])
+        num_compressed_channels = in_comp_data.shape[1]
         log_module.info(f"Changing compression level to: {num_compressed_channels}")
 
-    input_k_space = torch.movedim(input_k_space, 2, 0)
-    input_k_space = torch.movedim(input_k_space, -1, -2)
-    # input_k_space = torch.reshape(input_k_space, (-1, nx, ny, nc))
+    # allocate
+    out_comp_data = torch.zeros((nx, ny, nz, num_compressed_channels, ne), dtype=input_k_space.dtype, device="cpu")
 
-    # b_dim = in_comp_data.shape[0]
-    # shape [ne * nz, nx, sy, nc]
-    out_comp_data = torch.zeros((nz, nx, ny, ne, num_compressed_channels), dtype=input_k_space.dtype, device="cpu")
-
-    # num_batches = int(np.ceil(b_dim / batch_size))
-
-    # do batch wise computation
-    for idx_b in tqdm.trange(nz, desc="slice - wise processing"):
-        # start = idx_b * batch_size
-        # end = min((idx_b + 1) * batch_size, b_dim)
-        # we do the compression for each fs spatial location (x and z) using all echoes for each coil
-        # move dims to front (nx, ny, ne, nc), first 1 is essentially batch dims
-        # (nx, sy, nc, ne) -> (nx, sy, ne, nc)
-        # in_comp = torch.movedim(icd, -1, 0)
-        # (nx, sy, ne, nc) -> (sy * ne, nc)
-        # in_comp = torch.reshape(in_comp, (nx, -1, nc))
-        # (nx, sy * ne, nc) - > (nz * nx, sy * ne, nc)
-        # in_comp_data = torch.reshape(in_comp_data, (-1, in_comp_data.shape[-2], nc))
+    # do slice wise computation
+    for idx_z in tqdm.trange(nz, desc="slice - wise processing"):
         # perform svd
-        batch = in_comp_data[idx_b].to(device)
+        batch = in_comp_data[:, :, idx_z].to(device)
         u, s, vh = torch.linalg.svd(torch.movedim(batch, -1, -2), full_matrices=False)
 
         # take first num_comp_c rows of uH as initial compression matrices
         a_gcc_0 = u.mH[..., :num_compressed_channels, :]
 
-        # align a matrices
+        # align a matrices along read direction
         a_x = a_gcc_0.clone()
-        for i in range(a_x.shape[1] - 1):
-            c = torch.matmul(a_x[:, i+1], a_x[:, i].mH)
+        for i in range(a_x.shape[0] - 1):
+            c = torch.matmul(a_x[i+1], a_x[i].mH)
             uc, sc, vhc = torch.linalg.svd(c, full_matrices=False)
             p = torch.matmul(vhc.mH, uc.mH)
-            a_x[:, i+1] = torch.matmul(p, a_x[:, i+1])
+            a_x[i+1] = torch.matmul(p, a_x[i+1])
 
-        # prep input k-space data
-        uncomp_data = fft(input_k_space[idx_b].to(device), img_to_k=False, axes=(0,))
+        # prep input k-space data - take slice
+        uncomp_data = fft(input_k_space[:, :, idx_z].to(device), img_to_k=False, axes=(0,))
         # do the coil compression at each location of all slice data!
-        out_comp_data[idx_b] = torch.einsum("xdc, xyec -> xyed", a_x, uncomp_data).cpu()
-        # out_d = torch.matmul(a_x[:, None], uncomp_data[:, :, :, None])
-        # out_comp_data[:, :, idx_z, :, idx_e] = torch.squeeze(out_d)
+        out_comp_data[:, :, idx_z] = torch.einsum("xdc, xyce -> xyde", a_x, uncomp_data).cpu()
 
-    # reshape data
+    # reshape data, have combined
     # out_comp_data = torch.reshape(out_comp_data, (ne, nz, nx, ny, num_compressed_channels))
-    out_comp_data = torch.movedim(out_comp_data, 0, 2)
-    out_comp_data = torch.movedim(out_comp_data, -2, -1)
+    # out_comp_data = torch.movedim(out_comp_data, 0, 2)
+    # out_comp_data = torch.movedim(out_comp_data, -2, -1)
 
     # reverse fft in x dim
     out_comp_data = fft(out_comp_data, img_to_k=True, axes=(0,))
