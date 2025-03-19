@@ -252,6 +252,18 @@ def loraks(
     return k[:, :, None]
 
 
+def log_mem(point: str, device: torch.device):
+    if not device.type == "cpu":
+        logging.info(f"Memory log: {point}")
+
+        logging.info(f"\t\t-{torch.cuda.get_device_name(device)}")
+        logging.info(f"\t\tAllocated: {round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1):.1f}, GB")
+        logging.info(f"\t\tCached: {round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1):.1f}, GB")
+
+        mem = torch.cuda.mem_get_info(device)
+        logging.info(f"\t\tAvailable: {mem[0] / 1024 ** 3:.1f} GB / {mem[1] / 1024 ** 3:.1f} GB")
+
+
 def ac_loraks(
         k_space_x_y_z_ch_t: torch.Tensor,
         sampling_mask_x_y_t: torch.Tensor,
@@ -263,7 +275,7 @@ def ac_loraks(
         visualize: bool = True, path_visuals: Union[str, plib.Path] = "",
         device: torch.device = torch.get_default_device()):
     # __ One Time Calculations __
-
+    log_mem(point="AC Loraks Start", device=device)
     img_ac_start, img_ac_shape = get_ac_region_from_sampling_pattern(sampling_mask_x_y_t=sampling_mask_x_y_t)
     # find the indices to build LORAKS matrices for this particular shape
     # img_ac_indices = get_idx_2d_square_neighborhood_patches_in_shape(
@@ -321,6 +333,7 @@ def ac_loraks(
         s_count_matrix = 0
 
     aha = sampling_mask_x_y_t[:, :, None].to(torch.int) + lambda_c * c_count_matrix + lambda_s * s_count_matrix
+    log_mem(point="End one time calculations", device=device)
 
     if visualize:
         # plot count matrices
@@ -350,6 +363,7 @@ def ac_loraks(
 
     for idx_s in range(n_slice):
         log_module.info(f"Processing slice :: {idx_s+1} / {n_slice}")
+        log_mem(point=f"Processing slice :: {idx_s+1} / {n_slice}", device=device)
         # __ need to batch. we can just permute and batch channels
         # ToDo: implement multiple random permutations and average?
         #  This way we are less prone to batching non sensitive channels for reconstruction?
