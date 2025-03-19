@@ -20,7 +20,7 @@ def cgd(
     :param conv_tol: Convergence tolerance for the residual norm.
     :return: A tuple containing the solution tensor, residuals vector, and a dictionary with minimum residual norm and iteration number.
     """
-    if iter_bar is not None:
+    if iter_bar is not None and not isinstance(iter_bar, range):
         if max_num_iter is not None:
             iter_dict = collections.OrderedDict([("iter", "_".rjust(max_num_iter, "_"))])
             iter_bar.set_postfix(ordered_dict=iter_dict)
@@ -77,7 +77,7 @@ def cgd(
             xmin = x
             iimin = ii
             log_module.debug(f"min residual {normrmin:.2f}, at {iimin + 1}")
-        if iter_bar is not None:
+        if iter_bar is not None and not isinstance(iter_bar, range):
             iter_dict["iter"] = f"{iter_dict['iter'][1:]}I"
             iter_bar.set_postfix(iter_dict)
     return xmin, res_vec, {"norm_res_min": normrmin, "iteration": iimin}
