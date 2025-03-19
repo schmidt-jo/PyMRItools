@@ -49,7 +49,9 @@ def setup_input(settings: EmcFitSettings):
         raise AttributeError(err)
 
     name = settings.out_name
-    # get to torch
+    # get to lower floating point resolution
+    dtype = torch.complex64 if torch.is_complex(input_data) else torch.float32
+    input_data = input_data.to(dtype)
     # save shape
     data_shape = input_data.shape
     # normalize and get scaling factor (related to SNR)
@@ -82,12 +84,19 @@ def setup_db(settings: EmcFitSettings, return_complex: bool = False):
     db = DB.load(settings.input_database)
     # get torch tensors
     db_torch_mag, db_torch_phase = db.get_torch_tensors_t1t2b1b0e()
+    # reduce floating point size
+    db_torch_mag = db_torch_mag.to(torch.float32)
+    db_torch_phase = db_torch_phase.to(torch.float32)
     # get t2 and b1 values
     t1_vals, t2_vals, b1_vals, b0_vals = db.get_t1_t2_b1_b0_values()
+    t1_vals = t1_vals.to(torch.float32)
+    t2_vals = t2_vals.to(torch.float32)
+    b1_vals = b1_vals.to(torch.float32)
+    b0_vals = b0_vals.to(torch.float32)
     # cast to combined db dimension
     t1t2b1b0_vals = torch.tensor([
         (t1, t2, b1, b0) for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals for b0 in b0_vals
-    ])
+    ], dtype=torch.float32)
     if return_complex:
         db_pattern = db_torch_mag + 1j * torch.exp(db_torch_phase)
     else:
