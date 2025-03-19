@@ -21,13 +21,6 @@ def load_data(settings: PyLoraksConfig):
     else:
         sampling_pattern = (torch.abs(k_space) > 1e-9)[:, :, 0, 0]
 
-    log_module.debug(f"For debug reduce dims")
-    if settings.debug:
-        # for debugging take one coil
-        k_space = k_space[:, :, :, 0, None, :]
-        # also take one slice. if not set anyway, we set it
-        settings.process_slice = True
-
     log_module.debug(f"Check single slice toggle set")
     if settings.process_slice:
         mid_slice = int(k_space.shape[2] / 2)
