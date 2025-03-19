@@ -363,7 +363,7 @@ def ac_loraks(
 
     for idx_s in range(n_slice):
         log_module.info(f"Processing slice :: {idx_s+1} / {n_slice}")
-        log_mem(point=f"Processing slice :: {idx_s+1} / {n_slice}", device=device)
+        log_mem(point=f"Processing slice :: Start :: {idx_s+1} / {n_slice}", device=device)
         # __ need to batch. we can just permute and batch channels
         # ToDo: implement multiple random permutations and average?
         #  This way we are less prone to batching non sensitive channels for reconstruction?
@@ -374,6 +374,7 @@ def ac_loraks(
         iter_bar = tqdm.trange(num_batches, desc="batch_processing") if visualize else range(num_batches)
         for idx_b in iter_bar:
             log_module.debug(f"Processing batch :: {idx_b+1} / {num_batches}")
+            log_mem(point=f"Processing batch :: {idx_b+1} / {num_batches}", device=device)
             # start = idx_b * batch_size_channels
             # end = np.min([(idx_b + 1) * batch_size_channels, n_echoes])
             batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, :, idx_b::num_batches].to(device)
@@ -415,6 +416,7 @@ def ac_loraks(
             )
 
             k_space_x_y_z_ch_t[:, :, idx_s, :, idx_b::num_batches] = xmin.cpu()
+        log_mem(point=f"Processing slice :: End :: {idx_s+1} / {n_slice}", device=device)
 
     return k_space_x_y_z_ch_t
 

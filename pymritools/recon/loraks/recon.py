@@ -13,7 +13,7 @@ log_module = logging.getLogger(__name__)
 
 
 def load_data(settings: PyLoraksConfig):
-    logging.debug("Load data")
+    log_module.debug("Load data")
     k_space = torch_load(settings.in_k_space)
     affine = torch_load(settings.in_affine)
     if settings.in_sampling_mask:
@@ -21,20 +21,20 @@ def load_data(settings: PyLoraksConfig):
     else:
         sampling_pattern = (torch.abs(k_space) > 1e-9)[:, :, 0, 0]
 
-    logging.debug(f"For debug reduce dims")
+    log_module.debug(f"For debug reduce dims")
     if settings.debug:
         # for debugging take one coil
         k_space = k_space[:, :, :, 0, None, :]
         # also take one slice. if not set anyway, we set it
         settings.process_slice = True
 
-    logging.debug(f"Check single slice toggle set")
+    log_module.debug(f"Check single slice toggle set")
     if settings.process_slice:
         mid_slice = int(k_space.shape[2] / 2)
-        logging.info(f"single slice processing: pick slice {mid_slice + 1}")
+        log_module.info(f"single slice processing: pick slice {mid_slice + 1}")
         k_space = k_space[:, :, mid_slice, None]
 
-    # logging.debug(f"Check sampling pattern shape")
+    # log_module.debug(f"Check sampling pattern shape")
     # # if sampling_pattern.shape.__len__() < 3:
     # #     # sampling pattern supposed to be x, y, t
     # #     sampling_pattern = sampling_pattern[:, :, None]
@@ -66,7 +66,7 @@ def recon(settings: PyLoraksConfig, mode: str):
 
     # set up device
     if settings.use_gpu and torch.cuda.is_available():
-        logging.info(f"configuring gpu::  cuda:{settings.gpu_device}")
+        log_module.info(f"configuring gpu::  cuda:{settings.gpu_device}")
         device = torch.device(f"cuda:{settings.gpu_device}")
     else:
         device = torch.device("cpu")
@@ -118,16 +118,16 @@ def recon(settings: PyLoraksConfig, mode: str):
     if settings.process_slice:
         loraks_recon = torch.squeeze(loraks_recon)[:, :, None, :]
 
-    logging.info(f"Save k-space reconstruction")
+    log_module.info(f"Save k-space reconstruction")
     # loraks_phase = torch.angle(loraks_recon)
     # loraks_phase = torch.mean(loraks_phase, dim=-2)
     # loraks_mag = torch.abs(loraks_recon)
 
-    logging.info("FFT into image space")
+    log_module.info("FFT into image space")
     # fft into real space
     loraks_recon_img = fft(loraks_recon, img_to_k=False, axes=(0, 1))
 
-    logging.info("rSoS channels")
+    log_module.info("rSoS channels")
     dim_channel = -2
 
     # for nii we rSoS combine channels
@@ -154,6 +154,9 @@ def recon_ac_loraks():
     # get cli args
     settings = PyLoraksConfig.from_cli(args=args.settings, parser=parser)
     settings.display()
+    if settings.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        log_module.debug(f"set debug logging level")
 
     try:
         recon(settings=settings, mode="ac-loraks")
@@ -170,11 +173,12 @@ def recon_loraks():
     # get cli args
     settings = PyLoraksConfig.from_cli(args=args.settings, parser=parser)
     settings.display()
+    if settings.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        log_module.debug(f"set debug logging level")
 
     try:
-        logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
-                            datefmt='%I:%M:%S', level=logging.DEBUG if settings.debug else logging.INFO)
-        recon(settings=settings, mode="loraks")
+       recon(settings=settings, mode="loraks")
     except Exception as e:
         logging.exception(e)
         parser.print_help()
