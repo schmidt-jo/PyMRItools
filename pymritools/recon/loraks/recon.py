@@ -44,7 +44,7 @@ def load_data(settings: PyLoraksConfig):
             input_k_space=k_space,
             sampling_pattern=sampling_pattern,
             num_compressed_channels=settings.coil_compression,
-            use_ac_data=True, device=device, batch_size=20
+            use_ac_data=True, device=device, visualize=settings.visualize
         )
     # get shape
     while k_space.shape.__len__() < 5:
@@ -98,7 +98,7 @@ def recon(settings: PyLoraksConfig, mode: str):
             rank_c=settings.c_rank, lambda_c=settings.c_lambda,
             rank_s=settings.s_rank, lambda_s=settings.s_lambda,
             max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
-            batch_size_channels=settings.batch_size,
+            batch_size_channels=settings.batch_size, visualize=settings.visualize,
             device=device, path_visuals=path_figs
         )
     elif mode == "loraks":
@@ -172,6 +172,8 @@ def recon_loraks():
     settings.display()
 
     try:
+        logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
+                            datefmt='%I:%M:%S', level=logging.DEBUG if settings.debug else logging.INFO)
         recon(settings=settings, mode="loraks")
     except Exception as e:
         logging.exception(e)

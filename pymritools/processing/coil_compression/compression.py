@@ -52,7 +52,7 @@ def shape_input(input_k_space: torch.Tensor, sampling_pattern: torch.Tensor):
 
 def compress_channels_2d(
         input_k_space: torch.tensor, sampling_pattern: torch.tensor,
-        num_compressed_channels: int, use_ac_data: bool = True, batch_size: int = 15,
+        num_compressed_channels: int, use_ac_data: bool = True, visualize: bool = False,
         device: torch.device = torch.get_default_device()
     ) -> torch.tensor:
     log_module.info(f"GCC channel compression")
@@ -108,7 +108,9 @@ def compress_channels_2d(
     out_comp_data = torch.zeros((nx, ny, nz, num_compressed_channels, ne), dtype=input_k_space.dtype, device="cpu")
 
     # do slice wise computation
-    for idx_z in tqdm.trange(nz, desc="slice - wise processing"):
+    iter_bar = tqdm.trange(nz, desc="slice - wise processing") if visualize else range(nz)
+    for idx_z in iter_bar:
+        log_module.debug(f"Processing slice: {idx_z+1} / {nz}")
         # perform svd
         batch = in_comp_data[:, :, idx_z].to(device)
         u, s, vh = torch.linalg.svd(torch.movedim(batch, -1, -2), full_matrices=False)

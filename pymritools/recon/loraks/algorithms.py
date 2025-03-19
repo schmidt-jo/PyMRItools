@@ -357,8 +357,9 @@ def ac_loraks(
         #  batch channels correlated in image space
         # idxs_channels = torch.randperm(n_channels)
         num_batches = int(np.ceil(n_echoes / batch_size_channels))
-        iter_bar = tqdm.trange(num_batches, desc="batch_processing")
+        iter_bar = tqdm.trange(num_batches, desc="batch_processing") if visualize else range(num_batches)
         for idx_b in iter_bar:
+            log_module.debug(f"Processing batch :: {idx_b+1} / {num_batches}")
             # start = idx_b * batch_size_channels
             # end = np.min([(idx_b + 1) * batch_size_channels, n_echoes])
             batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, :, idx_b::num_batches].to(device)
