@@ -254,14 +254,14 @@ def loraks(
 
 def log_mem(point: str, device: torch.device):
     if not device.type == "cpu":
-        logging.info(f"Memory log: {point}")
+        logging.debug(f"Memory log: {point}")
 
-        logging.info(f"\t\t-{torch.cuda.get_device_name(device)}")
-        logging.info(f"\t\tAllocated: {round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1):.1f}, GB")
-        logging.info(f"\t\tCached: {round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1):.1f}, GB")
+        logging.debug(f"\t\t-{torch.cuda.get_device_name(device)}")
+        logging.debug(f"\t\tAllocated: {round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1):.1f}, GB")
+        logging.debug(f"\t\tCached: {round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1):.1f}, GB")
 
         mem = torch.cuda.mem_get_info(device)
-        logging.info(f"\t\tAvailable: {mem[0] / 1024 ** 3:.1f} GB / {mem[1] / 1024 ** 3:.1f} GB")
+        logging.debug(f"\t\tAvailable: {mem[0] / 1024 ** 3:.1f} GB / {mem[1] / 1024 ** 3:.1f} GB")
 
 
 def ac_loraks(
