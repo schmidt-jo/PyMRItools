@@ -1,0 +1,38 @@
+{
+  "config_file": "./examples/simulation/emc_megesse_cesp/emc_settings.json",
+  "emc_params_file": "./examples/simulation/emc_megesse_cesp/emc_params.json",
+  "pulse_file": "./examples/simulation/emc/pulse_pypulseq_default_gauss.pkl",
+  "out_path": "./examples/simulation/emc_megesse_cesp/results",
+  "database_name": "database_test.pkl",
+  "sim_type": "megesse_asym",
+  "t1_list": [
+    1.5
+  ],
+  "t2_list": [
+    [
+      20,
+      35,
+      1
+    ],
+    [
+      35,
+      45,
+      2
+    ]
+  ],
+  "b1_list": [
+    0.6,
+    0.8,
+    1.0
+  ],
+  "b0_list": [
+    0,
+    100
+  ],
+  "signal_fourier_sampling": false,
+  "resample_pulse_to_dt_us": 5.0,
+  "visualize": true,
+  "debug": false,
+  "use_gpu": true,
+  "gpu_device": 0
+}

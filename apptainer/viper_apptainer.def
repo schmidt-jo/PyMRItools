@@ -41,6 +41,9 @@ From: rocm/dev-ubuntu-24.04:latest
     pip3 install git+https://github.com/pehses/twixtools.git@master#egg=twixtools
     pip3 install git+https://github.com/imr-framework/pypulseq.git@dev#egg=pypulseq
     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2.4
+    # now we should have a functioning conda env with all necessary dependencies
+    # we now want to clone the dev branch of our repository and install the package without dependencies using pip
+    pip3 install --no-deps git+https://github.com/schmidt-jo/PyMRItools.git@dev#egg=PyMRItools
     conda deactivate
 
     # Clean up all tempory stuff
