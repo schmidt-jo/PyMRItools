@@ -102,5 +102,9 @@ class FitSettings(BaseClass):
         alias="-bs", default=3000,
         help="Set batch size for batched processing of input signal."
     )
+    process_slice: bool = field(
+        alias="-ps", default=False,
+        help="Process middle single slice only to reduce processing time, eg. for debugging or qa."
+    )
 
 
