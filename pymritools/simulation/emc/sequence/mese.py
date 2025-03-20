@@ -25,7 +25,7 @@ class MESE(Simulation):
         # load tes
         te_file = plib.Path(self.settings.te_file).absolute()
         if not te_file.is_file():
-            err = f"Kernel file {te_file} does not exist"
+            err = f"TE file {te_file} does not exist"
             log_module.error(err)
             raise FileNotFoundError(err)
         with open(te_file, "r") as f:
