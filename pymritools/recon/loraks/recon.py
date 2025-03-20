@@ -2,6 +2,7 @@ import logging
 import pathlib as plib
 
 import torch
+import tqdm
 
 from pymritools.config.recon import PyLoraksConfig
 from pymritools.config import setup_program_logging, setup_parser
@@ -116,27 +117,30 @@ def recon(settings: PyLoraksConfig, mode: str):
     # loraks_phase = torch.mean(loraks_phase, dim=-2)
     # loraks_mag = torch.abs(loraks_recon)
 
-    log_module.info("FFT into image space")
+    log_module.info("FFT into image space and rSoS channels")
     # fft into real space
-    loraks_recon_img = fft(loraks_recon, img_to_k=False, axes=(0, 1))
-
-    log_module.info("rSoS channels")
+    bar = range(loraks_recon.shape[2]) if settings.slurm else tqdm.trange(loraks_recon.shape[2], "slice wise processing")
     dim_channel = -2
-
-    # for nii we rSoS combine channels
-    loraks_recon_mag = root_sum_of_squares(input_data=loraks_recon_img, dim_channel=dim_channel)
+    loraks_recon_img = torch.zeros_like(loraks_recon)
+    loraks_recon_mag = torch.zeros_like(torch.abs(loraks_recon[:, :, :, 0]))
+    for idx_z in bar:
+        loraks_recon_img[:, :, idx_z] = fft(loraks_recon[:, :, idx_z], img_to_k=False, axes=(0, 1))
+        # for nii we rSoS combine channels
+        loraks_recon_mag[:, :, idx_z] = root_sum_of_squares(
+            input_data=loraks_recon_img[:, :, idx_z], dim_channel=dim_channel
+        )
 
     # ToDo Phase combination implementation
     # loraks_phase = torch.angle(loraks_recon_img)
     # loraks_phase = torch.mean(loraks_phase, dim=-2)
 
-    nii_name = loraks_name.replace("k_space", "image")
-    nifti_save(data=loraks_recon_mag, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_mag")
+    name = loraks_name.replace("k_space", "image")
+    nifti_save(data=loraks_recon_mag, img_aff=affine, path_to_dir=path_out, file_name=f"{name}_mag")
     # nifti_save(data=loraks_phase, img_aff=affine, path_to_dir=path_out, file_name=f"{nii_name}_phase")
 
     # save data as tensors, for further usage of whole data
     if not settings.process_slice:
-        torch_save(data=loraks_recon, path_to_file=path_out, file_name=f"{loraks_name}_k-space")
+        torch_save(data=loraks_recon_img, path_to_file=path_out, file_name=name)
 
 
 def recon_ac_loraks():
