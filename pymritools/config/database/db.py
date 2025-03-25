@@ -1,6 +1,5 @@
 import logging
 import pickle
-import typing
 
 import torch
 
@@ -144,7 +143,7 @@ class DB:
         """
         mag = self.data["magnitude"].to_numpy()
         mag = np.reshape(mag, (self._num_t1s, self._num_t2s, self._num_b1s, self._num_b0s, self._num_echoes))
-        phase = self.data["magnitude"].to_numpy()
+        phase = self.data["phase"].to_numpy()
         phase = np.reshape(phase, (self._num_t1s, self._num_t2s, self._num_b1s, self._num_b0s, self._num_echoes))
         return mag, phase
 
