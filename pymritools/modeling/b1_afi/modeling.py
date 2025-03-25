@@ -124,6 +124,7 @@ def smooth_b1(alpha: torch.Tensor, smoothing_kernel: float) -> torch.Tensor:
 def processing(settings: Settings):
     # load file
     b1_data, b1_img = nifti_load(settings.input_file)
+    b1_data = torch.from_numpy(b1_data)
 
     # estimate noise voxels
     noise_mask = extract_noise_mask(input_data=b1_data, erode_iter=0)
@@ -160,7 +161,7 @@ def main():
     settings.display()
 
     try:
-        afi_b1(settings=settings)
+        processing(settings=settings)
     except Exception as e:
         logging.exception(e)
         parser.print_help()
