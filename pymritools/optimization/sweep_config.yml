@@ -30,5 +30,7 @@ parameters:
   fa_8:
     min: 50.0
     max: 140.0
+  lam_snr:
+    value: 0.7
   gpud:
     value: 0
