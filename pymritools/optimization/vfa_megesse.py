@@ -17,7 +17,7 @@ from pymritools.simulation.emc.sequence.megesse_asym import MEGESSE
 
 
 def main():
-    # run = wandb.init()
+    run = wandb.init()
 
     # setup logging
     logging.basicConfig(
@@ -42,11 +42,11 @@ def main():
     params = EmcParameters.load(sim_settings.emc_params_file)
 
     # here we need to plug in the actual FAs
-    # fas = [
-    #     wandb.config.fa_1, wandb.config.fa_2, wandb.config.fa_3,
-    #     wandb.config.fa_4
-    # ]
-    fas = torch.randint(low=50, high=140, size=(6,))
+    fas = [
+        wandb.config.fa_1, wandb.config.fa_2, wandb.config.fa_3,
+        wandb.config.fa_4
+    ]
+    # fas = torch.randint(low=50, high=140, size=(6,))
     params.refocus_angle = fas
 
     # build sim object
@@ -57,15 +57,20 @@ def main():
     # compute losses
     sar = torch.sqrt(torch.sum((torch.tensor(fas) / 180 * torch.pi)**2))
     snr = torch.linalg.norm(db_cplx, dim=-1).flatten().mean()
-    corr = torch.corrcoef(
+    corr = torch.abs(
         torch.mean(
-            torch.reshape(db_cplx, (-1, db_cplx.shape[-1])).to(device)
+            torch.tril(
+                torch.corrcoef(
+                    torch.reshape(db_cplx, (-1, db_cplx.shape[-1])).to(device)
+                ),
+                diagonal=-1
+            )
         )
     ).cpu()
 
     # minimize sar, maximize snr, with a minimizing total loss
-    loss = (1.0 - wandb.config.lam_snr) * sar - wandb.config.lam_snr * snr
-    wandb.log({"loss": loss, "sar": sar, "snr": snr, "fas": fas})
+    loss = (1.0 - wandb.config.lam_snr) * sar - wandb.config.lam_snr * snr + corr
+    wandb.log({"loss": loss, "sar": sar, "snr": snr, "corr": corr, "fas": fas})
 
 
 if __name__ == '__main__':
