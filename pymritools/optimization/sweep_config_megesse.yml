@@ -1,6 +1,6 @@
-program: /data/pt_np-jschmidt/code/PyMRItools/pymritools/optimization/vfa_mese.py
-name: mese_etl8_bayes
-project: mese_vfa_optimization
+program: /data/pt_np-jschmidt/code/PyMRItools/pymritools/optimization/vfa_megesse.py
+name: megesse_etl4_bayes
+project: megesse_vfa_optimization
 method: bayes
 metric:
   goal: minimize
@@ -19,6 +19,6 @@ parameters:
     min: 50.0
     max: 140.0
   lam_snr:
-    value: 0.7
+    value: 0.8
   gpud:
     value: 0
