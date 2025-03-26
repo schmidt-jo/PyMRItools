@@ -1,4 +1,4 @@
-from pymritools.config.modeling.mexp_settings import Settings
+from pymritools.config.modeling import MEXPSettings
 from pymritools.utils import nifti_load, nifti_save
 from pymritools.config import setup_program_logging ,setup_parser
 import logging
@@ -9,7 +9,7 @@ import torch
 log_module = logging.getLogger(__name__)
 
 
-def fit(settings: Settings):
+def fit(settings: MEXPSettings):
     # set output path
     log_module.info(f"set output path: {settings.out_path}")
     path_out = plib.Path(settings.out_path).absolute()
@@ -25,11 +25,11 @@ def fit(settings: Settings):
     log_module.info(f"setting torch device: {device}")
 
     # load data
-    if not settings.input_file:
+    if not settings.input_data:
         err = "no input file given"
         log_module.error(err)
         raise ValueError(err)
-    input_data, input_img = nifti_load(settings.input_file)
+    input_data, input_img = nifti_load(settings.input_data)
     input_data = torch.from_numpy(input_data).to(device).to(dtype=torch.float32)
 
     # save input shape
@@ -90,11 +90,11 @@ def main():
     # setup parser
     parser, prog_args = setup_parser(
         prog_name="Exponential Decay Fitting",
-        dict_config_dataclasses={"settings": Settings}
+        dict_config_dataclasses={"settings": MEXPSettings}
     )
 
     # get settings
-    settings = Settings.from_cli(args=prog_args.settings, parser=parser)
+    settings = MEXPSettings.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 
     try:
