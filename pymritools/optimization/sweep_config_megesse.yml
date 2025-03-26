@@ -1,0 +1,24 @@
+program: /data/pt_np-jschmidt/code/PyMRItools/pymritools/optimization/vfa_mese.py
+name: mese_etl8_bayes
+project: mese_vfa_optimization
+method: bayes
+metric:
+  goal: minimize
+  name: loss
+parameters:
+  fa_1:
+    min: 50.0
+    max: 140.0
+  fa_2:
+    min: 50.0
+    max: 140.0
+  fa_3:
+    min: 50.0
+    max: 140.0
+  fa_4:
+    min: 50.0
+    max: 140.0
+  lam_snr:
+    value: 0.7
+  gpud:
+    value: 0
