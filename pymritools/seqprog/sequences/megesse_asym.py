@@ -3,7 +3,7 @@ import logging
 import tqdm
 
 from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D
-from pymritools.seqprog.core import Kernel, DELAY, ADC
+from pymritools.seqprog.core import Kernel, DELAY, ADC, GRAD
 from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli, build
 
 log_module = logging.getLogger(__name__)
@@ -22,7 +22,8 @@ class MEGESSE(Sequence2D):
         # timing
         self.t_delay_exc_ref1: DELAY = DELAY()
         self.t_delay_ref1_se1: DELAY = DELAY()
-        self.t_delay_e2e: DELAY = DELAY()
+        self.t_delay_e2e_bubd: DELAY = DELAY()
+        self.t_delay_e2e_bdbu: DELAY = DELAY()
 
         # its possible to redo the sampling scheme with adjusted etl
         # that is change sampling per readout, we would need pe blips between the gesse samplings,
@@ -35,10 +36,26 @@ class MEGESSE(Sequence2D):
         # add id
         self.id_bu_acq: str = "bu_fs"
 
+        # save ac region start and end
+        # calculate center of k space and indexes for full sampling band
+        k_central_phase = round(self.params.resolution_n_phase / 2)
+        k_half_central_lines = round(self.params.number_central_lines / 2)
+        # set indexes for start and end of full k space center sampling
+        self.ac_start = k_central_phase - k_half_central_lines
+        self.ac_end = k_central_phase + k_half_central_lines
+
         # add blip down acquisition
         self.block_acquisition_neg_polarity = Kernel.acquisition_fs(
             params=self.params, system=self.system, invert_grad_read_dir=True, relax_grad_stress=True
         )
+        # we want to add phase blips to the negative polarity readout blocks
+        # this way we sample bu and bd readouts with the same phase encode,
+        # but move on to another phase encode for the next two readouts.
+        # Hence not all echoes between consecutive refocusing pulses are subject to the same phase encodes
+        # for simplicity we just add a blip by one line assuming the lines are drawn pseudo randomly anyway.
+        # though we need simple checks to not run into the AC region or outside k-space
+        self._modify_acquisition_block_neg_polarity()
+
         # add id
         self.id_bd_acq: str = "bd_fs"
 
@@ -115,40 +132,41 @@ class MEGESSE(Sequence2D):
         # self.interface.emc.duration_excitation_rephase = t_rephase * 1e6
         pass
 
-    # def _mod_spoiling_end(self):
-    #     # want to enable complete refocusing of read gradient when spoiling factor -0.5 is chosen in opts
-    #     # get correct last gradient
-    #     if self.num_gre % 2 == 0:
-    #         # even number of GRE readouts after / before SE, the last read gradient is bu grad
-    #         block_acq = self.block_bu_acq
-    #     else:
-    #         # odd number of GRE readouts after / before SE, the last readgradient is bd grad
-    #         block_acq = self.block_bd_acq
-    #     readout_area = np.trapezoid(
-    #         x=block_acq.grad_read.t_array_s,
-    #         y=block_acq.grad_read.amplitude
-    #     )
-    #     spoil_area = self.params.read_grad_spoiling_factor * readout_area
-    #     # now we need to plug in new amplitude into spoiling read gradient
-    #     t_sr = np.sum(
-    #         np.diff(
-    #             self.block_spoil_end.grad_read.t_array_s[-4:]
-    #         ) * np.array([0.5, 1.0, 0.5])
-    #     )
-    #     self.block_spoil_end.grad_read.amplitude[-3:-1] = spoil_area / t_sr
+    # megesse
+    def _check_phase_blip_gradient(self, idx_phase):
+        # if phase index inside AC region or at the edge of k-space we want to return false,
+        # in order to not set a phase blip, otherwise we do and return true
+        if idx_phase >= self.params.resolution_n_phase - 1:
+            return False
+        if self.ac_start <= idx_phase <= self.ac_end:
+            return False
+        return True
 
-    # def _mod_block_prewind_echo_read(self, sbb: Kernel):
-    #     # need to prewind readout echo gradient
-    #     area_read = np.sum(self.block_bu_acq.grad_read.area)
-    #     area_prewind = - 0.5 * area_read
-    #     delta_times_last_grad_part = np.diff(sbb.grad_read.t_array_s[-4:])
-    #     amplitude = area_prewind / np.sum(np.array([0.5, 1.0, 0.5]) * delta_times_last_grad_part)
-    #     if np.abs(amplitude) > self.system.max_grad:
-    #         err = f"amplitude violation when prewinding first echo readout gradient"
-    #         log_module.error(err)
-    #         raise ValueError(err)
-    #     sbb.grad_read.amplitude[-3:-1] = amplitude
-    #     sbb.grad_read.area[-1] = area_prewind
+    def _set_phase_blip_gradient(self, idx_phase):
+        if self._check_phase_blip_gradient(idx_phase):
+            self._modify_acquisition_block_neg_polarity()
+            return idx_phase + 1
+        else:
+            self._reset_phase_blip_gradient()
+            return idx_phase
+
+    def _reset_phase_blip_gradient(self):
+        grad_phase = self.block_acquisition_neg_polarity.grad_phase
+        self.block_acquisition_neg_polarity.grad_phase.amplitude = np.zeros_like(grad_phase.amplitude)
+
+    def _modify_acquisition_block_neg_polarity(self):
+        # we want a phase encode after the readout gradient that moves exactly one line
+        # blip gradient is constant
+        grad_phase = GRAD.make_trapezoid(
+            channel=self.params.phase_dir,
+            area=self.params.delta_k_phase,
+            system=self.system
+        )
+        # gradient is appended after blip down read gradient and can start with its ramp
+        grad_read = self.block_acquisition_neg_polarity.grad_read
+        t_delay = grad_read.t_array_s[-2]
+        grad_phase.t_delay_s = t_delay
+        self.block_acquisition_neg_polarity.grad_phase = grad_phase
 
     def _check_and_mod_echo_read_with_last_gre_readout_polarity(self, sbb: Kernel):
         # need to rewind readout echo gradient
@@ -206,17 +224,22 @@ class MEGESSE(Sequence2D):
                 self.block_refocus_1.rf.t_delay_s + self.block_refocus_1.rf.t_duration_s / 2)
                 + self.block_acquisition.get_duration() / 2)
         # sanity check for other block
-        t_ref_e = (
+        t_ref_e_bd = (
                 self.block_refocus.get_duration() - (
                 self.block_refocus.rf.t_delay_s + self.block_refocus.rf.t_duration_s / 2)
-                + self.block_acquisition.get_duration() / 2
+                + self.block_acquisition_neg_polarity.grad_read.get_duration() / 2
         )
-        assert np.allclose(t_ref_e1, t_ref_e)
-        t_e2e = self.block_acquisition.get_duration() / 2 + self.block_acquisition_neg_polarity.get_duration() / 2
+        assert np.allclose(t_ref_e1, t_ref_e_bd)
+        # echo to echo from bu to bd
+        t_e2e_bubd = self.block_acquisition.get_duration() / 2 + self.block_acquisition_neg_polarity.grad_read.get_duration() / 2
+        # echo to echo from bd to bu
+        t_e2e_bdbu = (
+             self.block_acquisition_neg_polarity.get_duration() - self.block_acquisition_neg_polarity.grad_read.get_duration()
+        ) / 2 + self.block_acquisition.get_duration() / 2
         # we need to add the e2e time for each additional GRE readout
         # echo time of first se is twice the bigger time of 1) between excitation and first ref
         # 2) between first ref and se and e2e
-        esp_1 = 2 * np.max([t_exc_1ref, t_ref_e1, t_e2e])
+        esp_1 = 2 * np.max([t_exc_1ref, t_ref_e1, t_e2e_bdbu, t_e2e_bubd])
 
         # time to either side between excitation - ref - se needs to be equal, calculate appropriate delays
         # we want this to be a multiple of the E2E time, such that we have symmetrical timings throughout the sequence
@@ -230,33 +253,45 @@ class MEGESSE(Sequence2D):
             self.t_delay_ref1_se1 = DELAY.make_delay(delay_ref_e, system=self.system)
         else:
             delay_ref_e = 0
-        if t_e2e < esp_1 / 2:
-            delay_e2e = esp_1 / 2 - t_e2e
-            self.t_delay_e2e = DELAY.make_delay(delay_e2e, system=self.system)
+        if t_e2e_bubd < esp_1 / 2:
+            delay_e2e_bubd = esp_1 / 2 - t_e2e_bubd
+            self.t_delay_e2e_bubd = DELAY.make_delay(delay_e2e_bubd, system=self.system)
         else:
-            delay_e2e = 0
+            delay_e2e_bubd = 0
+
+        if t_e2e_bdbu < esp_1 / 2:
+            delay_e2e_bdbu = esp_1 / 2 - t_e2e_bdbu
+            self.t_delay_e2e_bdbu = DELAY.make_delay(delay_e2e_bdbu, system=self.system)
+        else:
+            delay_e2e_bdbu = 0
+
         # we get a spacing between every event (exc - ref, ref - e, e - e, e - ref)
         t_delta = esp_1 / 2
         # write echo times to array
         self.te.append(esp_1)
-        for _ in range(self.num_gre):
-            self.te.append(self.te[-1] + t_e2e + delay_e2e)
+        for e in range(self.num_gre):
+            t_delta = t_e2e_bubd if e % 2 == 0 else t_e2e_bdbu
+            t_delay = delay_e2e_bubd if e % 2 == 0 else delay_e2e_bdbu
+            self.te.append(self.te[-1] + t_delta + t_delay)
         # after this a rf pulse is played out and we can iteratively add the rest of the echoes
         for k in np.arange(self.num_e_per_rf, self.params.etl * self.num_e_per_rf, self.num_e_per_rf):
             # take last echo time (gre sampling after se) need to add time from gre to rf and from rf to gre (equal)
             # if we would need to add an delay (if ref to e is quicker than from excitation to ref),
             # we would do it before the echoes and after the echoes to symmetrize
-            self.te.append(self.te[k - 1] + 2 * (t_ref_e + delay_ref_e))
+            self.te.append(self.te[k - 1] + 2 * (t_ref_e1 + delay_ref_e))
             # take this time and add time between gre and se / readout to readout
-            for _ in range(self.num_gre):
-                self.te.append(self.te[-1] + t_e2e + delay_e2e)
+            for e in range(self.num_gre):
+                t_delta = t_e2e_bubd if e % 2 == 0 else t_e2e_bdbu
+                t_delay = delay_e2e_bubd if e % 2 == 0 else delay_e2e_bdbu
+                self.te.append(self.te[-1] + t_delta + t_delay)
         te_print = [f'{1000 * t:.2f}' for t in self.te]
         log_module.info(f"echo times: {te_print} ms")
         # deliberately set esp weird to catch it upon processing when dealing with megesse style sequence
         self.esp = -1
 
 
-    def _add_gesse_readouts(self, idx_pe_loop: int, idx_slice_loop: int, idx_echo: int, no_adc: bool = False):
+    def _add_gesse_readouts(self, idx_pe_loop: int, idx_slice_loop: int, idx_echo: int,
+                            no_adc: bool = False, phase_blips: bool = True):
         if no_adc:
             # bu readout
             aq_block_bu = self.block_acquisition.copy()
@@ -274,12 +309,19 @@ class MEGESSE(Sequence2D):
             e_types.insert(0, "se")
         else:
             e_types.append("se")
-
+        idx_phase_last = self.k_pe_indexes[idx_echo, idx_pe_loop]
+        idx_phase_new = idx_phase_last
         for num_readout in range(self.num_e_per_rf):
             if int(num_readout % 2) == 0:
                 # add bu sampling
                 self.sequence.add_block(*aq_block_bu.list_events_to_ns())
                 id_acq = self.id_bu_acq
+                if phase_blips and self.params.acceleration_factor > 1.1:
+                    idx_phase_new = self._set_phase_blip_gradient(idx_phase=idx_phase_last)
+                else:
+                    # no blip gradient
+                    idx_phase_new = idx_phase_last
+                    self._reset_phase_blip_gradient()
             else:
                 # add bd sampling
                 self.sequence.add_block(*aq_block_bd.list_events_to_ns())
@@ -288,14 +330,22 @@ class MEGESSE(Sequence2D):
                 # write sampling pattern
                 _ = self._write_sampling_pattern_entry(
                     slice_num=self.trueSliceNum[idx_slice_loop],
-                    pe_num=int(self.k_pe_indexes[idx_echo, idx_pe_loop]),
+                    pe_num=int(idx_phase_last),
                     echo_num=self.num_e_per_rf * idx_echo + num_readout,
                     acq_type=id_acq, echo_type=e_types[num_readout],
                     echo_type_num=idx_echo
                 )
             if num_readout < self.num_e_per_rf - 1:
                 # add inter echo delay
-                self.sequence.add_block(self.t_delay_e2e.to_simple_ns())
+                if id_acq == self.id_bu_acq:
+                    self.sequence.add_block(self.t_delay_e2e_bubd.to_simple_ns())
+                else:
+                    self.sequence.add_block(self.t_delay_e2e_bdbu.to_simple_ns())
+                    idx_phase_last = idx_phase_new
+        add_phase_area_covered = (idx_phase_last - self.k_pe_indexes[idx_echo, idx_pe_loop]) * self.params.delta_k_phase
+        # we pre-phased in phase encode direction to some line, with every blip+
+        # we need to re-phase less area to get back to 0. hence we want to give the accumulated area as negative
+        return -add_phase_area_covered
 
     def _loop_slices(self, idx_pe_n: int, no_adc: bool = False):
         for idx_slice in range(self.params.resolution_slice_num):
@@ -327,9 +377,9 @@ class MEGESSE(Sequence2D):
                 self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
 
             # add bu and bd samplings
-            self._add_gesse_readouts(
+            accum_pe_area = self._add_gesse_readouts(
                 idx_pe_loop=idx_pe_n, idx_slice_loop=idx_slice,
-                idx_echo=0, no_adc=no_adc
+                idx_echo=0, no_adc=no_adc, phase_blips=True
             )
 
             # delay if necessary
@@ -341,7 +391,7 @@ class MEGESSE(Sequence2D):
                 # set flip angle from param list
                 self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=idx_slice)
                 # looping through slices per phase encode, set phase encode for ref
-                self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx)
+                self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=echo_idx, add_rephase=accum_pe_area)
                 # refocus
                 self.sequence.add_block(*self.block_refocus.list_events_to_ns())
 
@@ -349,9 +399,9 @@ class MEGESSE(Sequence2D):
                 if self.t_delay_ref1_se1.get_duration() > 1e-7:
                     self.sequence.add_block(self.t_delay_ref1_se1.to_simple_ns())
 
-                self._add_gesse_readouts(
+                accum_pe_area = self._add_gesse_readouts(
                     idx_pe_loop=idx_pe_n, idx_slice_loop=idx_slice,
-                    idx_echo=echo_idx, no_adc=no_adc
+                    idx_echo=echo_idx, no_adc=no_adc, phase_blips=True
                 )
 
                 # delay if necessary
