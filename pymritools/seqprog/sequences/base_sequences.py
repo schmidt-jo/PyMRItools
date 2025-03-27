@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 import plotly.graph_objects as go
 import plotly.subplots as psub
+import plotly.colors as plc
 import tqdm
 
 from pymritools.seqprog.core import Kernel, GRAD, ADC, DELAY
@@ -488,7 +489,8 @@ class Sequence2D(abc.ABC):
         sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
 
     def _set_phase_grad(self, echo_idx: int, phase_idx: int,
-                        no_ref_1: bool = False, excitation: bool = False):
+                        no_ref_1: bool = False, excitation: bool = False,
+                        add_rephase: float = 0.0):
         # caution we assume trapezoidal phase encode gradients
         area_factors = np.array([0.5, 1.0, 0.5])
         # we get the actual line index from the sampling pattern, dependent on echo number and phase index in the loop
@@ -508,9 +510,9 @@ class Sequence2D(abc.ABC):
                 # we need to rephase the previous phase encode
                 last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
             block = self.block_refocus
-            # we set the re-phase phase encode gradient
+            # we set the re-phase phase encode gradient - add additional area if set
             phase_enc_time_pre_pulse = np.sum(np.diff(block.grad_phase.t_array_s[:4]) * area_factors)
-            block.grad_phase.amplitude[1:3] = self.phase_areas[last_idx_phase] / phase_enc_time_pre_pulse
+            block.grad_phase.amplitude[1:3] = (self.phase_areas[last_idx_phase] + add_rephase) / phase_enc_time_pre_pulse
 
         # we set the post pulse phase encode gradient that sets up the next readout
         if np.abs(self.phase_areas[idx_phase]) > 1:
@@ -552,19 +554,6 @@ class Sequence2D(abc.ABC):
                 self._loop_navs()
 
         log_module.info(f"sequence built!")
-    # caution: this is closely tied to the pypsi module and changes in either might affect the other!
-    # def _check_interface_set(self):
-    #     if any([not state for state in [self.k_trajectory_set, self.recon_params_set, self.sampling_pattern_set]]):
-    #         warn = f"pypsi interface might not have been set:" \
-    #                f" Sampling Pattern ({self.sampling_pattern_set}), K-Trajectory ({self.k_trajectory_set})," \
-    #                f" Recon Parameters ({self.recon_params_set})"
-    #         log_module.warning(warn)
-    #     for acq_type in self.interface.sampling_k_traj.sampling_pattern["acq_type"].unique():
-    #         if acq_type not in self.interface.sampling_k_traj.k_trajectories["acquisition"].unique():
-    #             warn = f"acquisition registered in sampling pattern: " \
-    #                    f"{acq_type} not registered in k-trajectory - types: " \
-    #                    f"{self.interface.sampling_k_traj.k_trajectories['acquisition'].unique()}"
-    #             log_module.warning(warn)
 
     # sampling & k - space
     # ToDo: use EPI style phase steps in between GRE readouts to inject different sampling patterns per GRE
@@ -605,61 +594,9 @@ class Sequence2D(abc.ABC):
             trajectory=trajectory, identifier=identifier
         )
 
-    # recon info
-    # def _set_recon_parameters_img(self):
-    #     log_module.debug(f"set pypsi recon")
-    #     self.interface.recon.set_recon_params(
-    #         img_n_read=self.params.resolution_n_read, img_n_phase=self.params.resolution_n_phase,
-    #         img_n_slice=self.params.resolution_slice_num,
-    #         img_resolution_read=self.params.resolution_voxel_size_read,
-    #         img_resolution_phase=self.params.resolution_voxel_size_phase,
-    #         img_resolution_slice=self.params.resolution_slice_thickness,
-    #         etl=self.params.etl,
-    #         os_factor=self.params.oversampling,
-    #         read_dir=self.params.read_dir,
-    #         acc_factor_phase=self.params.acceleration_factor,
-    #         acc_read=False,
-    #         te=self.te
-    #     )
-    #     self.recon_params_set = True
-
-    # def _set_nav_parameters(self):
-    #     log_module.debug(f"set pypsi recon nav")
-    #     if self.params.use_navs:
-    #         # recon
-    #         self.interface.recon.set_navigator_params(
-    #             lines_per_nav=int(self.params.resolution_n_phase * self.nav_resolution_factor / 2),
-    #             num_of_nav=self.params.number_central_lines + self.params.number_outer_lines,
-    #             nav_acc_factor=2, nav_resolution_scaling=self.nav_resolution_factor,
-    #             num_of_navs_per_tr=2
-    #         )
-    #     else:
-    #         pass
-
     # emc
     def _set_emc_parameters(self):
         pass
-
-    #     log_module.debug(f"set pypsi emc")
-    #     # spawn emc obj with relevant information - to make use of postinit
-    #     self.interface.emc = pypsi.parameters.EmcParameters(
-    #         gamma_hz=self.interface.specs.gamma,
-    #         etl=self.params.etl,
-    #         esp=self.params.esp,
-    #         bw=self.params.bandwidth,
-    #         excitation_angle=self.params.excitation_rf_fa,
-    #         excitation_phase=self.params.excitation_rf_phase,
-    #         gradient_excitation=self._set_grad_for_emc(self.block_excitation.grad_slice.slice_select_amplitude),
-    #         duration_excitation=self.params.excitation_duration,
-    #         refocus_angle=self.params.refocusing_rf_fa,
-    #         refocus_phase=self.params.refocusing_rf_phase,
-    #         gradient_refocus=self._set_grad_for_emc(self.block_refocus.grad_slice.slice_select_amplitude),
-    #         duration_refocus=self.params.refocusing_duration,
-    #         gradient_crush=self._set_grad_for_emc(self.block_refocus.grad_slice.amplitude[1]),
-    #         duration_crush=np.sum(np.diff(self.block_refocus.grad_slice.t_array_s[-4:])) * 1e6,
-    #         tes=self.te
-    #     )
-    #     self._fill_emc_info()
 
     @abc.abstractmethod
     def _fill_emc_info(self):
@@ -1325,6 +1262,59 @@ class Sequence2D(abc.ABC):
         else:
             fig.write_html(fig_path.as_posix())
 
+        # sampling mask
+        len_x = 15
+        num_echoes = max([s.echo_number for s in self.sampling.samples])
+        n_pe = self.params.resolution_n_phase
+        sampling_mask = np.zeros((len_x * num_echoes, n_pe))
+
+        for i, s in enumerate(self.sampling.samples):
+            if "noise" in s.acquisition_type:
+                continue
+            ne = s.echo_number
+            if "bd" in s.acquisition_type:
+                m_val = 2
+            else:
+                m_val = 1
+            sampling_mask[ne * len_x:(ne + 1) * len_x, s.phase_encode_number] = m_val
+            sampling_mask[(ne + 1) * len_x - 1, :] = 3
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Heatmap(
+                z=sampling_mask, transpose=True,
+                colorscale="Viridis",
+                showscale=False, showlegend=False
+            )
+        )
+        m_vals = np.unique(sampling_mask.astype(int))
+        names = ["non sampled", "positive read grad", "negative read grad", ""]
+        cmap = plc.sample_colorscale("viridis", 4, 0, 1)
+        for i, m in enumerate(m_vals):
+            if names[i]:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[None],
+                        y=[None],
+                        mode="markers",
+                        name=names[i],
+                        marker=dict(size=7, color=cmap[i], symbol='square'),
+                    ),
+                )
+        tickvals = np.linspace(0, sampling_mask.shape[0], num_echoes + 1) + sampling_mask.shape[0] / num_echoes / 2
+        fig.update_xaxes(title="echo number", tickmode="array", tickvals=tickvals,
+                         ticktext=np.arange(1, num_echoes + 1))
+        fig.update_yaxes(title="phase encode number")
+        fig.show()
+
+        name = f"sampling_mask"
+        fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
+        log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
+        if file_suffix in ["png", "pdf"]:
+            fig.write_image(fig_path.as_posix())
+        else:
+            fig.write_html(fig_path.as_posix())
+
 # def _plot_grad_moments(self, grad_moments: np.ndarray, dt_in_us: int):
 #     ids = ["gx"] * grad_moments.shape[1] + ["gy"] * grad_moments.shape[1] + ["gz"] * grad_moments.shape[1] + \
 #           ["adc"] * grad_moments.shape[1]
@@ -1492,11 +1482,20 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
 
     if config.visualize:
         logging.info("Plotting")
-        # pyp_seq.plot(time_range=(0, 4e-3 * jstmc_seq.params.tr), time_disp='s')
+        # plot start
         sequence.plot_sequence(t_start_s=0, t_end_s=2*sequence.params.tr*1e-3, sim_grad_moments=True)
+        # plot within ac region
+        n_start = int(sequence.params.number_outer_lines // 2) + 4
         sequence.plot_sequence(
-            t_start_s=(sequence.params.number_central_lines+2)*sequence.params.tr*1e-3,
-            t_end_s=(sequence.params.number_central_lines+4)*sequence.params.tr*1e-3,
+            t_start_s=n_start * sequence.params.tr * 1e-3,
+            t_end_s=(n_start + 2) * sequence.params.tr * 1e-3,
+            sim_grad_moments=True
+        )
+        # plot close to end
+        n_start = int(2 * sequence.params.number_outer_lines // 3) + sequence.params.number_central_lines + 4
+        sequence.plot_sequence(
+            t_start_s=n_start * sequence.params.tr * 1e-3,
+            t_end_s=(n_start + 2) * sequence.params.tr * 1e-3,
             sim_grad_moments=True
         )
         sequence.plot_sampling()
