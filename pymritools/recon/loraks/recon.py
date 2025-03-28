@@ -123,7 +123,7 @@ def recon(settings: PyLoraksConfig, mode: str):
 
     log_module.info("FFT into image space and rSoS channels")
     # fft into real space
-    bar = range(loraks_recon.shape[2]) if settings.slurm else tqdm.trange(loraks_recon.shape[2], "slice wise processing")
+    bar = range(loraks_recon.shape[2]) if settings.slurm else tqdm.trange(loraks_recon.shape[2], desc="slice wise processing")
     dim_channel = -2
     loraks_recon_img = torch.zeros_like(loraks_recon)
     loraks_recon_mag = torch.zeros_like(torch.abs(loraks_recon[:, :, :, 0]))
