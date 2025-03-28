@@ -15,7 +15,7 @@ class Settings(BaseClass):
         help="set filepath to .pt file"
     )
     in_affine: str = field(
-        alias="-ia", default="./examples/raw_data/results/k_space.pt",
+        alias="-ia", default="",
         help="input affine matrix, necessary if input file is .pt to output .nii file."
     )
     in_sampling_mask: str = field(

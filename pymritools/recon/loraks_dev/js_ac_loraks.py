@@ -10,6 +10,7 @@ from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.recon.loraks_dev.operators import c_operator, s_operator
 from pymritools.utils import Phantom
 from pymritools.utils import fft
+from pymritools.utils.phantom.phant import log_module
 
 
 def fourier_mv(k, v, ps):
@@ -82,10 +83,6 @@ def fourier_mv_s(k, v, ps):
     Returns:
         torch.Tensor: Result tensor of shape [(nx - ps + 1) * (ny - ps + 1), l].
     """
-    # Extract dimensions
-    nx, ny, nc = k.shape  # Input tensor dimensions
-    # complex rep
-    h = v.shape[0] // 2
     v = v[::2] + 1j * v[1::2]
 
     mv_c = fourier_mv(k=k, v=v, ps=ps)
@@ -94,7 +91,103 @@ def fourier_mv_s(k, v, ps):
     return 2 * (mv_c - mv_s)
 
 
-def main():
+def find_ac_region(k_space: torch.Tensor, mask: torch.Tensor):
+    nx, ny = mask.shape[:2]
+    logging.info("Find AC Region")
+    cx = int(nx / 2)
+    cy = int(ny / 2)
+    nce = mask.view((nx, ny, -1)).shape[-1]
+    for ix in tqdm.trange(cx - 1, desc="AC Region search - x"):
+        if torch.sum(mask.view((nx, ny, nce))[cx - ix - 1:cx + ix, cy]) < nce * (2 * ix + 1):
+            break
+    for iy in tqdm.trange(cy - 1, desc="AC Region search - y"):
+        if torch.sum(mask.view((nx, ny, nce))[cx, cy - iy - 1:cy + iy]) < nce * (2 * iy + 1):
+            break
+    ac_data = k_space[cx - ix:cx + ix, cy - iy:cy + iy]
+    return ac_data.contiguous(), nce
+
+
+def recon(
+        k_space: torch.Tensor, sampling_mask: torch.Tensor,
+        rank: int, loraks_neighborhood_size: int = 5, lambda_reg: float = 0.1, matrix_type: str = "S",
+        max_num_iter: int = 200,
+        device: torch.device = torch.get_default_device()
+):
+    if matrix_type.capitalize() == "S":
+        use_s_matrix = True
+    elif matrix_type.capitalize() == "C":
+        use_s_matrix = False
+    else:
+        err = "Currently only S or C matrix LORAKS types are supported."
+        log_module.error(err)
+        raise ValueError(err)
+
+    ac_data, nce = find_ac_region(k_space, sampling_mask)
+    mask = sampling_mask.to(torch.bool)
+    k_data_consistency = k_space[mask]
+
+    logging.info("Set Matrix Indices and AC Matrix")
+    # ToDo: Calculate size of AC subregion if whole region is to big for CPU?
+    ac_indices, ac_matrix_shape = get_linear_indices(
+        k_space_shape=k_space.shape,
+        patch_shape=(loraks_neighborhood_size, loraks_neighborhood_size, -1, -1),
+        sample_directions=(1, 1, 0, 0)
+    )
+
+    if use_s_matrix:
+        ac_matrix_shape = tuple((torch.tensor(ac_matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
+        ac_matrix = s_operator(k_space=ac_data, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
+    else:
+        ac_matrix = c_operator(k_space=ac_data, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
+
+    eig_vals, vecs = torch.linalg.eigh(ac_matrix.mH @ ac_matrix)
+    # eigenvals and corresponding evs are in ascending order
+    v = vecs[..., :-rank]
+    if use_s_matrix:
+        # complex number representation
+        v = torch.reshape(v, (2 * nce, -1, v.shape[-1]))
+        v = v[::2] + v[1::2] * 1j
+        v = torch.reshape(v, (-1, v.shape[-1]))
+
+    del ac_matrix
+    torch.cuda.empty_cache()
+
+    logging.info("Init optimization")
+    k_init = torch.randn_like(k_space) * 1e-5
+    k_init[sampling_mask] = k_space[sampling_mask]
+    k = k_init.clone().to(device).requires_grad_()
+    k_data_consistency = k_data_consistency.to(device)
+    lr = torch.linspace(5e-3, 5e-4, max_num_iter, device=device)
+    mask = mask.to(device)
+
+    progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
+    for i in progress_bar:
+        loss_1 = torch.linalg.norm(
+            k[mask] - k_data_consistency
+        )
+        if use_s_matrix:
+            mv = fourier_mv_s(k=k.view(*k.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
+        else:
+            mv = fourier_mv(k=k.view(*k.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
+
+        loss_2 = torch.linalg.norm(mv, ord="fro")
+
+        loss = loss_1 + lambda_reg * loss_2
+        loss.backward()
+
+        with torch.no_grad():
+            k -= lr[i] * k.grad
+        k.grad.zero_()
+
+        progress_bar.postfix = (
+            f"loss low rank: {1e3 * loss_2.item():.2f} -- loss data: {1e3 * loss_1.item():.2f} -- "
+            f"total_loss: {1e3 * loss.item():.2f}"
+        )
+    k_recon = k.detach().cpu()
+    return k_recon
+
+
+def main_pbp():
     logging.info("Set Device")
     device = torch.device("cuda")
 
@@ -113,88 +206,11 @@ def main():
     # img_us = root_sum_of_squares(img_us, dim_channel=-2)
     mask = (torch.abs(sl_us) > 1e-9).to(torch.int)
 
-    logging.info("Find AC Region")
-    cx = int(nx / 2)
-    cy = int(ny / 2)
-    nce = mask.view((nx, ny, -1)).shape[-1]
-    for ix in tqdm.trange(cx - 1, desc="AC Region search - x"):
-        if torch.sum(mask.view((nx, ny, nce))[cx - ix - 1:cx + ix, cy]) < nce * (2 * ix + 1):
-            break
-    for iy in tqdm.trange(cy - 1, desc="AC Region search - y"):
-        if torch.sum(mask.view((nx, ny, nce))[cx, cy - iy - 1:cy + iy]) < nce * (2 * iy + 1):
-            break
-    sl_ac = sl_us[cx - ix:cx + ix, cy - iy:cy + iy, :, :]
-    sl_ac = sl_ac.contiguous()
-    mask = mask.to(torch.bool)
-    k_data_consistency = sl_us[mask]
-
-    logging.info("Set Parameters")
-    rank_s = 100
-    lambda_s = 0.1
-    max_num_iter = 100
-
-    logging.info("Set Matrix Indices and AC Matrix")
-    # ToDo: Calculate size of AC subregion if whole region is to big for CPU?
-    ac_indices, ac_matrix_shape = get_linear_indices(
-        k_space_shape=sl_ac.shape, patch_shape=(5, 5, -1, -1), sample_directions=(1, 1, 0, 0)
+    k_recon = recon(
+        k_space=sl_us, sampling_mask=mask, rank=50,
+        loraks_neighborhood_size=5, lambda_reg=0.1, matrix_type="S",
+        max_num_iter=200, device=device
     )
-    ac_matrix_shape_s = tuple((torch.tensor(ac_matrix_shape, dtype=torch.int) * torch.tensor([2, 2])).tolist())
-    # ac_matrix_c = c_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape).to(device)
-    ac_matrix_s = s_operator(k_space=sl_ac, indices=ac_indices, matrix_shape=ac_matrix_shape_s).to(device)
-
-    # ev_c, v_c = torch.linalg.eigh(ac_matrix_c.mH @ ac_matrix_c)
-    ev_s, v_s = torch.linalg.eigh(ac_matrix_s.mH @ ac_matrix_s)
-    # eigenvals and corresponding evs are in ascending order
-    # v_c = v_c[:, :-rank_s]
-    v_s = v_s[:, :-rank_s]
-    # complex number representation
-    # v_s = torch.reshape(v_s, (2 * nce, -1, v_s.shape[-1]))
-    # v_s = v_s[::2] + v_s[1::2] * 1j
-    # v_s = torch.reshape(v_s, (-1, v_s.shape[-1]))
-
-    del ac_matrix_s
-    torch.cuda.empty_cache()
-
-    logging.info("Init optimization")
-    k_init = torch.randn_like(sl_us) * 1e-5
-    k_init[mask] = sl_us[mask]
-    k = k_init.clone().to(device).requires_grad_()
-    k_data_consistency = k_data_consistency.to(device)
-    lr = torch.linspace(5e-3, 5e-4, max_num_iter, device=device)
-    mask = mask.to(device)
-
-    # do FFT speedups of haldar
-    progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
-    for i in progress_bar:
-        loss_1 = torch.linalg.norm(
-            k[mask] - k_data_consistency
-        )
-
-        # matrix = s_operator(
-        #         k_space=k, indices=indices, matrix_shape=matrix_shape
-        # )
-        # loss_2 = torch.linalg.norm(
-        #     torch.matmul(matrix, v),
-        #     ord="fro"
-        # )
-        # mv = fourier_mv(k=k.view(*k.shape[:2], -1), v=v_c, ps=5)
-        mv = fourier_mv_s(k=k.view(*k.shape[:2], -1), v=v_s, ps=5)
-        # loss_2 = fourier_mv_s(k=k.view(*k.shape[:2], -1), v=v_s, ps=5)
-        loss_2 = torch.linalg.norm(mv, ord="fro")
-        # loss_2 = torch.linalg.norm(mv_s, ord="fro")
-
-        loss = loss_1 + lambda_s * loss_2
-        loss.backward()
-
-        with torch.no_grad():
-            k -= lr[i] * k.grad
-        k.grad.zero_()
-
-        progress_bar.postfix = (
-            f"loss low rank: {1e3 * loss_2.item():.2f} -- loss data: {1e3 * loss_1.item():.2f} -- "
-            f"total_loss: {1e3 * loss.item():.2f}"
-        )
-    k_recon = k.detach().cpu()
     img_recon = torch.abs(fft(k_recon, axes=(0, 1)))
 
     fig = psub.make_subplots(
@@ -220,4 +236,4 @@ def main():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    main()
+    main_pbp()
