@@ -64,6 +64,10 @@ class BaseClass(Serializable):
         alias="-d", default=False,
         help="Toggle debugging mode, and logging debug level."
     )
+    slurm: bool = field(
+        default=False,
+        help="Toggle slurm mode, disables visualizations and progress bars and activates some additional logging"
+    )
 
     def _check_non_default_vars(self) -> (dict, dict):
         # create default class instance
