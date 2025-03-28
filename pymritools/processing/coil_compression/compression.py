@@ -43,7 +43,7 @@ def shape_input(input_k_space: torch.Tensor, sampling_pattern: torch.Tensor):
                f"(no middle sampled line in x-y-z corresponds to the shape dim).")
         log_module.error(err)
         raise AttributeError(err)
-    log_module.info(f"found read dir for channel compression: {['x', 'y'][i]}")
+    log_module.info(f"found read dir for channel compression: {['x', 'y'][read_dir]}")
 
     input_k_space = torch.movedim(input_k_space, read_dir, 0)
     sampling_pattern = torch.movedim(sampling_pattern, read_dir, 0)
@@ -55,6 +55,7 @@ def compress_channels_2d(
         num_compressed_channels: int, use_ac_data: bool = True, visualize: bool = False,
         device: torch.device = torch.get_default_device()
     ) -> torch.tensor:
+    """ k-space is assumed to be provided in dims [x, y, z, ch, t (optional)]"""
     log_module.info(f"GCC channel compression")
     nx, ny, nz, nc, ne = input_k_space.shape
     # check if we are actually provided fewer channels
@@ -63,7 +64,6 @@ def compress_channels_2d(
                f"No compression done.")
         log_module.info(msg)
         return input_k_space.cpu()
-    """ k-space is assumed to be provided in dims [x, y, z, ch, t (optional)]"""
     input_k_space, sampling_pattern, read_dir = shape_input(
         input_k_space=input_k_space, sampling_pattern=sampling_pattern
     )
