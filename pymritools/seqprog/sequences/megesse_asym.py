@@ -231,11 +231,16 @@ class MEGESSE(Sequence2D):
         )
         assert np.allclose(t_ref_e1, t_ref_e_bd)
         # echo to echo from bu to bd
-        t_e2e_bubd = self.block_acquisition.get_duration() / 2 + self.block_acquisition_neg_polarity.grad_read.get_duration() / 2
+        # look for center of the readout gradient (in the duration of the event the delay is included)
+        read_half_pos = self.block_acquisition.grad_read.t_duration_s / 2 + self.block_acquisition.grad_read.t_delay_s / 2
+        read_half_neg = self.block_acquisition_neg_polarity.grad_read.t_duration_s / 2 + self.block_acquisition_neg_polarity.grad_read.t_delay_s / 2
+        t_e2e_bubd = (
+             self.block_acquisition.get_duration() - read_half_pos + read_half_neg
+        )
         # echo to echo from bd to bu
         t_e2e_bdbu = (
-             self.block_acquisition_neg_polarity.get_duration() - self.block_acquisition_neg_polarity.grad_read.get_duration()
-        ) / 2 + self.block_acquisition.get_duration() / 2
+             self.block_acquisition_neg_polarity.get_duration() - read_half_neg + read_half_pos
+        )
         # we need to add the e2e time for each additional GRE readout
         # echo time of first se is twice the bigger time of 1) between excitation and first ref
         # 2) between first ref and se and e2e
