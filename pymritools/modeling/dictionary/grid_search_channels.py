@@ -86,7 +86,7 @@ def fit_megesse():
 
     log_module.info("normalize data")
     # data_rsos = root_sum_of_squares(input_data=data, dim_channel=-2)
-    data_rsos = data[:, :, 0]
+    data_rsos = data
 
     log_module.info("prep database")
 
@@ -126,6 +126,84 @@ def fit_megesse():
 
     loss_residual = torch.zeros(data_normed_se.shape[:-1])
     phase_offset = torch.zeros(data_normed_se.shape[:-1])
+
+    log_module.info(f"rough estimate R2*")
+    r2s = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
+    residual = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
+    weights = torch.tensor((3/4, 1/4))
+
+    wavg = torch.linspace(1, 0.5, 5)
+    wavg /= torch.sum(wavg)
+    for i in range(2):
+        gre_indices = torch.arange(5) + 10 * i
+        data_gre = torch.abs(data_rsos[..., gre_indices])
+        te_gre = gre_attenuation_times[gre_indices]
+        # we assume that the data after the initial spin echo decays with some r2s
+        log_sig = torch.zeros_like(data_gre)
+        log_sig[data_gre > 0] = torch.log(data_gre[data_gre > 0])
+        A = torch.ones((*data_gre.shape, 2))
+        A[..., 0] = te_gre
+
+        ATA = torch.linalg.matmul(A.mT, A)
+        ATA_inv = torch.linalg.inv(ATA)
+        ATY = torch.linalg.matmul(A.mT, log_sig[..., None])
+        beta = torch.linalg.matmul(ATA_inv, ATY)
+        r2s[..., i] = -torch.squeeze(beta)[..., 0]
+        residual[..., i] = torch.mean((log_sig - torch.squeeze(torch.linalg.matmul(A, beta)))**2, dim=-1)
+        # ToDo residual[..., i] =
+    r2s = torch.sum(r2s * weights[None, None], dim=-1)
+    residual = torch.sum(residual * weights[None, None], dim=-1)
+    nifti_save(torch.clamp_min(r2s, 0.0), img_aff=affine, path_to_dir=path, file_name="r2s_rough_chw")
+
+    weights = 1 - (torch.clamp(residual, 0.0, 0.6)) / 0.6
+    weights = smooth_map(weights, kernel_size=8)
+    r2s = torch.nan_to_num(
+        torch.sum(weights * r2s, dim=-1) / torch.sum(weights, dim=-1)
+    )
+    nifti_save(torch.clamp_min(r2s, 0.0), img_aff=affine, path_to_dir=path, file_name="r2s_rough")
+    nifti_save(weights, img_aff=affine, path_to_dir=path, file_name="r2s_weights")
+
+    log_module.info(f"rough estimate R2+")
+    r2dag = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
+    residual = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
+    weights = torch.tensor((3/4, 1/4))
+
+    wavg = torch.linspace(1, 0.5, 5)
+    wavg /= torch.sum(wavg)
+    for i in range(2):
+        dag_indices = torch.arange(5, 10) + 10 * i
+        data_dag = torch.abs(data_rsos[..., dag_indices])
+        te_gre = gre_attenuation_times[dag_indices]
+        # we assume that the data after the initial spin echo decays with some r2s
+        log_sig = torch.zeros_like(data_dag)
+        log_sig[data_dag > 0] = torch.log(data_dag[data_dag > 0])
+        A = torch.ones((*data_dag.shape, 2))
+        A[..., 0] = te_gre
+
+        ATA = torch.linalg.matmul(A.mT, A)
+        ATA_inv = torch.linalg.inv(ATA)
+        ATY = torch.linalg.matmul(A.mT, log_sig[..., None])
+        beta = torch.linalg.matmul(ATA_inv, ATY)
+        r2dag[..., i] = torch.squeeze(beta)[..., 0]
+        residual[..., i] = torch.mean((log_sig - torch.squeeze(torch.linalg.matmul(A, beta)))**2, dim=-1)
+        # ToDo residual[..., i] =
+    r2dag = torch.sum(r2dag * weights[None, None], dim=-1)
+    residual = torch.sum(residual * weights[None, None], dim=-1)
+    nifti_save(r2dag, img_aff=affine, path_to_dir=path, file_name="r2s_dagger_chw")
+
+    weights = 1 - (torch.clamp(residual, 0.0, 0.6)) / 0.6
+    weights = smooth_map(weights, kernel_size=8)
+    r2dag = torch.nan_to_num(
+        torch.sum(weights * r2dag, dim=-1) / torch.sum(weights, dim=-1)
+    )
+    nifti_save(torch.clamp_min(r2dag, 0.0), img_aff=affine, path_to_dir=path, file_name="r2dagger_rough")
+    nifti_save(weights, img_aff=affine, path_to_dir=path, file_name="r2_dagger_weights")
+
+    log_module.info(f"rough estimate R2 & R2'")
+    rough_r2 = 0.5 * (r2s + r2dag)
+    rough_r2p = 0.5 * (r2s - r2dag)
+    nifti_save(rough_r2, img_aff=affine, path_to_dir=path, file_name="r2_rough")
+    nifti_save(rough_r2p, img_aff=affine, path_to_dir=path, file_name="r2p_rough")
 
     log_module.info(f"Estimate rough B0 / B1")
     for idx_z in range(data_normed_se.shape[2]):
@@ -167,30 +245,6 @@ def fit_megesse():
 
     nifti_save(weights, img_aff=affine, path_to_dir=path, file_name="reg_b1_weights")
     nifti_save(b1_map, img_aff=affine, path_to_dir=path, file_name="reg_b1_combined")
-
-    log_module.info(f"rough estimate R2*")
-    r2s = torch.zeros((*data_normed_se.shape[:-2], 2))
-    weights = torch.tensor((2/3, 1/3))
-
-    wavg = torch.linspace(1, 0.5, 5)
-    wavg /= torch.sum(wavg)
-    for i in range(2):
-        gre_indices = torch.arange(5) + 10 * i
-        data_gre = torch.abs(data_rsos[..., gre_indices])
-        te_gre = gre_attenuation_times[gre_indices]
-        # we assume that the data after the initial spin echo decays with some r2s
-        log_sig = torch.zeros_like(data_gre)
-        log_sig[data_gre > 0] = torch.log(data_gre[data_gre > 0])
-        A = torch.ones((*data_gre.shape[:2], te_gre.shape[0], 2))
-        A[..., 0] = te_gre
-
-        ATA = torch.linalg.matmul(A.mT, A)
-        ATA_inv = torch.linalg.inv(ATA)
-        ATY = torch.linalg.matmul(A.mT, log_sig[..., None])
-        beta = torch.linalg.matmul(ATA_inv, ATY)
-        r2s[..., i] = -torch.squeeze(beta)[..., 0]
-    r2s = torch.sum(r2s * weights[None, None], dim=-1)
-    nifti_save(r2s, img_aff=affine, path_to_dir=path, file_name="r2s_rough")
 
     log_module.info("prep data")
     data_norm = torch.linalg.norm(data_rsos, dim=-1, keepdim=True)
