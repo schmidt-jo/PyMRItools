@@ -16,7 +16,11 @@ log_module = logging.getLogger(__name__)
 def load_data(settings: PyLoraksConfig):
     log_module.debug("Load data")
     k_space = torch_load(settings.in_k_space)
-    affine = torch_load(settings.in_affine)
+    if not plib.Path(settings.in_affine):
+        log_module.warning("No affine file given using identity matrix!")
+        affine = torch.eye(4)
+    else:
+        affine = torch_load(settings.in_affine)
     if settings.in_sampling_mask:
         sampling_pattern = torch_load(settings.in_sampling_mask)
     else:
