@@ -375,10 +375,10 @@ def ac_loraks(
         for idx_b in iter_bar:
             log_module.debug(f"Processing batch :: {idx_b+1} / {num_batches}")
             log_mem(point=f"Processing batch :: {idx_b+1} / {num_batches}", device=device)
-            # start = idx_b * batch_size_channels
-            # end = np.min([(idx_b + 1) * batch_size_channels, n_echoes])
-            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, :, idx_b::num_batches].to(device)
-            batch_aha = aha[:, :, :, idx_b::num_batches].to(device)
+            start = idx_b * batch_size_channels
+            end = np.min([(idx_b + 1) * batch_size_channels, n_echoes])
+            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, :, start:end].to(device)
+            batch_aha = aha[:, :, :, start:end].to(device)
 
             # __ per slice calculations
             # __ for C
@@ -415,7 +415,7 @@ def ac_loraks(
                 iter_bar=iter_bar
             )
 
-            k_space_x_y_z_ch_t[:, :, idx_s, :, idx_b::num_batches] = xmin.cpu()
+            k_space_x_y_z_ch_t[:, :, idx_s, :, start:end] = xmin.cpu()
         log_mem(point=f"Processing slice :: End :: {idx_s+1} / {n_slice}", device=device)
 
     return k_space_x_y_z_ch_t
