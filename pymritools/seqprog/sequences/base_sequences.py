@@ -1264,7 +1264,7 @@ class Sequence2D(abc.ABC):
 
         # sampling mask
         len_x = 15
-        num_echoes = max([s.echo_number for s in self.sampling.samples])
+        num_echoes = max([s.echo_number for s in self.sampling.samples if "noise" not in s.acquisition_type]) + 1
         n_pe = self.params.resolution_n_phase
         sampling_mask = np.zeros((len_x * num_echoes, n_pe))
 
@@ -1282,7 +1282,7 @@ class Sequence2D(abc.ABC):
         fig = go.Figure()
         fig.add_trace(
             go.Heatmap(
-                z=sampling_mask, transpose=True,
+                z=sampling_mask, transpose=True, zmin=0, zmax=4,
                 colorscale="Viridis",
                 showscale=False, showlegend=False
             )
@@ -1301,11 +1301,12 @@ class Sequence2D(abc.ABC):
                         marker=dict(size=7, color=cmap[i], symbol='square'),
                     ),
                 )
-        tickvals = np.linspace(0, sampling_mask.shape[0], num_echoes + 1) + sampling_mask.shape[0] / num_echoes / 2
+        tickvals = np.linspace(
+            0, sampling_mask.shape[0], num_echoes + 1
+        ) + sampling_mask.shape[0] / (num_echoes + 1) / 2
         fig.update_xaxes(title="echo number", tickmode="array", tickvals=tickvals,
                          ticktext=np.arange(1, num_echoes + 1))
         fig.update_yaxes(title="phase encode number")
-        fig.show()
 
         name = f"sampling_mask"
         fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
