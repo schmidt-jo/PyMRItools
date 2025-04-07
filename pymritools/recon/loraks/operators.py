@@ -16,35 +16,35 @@ from pymritools.utils import (
 log_module = logging.getLogger(__name__)
 
 
-def c_operator(k_space: torch.Tensor, indices: torch.Tensor):
+def c_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
     """
     Maps from k-space with shape (nx, ny, nc, nt) into the neighborhood-representation
-    :param k_space: k-space with shape (nx, ny, nc, nt)
+    :param k_space_x_y_ch_t: k-space with shape (nx, ny, nc, nt)
     :param indices: neighborhood mapping with shape (nb, 2)
     :return: neighborhood representation with shape (nt, nb)
     """
-    k_space = torch.flatten(k_space, 2)
-    return k_space[indices[:, :, 0], indices[:, :, 1]].permute(0, 2, 1).flatten(1)
+    k_space_x_y_ch_t = torch.flatten(k_space_x_y_ch_t, 2)
+    return k_space_x_y_ch_t[indices[:, :, 0], indices[:, :, 1]].permute(0, 2, 1).flatten(1)
 
 
 
-def c_adjoint_operator(c_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple, device=None):
+def c_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple, device=None):
     # Do we need to ensure dimensions? k-space in first, neighborhood / ch / t in second.
     # store shapes
-    sm, sk = c_matrix.shape
+    sm, sk = matrix.shape
     # get dims
     nb = indices.shape[1]
     n_tch = int(sk / nb)
     # extract sub-matrices - they are concatenated in neighborhood dimension for all t-ch images
     t_ch_idxs = torch.arange(nb)[:, None] + torch.arange(n_tch)[None, :] * nb
-    c_matrix = c_matrix[:, t_ch_idxs]
+    matrix = matrix[:, t_ch_idxs]
 
     # build k_space
-    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=torch.complex128, device=c_matrix.device)
+    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=matrix.dtype, device=matrix.device)
     for idx_nb in range(nb):
         k_space_recon[
             indices[:, idx_nb, 0], indices[:, idx_nb, 1]
-        ] += c_matrix[:, idx_nb]
+        ] += matrix[:, idx_nb]
     return torch.reshape(k_space_recon, k_space_dims)
 
 
@@ -73,17 +73,17 @@ def s_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
     return s_matrix
 
 
-def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
+def s_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
     # store shapes
-    sm, sk = s_matrix.shape
+    sm, sk = matrix.shape
     # get dims
     snb = 2 * indices.shape[1]
     n_tch = int(sk / snb)
     # extract sub-matrices - they are concatenated in neighborhood dimension for all t-ch images
     t_ch_idxs = torch.arange(snb)[:, None] + torch.arange(n_tch)[None, :] * snb
-    s_matrix = s_matrix[:, t_ch_idxs]
+    matrix = matrix[:, t_ch_idxs]
 
-    matrix_u, matrix_d = torch.tensor_split(s_matrix, 2, dim=0)
+    matrix_u, matrix_d = torch.tensor_split(matrix, 2, dim=0)
     srp_m_srm, msip_p_sim = torch.tensor_split(matrix_u, 2, dim=1)
     sip_p_sim, srp_p_srm = torch.tensor_split(matrix_d, 2, dim=1)
     # extract sub-sub
@@ -93,8 +93,8 @@ def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
     sim = msip_p_sim + sip_p_sim
 
     # build k_space
-    dtype = torch.complex128 if s_matrix.dtype == torch.float64 else torch.complex64
-    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=dtype).to(s_matrix.device)
+    dtype = torch.complex128 if matrix.dtype == torch.float64 else torch.complex64
+    k_space_recon = torch.zeros((*k_space_dims[:2], n_tch), dtype=dtype).to(matrix.device)
     # # fill k_space
     log_module.debug(f"build k-space from s-matrix")
     nb = int(snb / 2)
@@ -135,7 +135,7 @@ if __name__ == '__main__':
     # construct c matrix
     c_count_matrix = torch.abs(
         c_adjoint_operator(
-            c_matrix=c_operator(
+            matrix=c_operator(
                 k_space_x_y_ch_t=torch.ones_like(sl_us_k), indices=nb_indices
             ),
             indices=nb_indices, k_space_dims=(size_x, size_y)
@@ -170,7 +170,7 @@ if __name__ == '__main__':
     # construct c matrix
     s_count_matrix = torch.abs(
         s_adjoint_operator(
-            s_matrix=s_operator(
+            matrix=s_operator(
                 k_space_x_y_ch_t=torch.ones_like(sl_us_k), indices=nb_indices
             ),
             indices=nb_indices, k_space_dims=(size_x, size_y)
@@ -195,7 +195,7 @@ if __name__ == '__main__':
     )
 
     # get back to k - space
-    k_recon_s = s_adjoint_operator(s_matrix=s_lr_approx_s, indices=nb_indices, k_space_dims=(size_x, size_y))
+    k_recon_s = s_adjoint_operator(matrix=s_lr_approx_s, indices=nb_indices, k_space_dims=(size_x, size_y))
     mask = s_count_matrix > 1e-9
     k_recon_s[mask] = k_recon_s[mask] / s_count_matrix[mask]
     # fft
