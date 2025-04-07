@@ -456,3 +456,115 @@ def get_m_1_diag_vector(
         m1_v_s = 0.0
     return m1_fhf - lambda_s * m1_v_s - lambda_c * m1_v_c
 
+
+def ac_lorals_exact_data_consistency(
+        k_space_x_y_z_ch_t: torch.Tensor,
+        sampling_mask_x_y_t: torch.Tensor,
+        radius: int, rank_s: int,
+        batch_size_channels: int = 16,
+        max_num_iter: int = 10, conv_tol: float = 1e-3,
+        visualize: bool = True, path_visuals: Union[str, plib.Path] = "",
+        device: torch.device = torch.get_default_device()):
+    # __ One Time Calculations __
+    log_mem(point="AC Loraks Start", device=device)
+    img_ac_start, img_ac_shape = get_ac_region_from_sampling_pattern(sampling_mask_x_y_t=sampling_mask_x_y_t)
+
+    # get dimensions
+    k_space_x_y_z_ch_t = k_space_x_y_z_ch_t.to(torch.complex64)
+    shape = k_space_x_y_z_ch_t.shape
+    n_read, n_phase, n_slice, n_channels, n_echoes = shape
+    # for now just pick middle slice
+
+    # get indices for operators on whole image to calculate the count matrix for reconstruction
+    indices = get_idx_2d_circular_neighborhood_patches_in_shape(
+        shape_2d=(n_read, n_phase), nb_radius=radius, device=torch.device("cpu")
+    )
+    # get the indices within the ac region
+    # convert to tensors
+    img_ac_start = torch.tensor(img_ac_start, device=indices.device)  # Starting point (2,)
+    img_ac_end = img_ac_start + torch.tensor(img_ac_shape, device=indices.device)  # End point (2,)
+
+    inside_box = (indices > img_ac_start) & (indices < img_ac_end)  # Shape: (nxy, nb, 2)
+
+    # Ensure all indices in the `nb` dimension satisfy the condition
+    valid_indices_mask = inside_box.all(dim=-1).all(dim=1)  # Shape: (nxy,)
+
+    # Extract valid indices using the mask
+    img_ac_indices = indices[valid_indices_mask]  # Shape: (number_of_valid, nb, 2)
+
+    # check if C matrix is used and calculate count matrix
+    s_count_matrix = get_count_matrix(
+        mode="s", indices=indices, shape=(n_read, n_phase, 1, n_echoes)
+    ).to(device)
+
+    log_mem(point="End one time calculations", device=device)
+
+    for idx_s in range(n_slice):
+        log_module.info(f"Processing slice :: {idx_s+1} / {n_slice}")
+        log_mem(point=f"Processing slice :: Start :: {idx_s+1} / {n_slice}", device=device)
+        # __ need to batch. we can just permute and batch channels
+        num_batches = int(np.ceil(n_channels / batch_size_channels))
+        iter_bar = tqdm.trange(num_batches, desc="batch_processing") if visualize else range(num_batches)
+        for idx_b in iter_bar:
+            log_module.debug(f"Processing batch :: {idx_b+1} / {num_batches}")
+            log_mem(point=f"Processing batch :: {idx_b+1} / {num_batches}", device=device)
+            start = idx_b * batch_size_channels
+            end = np.min([(idx_b + 1) * batch_size_channels, n_channels])
+            # get data batch
+            batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, start:end].to(device)
+            mask = sampling_mask_x_y_t[:, :, None].to(device=device, dtype=torch.bool)[:, :, start:end]
+
+            batch_count_matrix = s_count_matrix[~mask]
+            nx, ny, nc, ne = batch_k_space_x_y_ch_t.shape
+
+            # __ per slice calculations - get V matrix from ac data of batch
+            vvs = get_v_matrix_of_ac_subspace(
+                k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
+                ac_indices=img_ac_indices, mode="s", rank=rank_s
+            )
+
+            b = s_adjoint_operator(
+                torch.matmul(
+                    s_operator(batch_k_space_x_y_ch_t, indices=indices),
+                    vvs
+                ),
+                indices=indices, k_space_dims=batch_k_space_x_y_ch_t.shape
+            )[~mask]
+
+            # define optimization function
+            def func_op(x):
+                return get_dc_diag_vector(
+                    f_rpct=x, v_s=vvs, indices=indices, count_matrix=batch_count_matrix, mask=mask, shape=batch_k_space_x_y_ch_t.shape
+                )
+
+            xmin, res_vec, results = cgd(
+                func_operator=func_op,
+                x=torch.zeros_like(b), b=b,
+                max_num_iter=max_num_iter,
+                conv_tol=conv_tol,
+                iter_bar=iter_bar
+            )
+
+            k_space_x_y_z_ch_t[:, :, idx_s, start:end][mask] = batch_k_space_x_y_ch_t[mask].cpu()
+            k_space_x_y_z_ch_t[:, :, idx_s, start:end][~mask] = xmin.cpu()
+        log_mem(point=f"Processing slice :: End :: {idx_s+1} / {n_slice}", device=device)
+
+    return k_space_x_y_z_ch_t
+
+
+def get_dc_diag_vector(
+        f_rpct: torch.Tensor, mask: torch.Tensor, count_matrix: torch.Tensor,
+        v_s: torch.Tensor, indices: torch.Tensor, shape):
+    m = count_matrix * f_rpct
+
+    tmp = torch.zeros(shape, dtype=f_rpct.dtype, device=f_rpct.device)
+    tmp[~mask] = f_rpct
+
+    mvs = s_adjoint_operator(
+        torch.matmul(
+            s_operator(tmp, indices=indices), v_s
+        ),
+        indices=indices, k_space_dims=shape
+    )[~mask]
+
+    return m - mvs
