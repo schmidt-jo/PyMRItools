@@ -68,6 +68,32 @@ def fourier_mv(k, v, ps):
     result_final = result_cropped.reshape((-1, l))
     return result_final
 
+def fourier_mv_opt(k, v_fft, ps):
+    # Extract dimensions
+    nx, ny, nc = k.shape  # Input tensor dimensions
+    l = v_fft.shape[-1]
+    # pad input
+    k_padded = torch.zeros((nx + 2 * ps, ny + 2 * ps, nc), dtype=k.dtype, device=k.device)
+    k_padded[ps:-ps, ps:-ps, :] = k
+    # Perform Fourier transform on padded `k`
+    k_fft = torch.conj(fft(k_padded, img_to_k=False, axes=(0, 1)))  # FFT of k: [nx+2*ps, ny+2*ps, nc]
+    # Combine original and conjugated filters
+    # Summation in Fourier space before inverse transformation, summation of coils
+    result_fft = (k_fft[..., None] * v_fft).sum(dim=-2)
+    result_spatial = fft(result_fft, img_to_k=True, axes=(0, 1))  # Shape: [nx+2*ps, ny+2*ps, l]
+
+    # Extract valid convolution region by cropping out the padded sections
+    edge = int(ps * 1.5)
+    result_cropped = result_spatial[edge:-edge, edge:-edge, :]  # Shape: [nx, ny, l]
+
+    result_final = result_cropped.reshape((-1, l))
+    return result_final
+
+
+def fourier_mv_s_opt(k, v_fft, ps):
+    mv_c = fourier_mv_opt(k=k, v_fft=v_fft, ps=ps)
+    mv_s = torch.conj(fourier_mv_opt(k=torch.flip(k, dims=(0, 1)), v_fft=v_fft, ps=ps))
+    return 2 * (mv_c - mv_s)
 
 def fourier_mv_s(k, v, ps):
     """
@@ -126,7 +152,7 @@ def recon(
     mask = sampling_mask.to(torch.bool)
     k_data_consistency = k_space[mask]
 
-    logging.info("Set Matrix Indices and AC Matrix")
+    log_module.info("Set Matrix Indices and AC Matrix")
     # ToDo: Calculate size of AC subregion if whole region is to big for CPU?
     ac_indices, ac_matrix_shape = get_linear_indices(
         k_space_shape=k_space.shape,
@@ -208,10 +234,15 @@ def recon_data_consistency(
 
     logging.info("Set Matrix Indices and AC Matrix")
     # ToDo: Calculate size of AC subregion if whole region is to big for CPU?
+    sample_dir = torch.zeros(len(k_space.shape), dtype=torch.int)
+    sample_dir[:2] = 1
+    patch_shape = torch.full(size=(len(k_space.shape),), fill_value=-1, dtype=torch.int)
+    patch_shape[:2] = loraks_neighborhood_size
+
     ac_indices, ac_matrix_shape = get_linear_indices(
         k_space_shape=ac_data.shape,
-        patch_shape=(loraks_neighborhood_size, loraks_neighborhood_size, -1, -1),
-        sample_directions=(1, 1, 0, 0)
+        patch_shape=tuple(patch_shape.tolist()),
+        sample_directions=tuple(sample_dir.tolist())
     )
 
     if use_s_matrix:
@@ -222,7 +253,7 @@ def recon_data_consistency(
 
     eig_vals, vecs = torch.linalg.eigh(ac_matrix.mH @ ac_matrix)
     # eigenvals and corresponding evs are in ascending order
-    v = vecs[..., :-rank]
+    v = vecs[..., -rank:]
     # if use_s_matrix:
     #     # complex number representation
     #     v = torch.reshape(v, (2 * nce, -1, v.shape[-1]))
@@ -230,6 +261,33 @@ def recon_data_consistency(
     #     v = torch.reshape(v, (-1, v.shape[-1]))
 
     del ac_matrix
+    torch.cuda.empty_cache()
+
+    log_module.info("Calculate V FFT")
+
+    v = v[::2] + 1j * v[1::2]
+
+    k_padded_shape = (
+        k_space.shape[0] + 2 * loraks_neighborhood_size,
+        k_space.shape[1] + 2 * loraks_neighborhood_size,
+        nce
+    )
+    l = v.shape[-1]
+
+    # Reshape and pad compression matrix `v`
+    v_reshaped = v.view(loraks_neighborhood_size, loraks_neighborhood_size, nce, l)  # Reshape `v` into blocks [nc, ps, ps, l]
+    v_padded = torch.zeros((*k_padded_shape, l), dtype=v.dtype, device=v.device)
+    pad_l = (k_padded_shape[0] - v_reshaped.shape[0]) // 2
+    pad_d = (k_padded_shape[1] - v_reshaped.shape[1]) // 2
+    v_padded[pad_l:pad_l + loraks_neighborhood_size, pad_d:pad_d + loraks_neighborhood_size, :, :] = v_reshaped
+    v_padded = v_padded.to(device)
+
+    # Perform Fourier transform on padded `k` and `v`
+    v_fft = torch.zeros_like(v_padded)
+    for i in tqdm.trange(l):
+        v_fft[..., i] = fft(torch.conj(v_padded[..., i]), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
+
+    del v_padded
     torch.cuda.empty_cache()
 
     logging.info("Init optimization")
@@ -269,7 +327,7 @@ def recon_data_consistency(
         tmp = torch.zeros_like(k_sampled)
         tmp[mask_unsampled] = k.flatten()
         if use_s_matrix:
-            mv = fourier_mv_s(k=(k_sampled + tmp).view(*tmp.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
+            mv = fourier_mv_s_opt(k=(k_sampled + tmp).view(*tmp.shape[:2], -1), v_fft=v_fft, ps=loraks_neighborhood_size)
         else:
             mv = fourier_mv(k=(k_sampled + tmp).view(*tmp.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
 
