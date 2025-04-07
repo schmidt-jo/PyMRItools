@@ -28,7 +28,8 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple
     s_p = k_space.view(-1)[indices]
     s_m = k_flip.view(-1)[indices]
     # Todo: Check how to handle floating point size
-    result = torch.empty(2 * len(indices), 2, dtype=torch.float64, device=k_space.device)
+    dtype = torch.float32 if k_space.dtype == torch.complex64 else torch.float64
+    result = torch.empty(2 * len(indices), 2, dtype=dtype, device=k_space.device)
     s_p_m = (s_p - s_m)
     result[:len(indices), 0] = s_p_m.real
     result[:len(indices), 1] = -s_p_m.imag
