@@ -73,7 +73,7 @@ def fourier_mv(k, v, ps):
 def fourier_mv_opt(k, v_fft, ps):
     # Extract dimensions
     # nx, ny, nc = k.shape  # Input tensor dimensions
-    l = v_fft.shape[-1]
+    # l = v_fft.shape[-1]
     # pad input
     # k_padded = torch.zeros((nx + 2 * ps, ny + 2 * ps, nc), dtype=k.dtype, device=k.device)
     # k_padded[ps:-ps, ps:-ps, :] = k
@@ -91,7 +91,7 @@ def fourier_mv_opt(k, v_fft, ps):
     #
     result_final = conv2d(torch.movedim(k, -1, 0)[None], v_fft, padding="same")
     result_final = torch.squeeze(torch.movedim(result_final, 1, -1))
-    result_final = result_final.reshape((-1, l))
+    result_final = result_final.reshape((-1, v_fft.shape[0]))
     return result_final
 
 
@@ -227,8 +227,7 @@ def recon_data_consistency(
         k_space: torch.Tensor, sampling_mask: torch.Tensor,
         rank: int, loraks_neighborhood_size: int = 5, matrix_type: str = "S",
         max_num_iter: int = 200,
-        device: torch.device = torch.get_default_device()
-):
+        device: torch.device = torch.get_default_device()):
     if matrix_type.capitalize() == "S":
         use_s_matrix = True
     elif matrix_type.capitalize() == "C":
@@ -264,13 +263,12 @@ def recon_data_consistency(
 
     eig_vals, vecs = torch.linalg.eigh(ac_matrix.mH @ ac_matrix)
     # eigenvals and corresponding evs are in ascending order
-    v = vecs[..., :-rank]
-    # if use_s_matrix:
-    #     # complex number representation
-    #     v = torch.reshape(v, (2 * nce, -1, v.shape[-1]))
-    #     v = v[::2] + v[1::2] * 1j
-    #     v = torch.reshape(v, (-1, v.shape[-1]))
 
+    start = max(0, vecs.shape[-1] - int(3*rank))
+    # leading trailing nullspace vecs
+    v = vecs[..., start:-rank]
+    log_module.info(f"Taking leading {vecs.shape[-1] - start - rank} nullspace eigenvectors")
+    log_module.info(f"total nullspace size: {vecs.shape[-1] - rank}")
     del ac_matrix
     torch.cuda.empty_cache()
 
@@ -278,28 +276,12 @@ def recon_data_consistency(
 
     v = v[::2] + 1j * v[1::2]
 
-    k_padded_shape = (
-        k_space.shape[0] + 2 * loraks_neighborhood_size,
-        k_space.shape[1] + 2 * loraks_neighborhood_size,
-        nce
-    )
-
-    l = v.shape[-1]
     # Reshape and pad compression matrix `v`
-    v_reshaped = v.view(loraks_neighborhood_size, loraks_neighborhood_size, nce, l)  # Reshape `v` into blocks [ps, ps, nc, l]
+    v_reshaped = v.view(loraks_neighborhood_size, loraks_neighborhood_size, nce, v.shape[-1])  # Reshape `v` into blocks [ps, ps, nc, l]
     # prep for conv2d
     v_reshaped = torch.movedim(v_reshaped, 2, 0)
     v_fft = torch.movedim(v_reshaped, -1, 0)
     # dims [l, nc, ps, ps]
-
-    # pad_l = (k_padded_shape[0] - v_reshaped.shape[0]) // 2
-    # pad_d = (k_padded_shape[1] - v_reshaped.shape[1]) // 2
-    # v_padded = pad(v_reshaped, (0, 0, 0, 0, pad_d, k_padded_shape[1] - pad_d - loraks_neighborhood_size, pad_l, k_padded_shape[0] - pad_l - loraks_neighborhood_size))
-    #
-    # # Perform Fourier transform on padded `k` and `v`
-    # v_fft = torch.zeros_like(v_padded, device=device)
-    # for i in tqdm.trange(l):
-    #     v_fft[..., i] = fft(torch.conj(v_padded[..., i].to(device)), img_to_k=False, axes=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
 
     # del v_padded
     torch.cuda.empty_cache()
@@ -329,11 +311,6 @@ def recon_data_consistency(
 
     # we take the 0 filled sampled data to the device
     k_sampled = k_space.to(device)
-    # compute the contribution to loss
-    # if use_s_matrix:
-    #     ad = fourier_mv_s(k=k_sampled.view(*k_sampled.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
-    # else:
-    #     ad = fourier_mv(k=k_sampled.view(*k_sampled.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
 
     progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
     for i in progress_bar:
@@ -345,6 +322,7 @@ def recon_data_consistency(
         else:
             mv = fourier_mv(k=(k_sampled + tmp).view(*tmp.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
 
+        # maximize wrt orthonormal subspace
         loss = torch.linalg.norm(mv, ord="fro")
 
         loss.backward()
@@ -365,7 +343,7 @@ def recon_data_consistency(
     tmp = torch.zeros_like(k_sampled)
     tmp[mask_unsampled] = k.flatten().detach()
     k_recon = k_sampled + tmp
-    return k_recon.cpu()
+    return k_recon.cpu(), tmp.cpu()
 
 
 def recon_tiago():
@@ -428,7 +406,7 @@ def main_pbp():
     path_fig.mkdir(exist_ok=True, parents=True)
 
     logging.info("Set Phantom")
-    nx, ny, nc, ne = (256, 256, 4, 1)
+    nx, ny, nc, ne = (256, 256, 16, 1)
     phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
     sl_us = phantom.sub_sample_ac_random_lines(acceleration=2, ac_lines=40).unsqueeze(-1)
 
@@ -443,7 +421,7 @@ def main_pbp():
     #     max_num_iter=200, device=device
     # )
     k_recon, tmp = recon_data_consistency(
-        k_space=sl_us, sampling_mask=mask, rank=120, max_num_iter=150,
+        k_space=sl_us, sampling_mask=mask, rank=100, max_num_iter=150,
         loraks_neighborhood_size=5, matrix_type="S", device=device
     )
     img_recon = torch.abs(fft(k_recon, axes=(0, 1)))
