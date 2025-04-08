@@ -73,7 +73,6 @@ def fourier_mv(k, v, ps):
 def fourier_mv_opt(k, v_fft, ps):
     # Extract dimensions
     # nx, ny, nc = k.shape  # Input tensor dimensions
-    # l = v_fft.shape[-1]
     # pad input
     # k_padded = torch.zeros((nx + 2 * ps, ny + 2 * ps, nc), dtype=k.dtype, device=k.device)
     # k_padded[ps:-ps, ps:-ps, :] = k
@@ -179,11 +178,6 @@ def recon(
     eig_vals, vecs = torch.linalg.eigh(ac_matrix.mH @ ac_matrix)
     # eigenvals and corresponding evs are in ascending order
     v = vecs[..., :-rank]
-    # if use_s_matrix:
-    #     # complex number representation
-    #     v = torch.reshape(v, (2 * nce, -1, v.shape[-1]))
-    #     v = v[::2] + v[1::2] * 1j
-    #     v = torch.reshape(v, (-1, v.shape[-1]))
 
     del ac_matrix
     torch.cuda.empty_cache()
@@ -226,7 +220,8 @@ def recon(
 def recon_data_consistency(
         k_space: torch.Tensor, sampling_mask: torch.Tensor,
         rank: int, loraks_neighborhood_size: int = 5, matrix_type: str = "S",
-        max_num_iter: int = 200,
+        max_num_iter: int = 200, lr_low: float = 1e-1, lr_high: float = 1e2,
+        reduced_num_nullspace_vec: int = 1000, loss_factor: float = 1e6,
         device: torch.device = torch.get_default_device()):
     if matrix_type.capitalize() == "S":
         use_s_matrix = True
@@ -236,7 +231,7 @@ def recon_data_consistency(
         err = "Currently only S or C matrix LORAKS types are supported."
         log_module.error(err)
         raise ValueError(err)
-    k_space = k_space.to(torch.complex64)
+    k_space = k_space.to(dtype=torch.complex64)
 
     ac_data, nce = find_ac_region(k_space, sampling_mask)
     mask = sampling_mask.to(torch.bool)
@@ -264,15 +259,13 @@ def recon_data_consistency(
     eig_vals, vecs = torch.linalg.eigh(ac_matrix.mH @ ac_matrix)
     # eigenvals and corresponding evs are in ascending order
 
-    start = max(0, vecs.shape[-1] - int(3*rank))
+    start = max(0, vecs.shape[-1] - reduced_num_nullspace_vec - rank)
     # leading trailing nullspace vecs
     v = vecs[..., start:-rank]
     log_module.info(f"Taking leading {vecs.shape[-1] - start - rank} nullspace eigenvectors")
     log_module.info(f"total nullspace size: {vecs.shape[-1] - rank}")
     del ac_matrix
     torch.cuda.empty_cache()
-
-    log_module.info("Calculate V FFT")
 
     v = v[::2] + 1j * v[1::2]
 
@@ -300,19 +293,24 @@ def recon_data_consistency(
         log_module.error(err)
         raise ValueError(err)
 
-    k_init = torch.zeros_like(k_space[mask_unsampled]) * 1e-3
-    k_init = torch.movedim(k_init, read_dir, 0)
-    k_init = torch.reshape(k_init, (k_space.shape[read_dir], -1, *k_space.shape[2:]))
-    k_init = torch.movedim(k_init, 0, read_dir)
-    k = k_init.clone().contiguous().to(device).requires_grad_()
+    shape = torch.tensor(k_space.shape)
+    if read_dir == 0:
+        shape[1] = torch.count_nonzero(mask_unsampled) / (shape[0] * torch.prod(shape[2:]))
+    else:
+        shape[0] = torch.count_nonzero(mask_unsampled) / torch.prod(shape[1:])
+    k = torch.zeros(tuple(shape.tolist()), dtype=k_space.dtype, device=device, requires_grad=True)
 
-    lr = torch.linspace(2e-3, 2e-4, max_num_iter, device=device)
+    lr = np.linspace(lr_high, lr_low, max_num_iter)
+    # ToDo: Adaptive learning rate -> up lr when loss function change is low in the beginning,
+    #  down lr when loss is oscillating
     mask_unsampled = mask_unsampled.to(device)
 
     # we take the 0 filled sampled data to the device
     k_sampled = k_space.to(device)
 
     progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
+    losses = []
+
     for i in progress_bar:
         # we need a zero filling operator to compute the losses
         tmp = torch.zeros_like(k_sampled)
@@ -322,8 +320,7 @@ def recon_data_consistency(
         else:
             mv = fourier_mv(k=(k_sampled + tmp).view(*tmp.shape[:2], -1), v=v, ps=loraks_neighborhood_size)
 
-        # maximize wrt orthonormal subspace
-        loss = torch.linalg.norm(mv, ord="fro")
+        loss = loss_factor * torch.linalg.norm(mv, ord="fro") / torch.numel(mv)
 
         loss.backward()
 
@@ -332,8 +329,10 @@ def recon_data_consistency(
 
         norm_grad = torch.linalg.norm(k.grad).item()
         progress_bar.postfix = (
-            f"loss: {1e3 * loss.item():.2f}, norm k: {torch.linalg.norm(k).item():.3f}, norm grad: {norm_grad:.3f}"
+            f"loss: {loss.item():.2f}, norm k: {torch.linalg.norm(k).item():.3f}, norm grad: {norm_grad:.3f}"
         )
+        losses.append(loss.item())
+
         k.grad.zero_()
         if norm_grad < 1e-3:
             msg = f"Optimization converged at step: {i+1}"
@@ -342,8 +341,12 @@ def recon_data_consistency(
     # build data
     tmp = torch.zeros_like(k_sampled)
     tmp[mask_unsampled] = k.flatten().detach()
+    log_module.info(
+        f"norm k sampled: {torch.linalg.norm(k_sampled).item():.3f}, "
+        f"norm k reconned: {torch.linalg.norm(tmp).item():.3f}"
+    )
     k_recon = k_sampled + tmp
-    return k_recon.cpu(), tmp.cpu()
+    return k_recon.cpu(), losses
 
 
 def recon_tiago():
@@ -352,7 +355,7 @@ def recon_tiago():
 
     log_module.info(f"Set Paths")
     path = plib.Path(
-        "/data/pt_np-jschmidt/data/12_tiago_repro/data/test_722_MSE_vFA_LORAKS/processed/").absolute()
+        "/data/pt_np-jschmidt/data/12_tiago_repro/data/test_692_MSE_vFA_LORAKS/processed/").absolute()
     path_out = path.joinpath("recon")
     path_fig = path_out.joinpath("figures").absolute()
     path_fig.mkdir(exist_ok=True, parents=True)
@@ -370,30 +373,42 @@ def recon_tiago():
 
     nifti_save(img_fft, img_aff=torch.eye(4), path_to_dir=path_out, file_name="naive_fft_img")
 
-    k_space_slice = k_space[:, :, k_shape[2] // 2, None].clone()
+    k_space_slice = k_space[:, :, k_shape[2] // 2].clone()
     k_slice_shape = k_space_slice.shape
 
-    sampling = sampling[:, :, None, None, :].expand(k_slice_shape).contiguous()
+    sampling = sampling[:, :, None, :].expand(k_slice_shape).contiguous()
 
     log_module.info(f"Batching")
-    batch_size = 3
-    num_batches = int(np.ceil(k_space.shape[3] / batch_size))
+    batch_size = 18
+    rank = 100
+    num_batches = int(np.ceil(k_slice_shape[-2] / batch_size))
     k_recon_slice = torch.zeros_like(k_space_slice)
+    losses = []
 
     for b in range(num_batches):
         log_module.info(f"Processing batch {b+1} / {num_batches}")
         start = b * batch_size
-        end = min((b + 1) * batch_size, k_space.shape[3])
-        k_recon_slice[..., start:end, :] = recon_data_consistency(
+        end = min((b + 1) * batch_size, k_slice_shape[-2])
+        k_recon_slice[..., start:end, :], l = recon_data_consistency(
             k_space=k_space_slice[..., start:end, :], sampling_mask=sampling[..., start:end, :],
-            rank=80, loraks_neighborhood_size=5, matrix_type="S",
-            max_num_iter=200, device=device
+            rank=rank, loraks_neighborhood_size=5, matrix_type="S", reduced_num_nullspace_vec=1400,
+            max_num_iter=200, device=device, lr_high=1e-1, lr_low=1e-3, loss_factor=1e8
         )
+        losses.append(l)
 
     img_recon_slice = fft(k_recon_slice, img_to_k=False, axes=(0, 1))
     img_recon_slice = root_sum_of_squares(img_recon_slice, dim_channel=-2)
 
-    nifti_save(img_recon_slice, img_aff=torch.eye(4), path_to_dir=path_out, file_name="recon_img_cb3")
+    nifti_save(img_recon_slice, img_aff=torch.eye(4), path_to_dir=path_out, file_name=f"recon_img_ac_cb{batch_size}_r{rank}")
+
+    fig = go.Figure()
+    for i, l in enumerate(losses):
+        fig.add_trace(
+            go.Scatter(y=l, name=f"Loss Batch {i+1}")
+        )
+    f_name = path_fig.joinpath("losses").with_suffix(".html")
+    log_module.info(f"Saving figure {f_name}")
+    fig.write_html(f_name)
 
 
 def main_pbp():
@@ -420,7 +435,7 @@ def main_pbp():
     #     loraks_neighborhood_size=5, lambda_reg=0.1, matrix_type="S",
     #     max_num_iter=200, device=device
     # )
-    k_recon, tmp = recon_data_consistency(
+    k_recon = recon_data_consistency(
         k_space=sl_us, sampling_mask=mask, rank=100, max_num_iter=150,
         loraks_neighborhood_size=5, matrix_type="S", device=device
     )
@@ -429,8 +444,8 @@ def main_pbp():
     fig = psub.make_subplots(
         rows=3, cols=4
     )
-    for i, d in enumerate([sl_us, img_us, k_recon, img_recon, tmp, img_recon - img_us]):
-        if i % 2 == 0:
+    for i, d in enumerate([sl_us, img_us, k_recon, img_recon, img_recon - img_us]):
+        if i % 2 == 0 and i < 4:
             d = torch.log(torch.abs(d))
         else:
             d = torch.abs(d)
@@ -444,7 +459,9 @@ def main_pbp():
             fig.update_xaxes(visible=False, row=row, col=col)
             xaxis = fig.data[-1].xaxis
             fig.update_yaxes(visible=False, scaleanchor=xaxis, row=row, col=col)
-    fig.show()
+    fig_name = plib.Path("scratches/figures/js_ac_test.html").absolute()
+    log_module.info(f"Saving figure: {fig_name}")
+    fig.write_html(fig_name)
 
 
 if __name__ == '__main__':
