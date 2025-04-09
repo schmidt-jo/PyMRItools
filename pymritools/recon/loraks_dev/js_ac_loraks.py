@@ -124,7 +124,7 @@ def fourier_mv_s(k, v, ps):
     return 2 * (mv_c - mv_s)
 
 
-def find_ac_region(k_space: torch.Tensor, mask: torch.Tensor):
+def find_ac_region_rxv(k_space: torch.Tensor, mask: torch.Tensor):
     nx, ny = mask.shape[:2]
     logging.info("Find AC Region")
     cx = int(nx / 2)
@@ -138,6 +138,84 @@ def find_ac_region(k_space: torch.Tensor, mask: torch.Tensor):
             break
     ac_data = k_space[cx - ix:cx + ix, cy - iy:cy + iy]
     return ac_data.contiguous(), nce
+
+
+def find_ac_region(tensor):
+    """
+    Find the central rectangular region by expanding from the center,
+    ensuring full sampling and consistency across dimensions.
+
+    Args:
+        tensor (torch.Tensor): Input tensor of 3 or more dimensions
+
+    Returns:
+        tuple: A slice tuple representing the AC region
+    """
+    # Ensure tensor has at least 3 dimensions
+    if tensor.ndim < 3:
+        raise ValueError("Input tensor must have at least 3 dimensions")
+
+    # Create a mask of non-zero elements
+    mask = torch.abs(tensor) > 1e-10
+
+    # Reduced mask across all but first two dimensions to check consistency
+    reduced_mask_2d = mask.all(dim=tuple(range(2, tensor.ndim)))
+
+    # Function to find central fully-sampled region in a dimension
+    def find_central_region(dim_mask):
+        # Find indices of non-zero elements
+        non_zero_indices = torch.where(dim_mask)[0]
+
+        if len(non_zero_indices) == 0:
+            raise ValueError("No non-zero elements in dimension")
+
+        # Compute dimension size and center
+        dim_size = len(dim_mask)
+        center = dim_size // 2
+
+        # Initialize region from center
+        left = right = center
+
+        # Expand region outwards, ensuring consistent sampling
+        while True:
+            # Check if we can expand left
+            can_expand_left = left > 0 and dim_mask[left - 1]
+            # Check if we can expand right
+            can_expand_right = right < dim_size - 1 and dim_mask[right + 1]
+
+            # If can't expand either direction, we're done
+            if not (can_expand_left or can_expand_right):
+                break
+
+            # Prioritize symmetric expansion
+            if can_expand_left and (not can_expand_right or
+                                    (center - (left - 1)) <= (right + 1 - center)):
+                left -= 1
+            elif can_expand_right:
+                right += 1
+
+        return left, right + 1
+
+    # Find central region for first two dimensions
+    ac_slices = []
+    for dim in range(2):
+        # Reduce to current dimension
+        dim_mask = reduced_mask_2d.any(dim=1 - dim)
+        start, end = find_central_region(dim_mask)
+        ac_slices.append(slice(start, end))
+
+    # Add full slices for additional dimensions
+    ac_slices.extend([slice(None) for _ in range(2, tensor.ndim)])
+
+    # Create and verify the region
+    ac_region_slices = tuple(ac_slices)
+    ac_region = tensor[ac_region_slices]
+
+    # Ensure fully non-zero
+    if (ac_region == 0).any():
+        raise ValueError("Found region contains zero values")
+
+    return ac_region
 
 
 def recon(
@@ -384,7 +462,7 @@ def recon_data_consistency(
         raise ValueError(err)
     k_space = k_space.to(dtype=torch.complex64)
 
-    ac_data, nce = find_ac_region(k_space, sampling_mask)
+    ac_data = find_ac_region(k_space)
 
     if 0 < batch_channels < k_space.shape[-2]:
         log_module.info(f"Batch channels - chunks of {batch_channels}")
@@ -514,7 +592,7 @@ def main_pbp():
     path_fig.mkdir(exist_ok=True, parents=True)
 
     logging.info("Set Phantom")
-    nx, ny, nc, ne = (256, 256, 16, 1)
+    nx, ny, nc, ne = (256, 256, 4, 1)
     phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
     sl_us = phantom.sub_sample_ac_random_lines(acceleration=2, ac_lines=40).unsqueeze(-1)
 
@@ -524,7 +602,7 @@ def main_pbp():
     mask = (torch.abs(sl_us) > 1e-9).to(torch.int)
 
     k_recon, losses = recon_data_consistency(
-        k_space=sl_us, sampling_mask=mask, rank=200, max_num_iter=100,
+        k_space=sl_us, sampling_mask=mask, rank=50, max_num_iter=100,
         lr_low=1e-2, lr_high=1,
         loraks_neighborhood_size=5, matrix_type="S", device=device
     )
