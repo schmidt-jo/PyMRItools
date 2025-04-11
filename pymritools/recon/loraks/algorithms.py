@@ -106,9 +106,9 @@ def get_ac_region_from_sampling_pattern(sampling_mask_x_y_t: torch.Tensor):
     return start, shape
 
 
-def get_v_matrix_of_ac_subspace(
+def get_vvh_matrix_of_ac_subspace(
         k_space_x_y_ch_t: torch.Tensor, ac_indices: torch.Tensor, mode: str,
-        rank: int, compute_mode: str = "eigh"
+        rank: int, compute_mode: str = "eigh", subspace: bool = True
 ):
     if mode == "s":
         op = s_operator
@@ -127,26 +127,36 @@ def get_v_matrix_of_ac_subspace(
         m_ac_rank = eig_vals.shape[-1]
         # get subspaces from svd of subspace matrix
         eig_vals, idxs = torch.sort(torch.abs(eig_vals), descending=True)
-        # eig_vecs_r = eig_vecs[idxs]
         eig_vecs = eig_vecs[:, idxs]
-        # v_sub_r = eig_vecs_r[:self.rank].to(self.device)
-        v_sub = eig_vecs[:, :rank]
+        v_sub = eig_vecs[:, :rank] if subspace else eig_vecs[:, rank:]
     elif compute_mode == "svd":
         _, s, v = torch.linalg.svd(m_ac, full_matrices=False)
         m_ac_rank = s.shape[-1]
-        v_sub = v[:, :rank]
+        v_sub = v[:, :rank] if subspace else v[:, rank:]
     elif compute_mode == "rsvd":
         m_ac_rank = min(m_ac.shape[-2:])
         _, _, v = randomized_svd(matrix=m_ac, q=rank+10, power_projections=2)
-        v_sub = v[:rank].conj().T
+        if not subspace:
+            msg = "nullspace estimation not implemented for compute mode rsvd"
+            log_module.error(msg)
+            raise ValueError(msg)
+        v_sub = v[:rank].mH
     elif compute_mode == "sor-svd":
         m_ac_rank = min(m_ac.shape[-2:])
         _, _, v = subspace_orbit_randomized_svd(matrix=m_ac, q=rank+10, power_projections=2)
-        v_sub = v[:rank].conj().T
+        v_sub = v[:rank].mH
+        if not subspace:
+            msg = "nullspace estimation not implemented for compute mode sor-svd"
+            log_module.error(msg)
+            raise ValueError(msg)
     elif compute_mode == "torch-lr":
         m_ac_rank = min(m_ac.shape[-2:])
         _, _, v = torch.svd_lowrank(A=m_ac, q=rank+10, niter=2)
         v_sub = v[:, :rank]
+        if not subspace:
+            msg = "nullspace estimation not implemented for compute mode torch-lr"
+            log_module.error(msg)
+            raise ValueError(msg)
     else:
         err = f"compute mode {compute_mode} not implemented for AC subspace extraction"
         log_module.error(err)
@@ -225,7 +235,7 @@ def loraks(
 
         # second part, calculate reconstructed k
         k_recon_loraks = s_adjoint_operator(
-            s_matrix=matrix_recon_loraks, indices=indices, k_space_dims=slice_shape
+            matrix=matrix_recon_loraks, indices=indices, k_space_dims=slice_shape
         )
         k_recon_loraks[mask] /= count_matrix[mask]
 
@@ -372,19 +382,20 @@ def ac_loraks(
         # idxs_channels = torch.randperm(n_channels)
         num_batches = int(np.ceil(n_channels / batch_size_channels))
         iter_bar = tqdm.trange(num_batches, desc="batch_processing") if visualize else range(num_batches)
+        batch_aha = aha.to(device)
         for idx_b in iter_bar:
             log_module.debug(f"Processing batch :: {idx_b+1} / {num_batches}")
             log_mem(point=f"Processing batch :: {idx_b+1} / {num_batches}", device=device)
             start = idx_b * batch_size_channels
             end = np.min([(idx_b + 1) * batch_size_channels, n_channels])
             batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, start:end].to(device)
-            batch_aha = aha[:, :, start:end].to(device)
+            # batch_aha = aha[:, :, start:end].to(device)
 
             # __ per slice calculations
             # __ for C
             if lambda_c > 1e-9:
-                vvc = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="torch-lr",
+                vvc = get_vvh_matrix_of_ac_subspace(
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
                     ac_indices=img_ac_indices, mode="c", rank=rank_c
                 )
             else:
@@ -392,8 +403,8 @@ def ac_loraks(
 
             # __ for S
             if lambda_s > 1e-9:
-                vvs = get_v_matrix_of_ac_subspace(
-                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="torch-lr",
+                vvs = get_vvh_matrix_of_ac_subspace(
+                    k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
                     ac_indices=img_ac_indices, mode="s", rank=rank_s
                 )
             else:
@@ -414,7 +425,6 @@ def ac_loraks(
                 conv_tol=conv_tol,
                 iter_bar=iter_bar
             )
-
             k_space_x_y_z_ch_t[:, :, idx_s, start:end] = xmin.cpu()
         log_mem(point=f"Processing slice :: End :: {idx_s+1} / {n_slice}", device=device)
 
@@ -497,6 +507,8 @@ def ac_lorals_exact_data_consistency(
         mode="s", indices=indices, shape=(n_read, n_phase, 1, n_echoes)
     ).to(device)
 
+    mask = sampling_mask_x_y_t[:, :, None].expand(k_space_x_y_z_ch_t[:, :, 0].shape).to(dtype=torch.bool)
+    s_count_matrix = s_count_matrix.expand(k_space_x_y_z_ch_t[:, :, 0].shape)
     log_mem(point="End one time calculations", device=device)
 
     for idx_s in range(n_slice):
@@ -512,13 +524,11 @@ def ac_lorals_exact_data_consistency(
             end = np.min([(idx_b + 1) * batch_size_channels, n_channels])
             # get data batch
             batch_k_space_x_y_ch_t = k_space_x_y_z_ch_t[:, :, idx_s, start:end].to(device)
-            mask = sampling_mask_x_y_t[:, :, None].to(device=device, dtype=torch.bool)[:, :, start:end]
-
-            batch_count_matrix = s_count_matrix[~mask]
-            nx, ny, nc, ne = batch_k_space_x_y_ch_t.shape
+            batch_mask = mask[..., start:end, :]
+            batch_count_matrix = s_count_matrix[..., start:end, :][~batch_mask]
 
             # __ per slice calculations - get V matrix from ac data of batch
-            vvs = get_v_matrix_of_ac_subspace(
+            vvs = get_vvh_matrix_of_ac_subspace(
                 k_space_x_y_ch_t=batch_k_space_x_y_ch_t, compute_mode="eigh",
                 ac_indices=img_ac_indices, mode="s", rank=rank_s
             )
@@ -529,12 +539,12 @@ def ac_lorals_exact_data_consistency(
                     vvs
                 ),
                 indices=indices, k_space_dims=batch_k_space_x_y_ch_t.shape
-            )[~mask]
+            )[~batch_mask]
 
             # define optimization function
             def func_op(x):
                 return get_dc_diag_vector(
-                    f_rpct=x, v_s=vvs, indices=indices, count_matrix=batch_count_matrix, mask=mask, shape=batch_k_space_x_y_ch_t.shape
+                    f_rpct=x, v_s=vvs, indices=indices, count_matrix=batch_count_matrix, mask=batch_mask, shape=batch_k_space_x_y_ch_t.shape
                 )
 
             xmin, res_vec, results = cgd(
@@ -545,8 +555,8 @@ def ac_lorals_exact_data_consistency(
                 iter_bar=iter_bar
             )
 
-            k_space_x_y_z_ch_t[:, :, idx_s, start:end][mask] = batch_k_space_x_y_ch_t[mask].cpu()
-            k_space_x_y_z_ch_t[:, :, idx_s, start:end][~mask] = xmin.cpu()
+            k_space_x_y_z_ch_t[:, :, idx_s, start:end][batch_mask] = batch_k_space_x_y_ch_t[batch_mask].cpu()
+            k_space_x_y_z_ch_t[:, :, idx_s, start:end][~batch_mask] = xmin.cpu()
         log_mem(point=f"Processing slice :: End :: {idx_s+1} / {n_slice}", device=device)
 
     return k_space_x_y_z_ch_t
