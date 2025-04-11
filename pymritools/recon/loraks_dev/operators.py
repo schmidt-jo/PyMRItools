@@ -36,10 +36,7 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple
     s_p_m = (s_p + s_m)
     result[len(indices):, 0] = s_p_m.imag
     result[len(indices):, 1] = s_p_m.real
-
-    # shape = torch.tensor(matrix_shape) * torch.tensor([2, 2])
     return result.view(matrix_shape)
-    # return result
 
 
 def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
