@@ -7,7 +7,7 @@ log_module = logging.getLogger(__name__)
 
 
 def cgd(
-        func_operator, x:torch.Tensor, b: torch.Tensor,
+        func_operator, x: torch.Tensor, b: torch.Tensor,
         iter_bar: tqdm.tqdm = None, max_num_iter: int = None, conv_tol: float = 1e-3):
     """
     The following Python program implements a Conjugate Gradient Descent (CGD)
@@ -27,7 +27,7 @@ def cgd(
 
     n2b = torch.linalg.norm(b)
 
-    x = torch.zeros_like(b)
+    # x = torch.zeros_like(b)
     p = 1
     xmin = x
     iimin = 0
