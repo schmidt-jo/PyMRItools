@@ -9,11 +9,355 @@ import plotly.subplots as psub
 import tqdm
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.recon.loraks_dev.operators import c_operator, s_operator
+from pymritools.recon.loraks_dev.operators import c_operator, s_operator, c_adjoint_operator, s_adjoint_operator
 from pymritools.utils import Phantom, fft, root_sum_of_squares, torch_load, nifti_save
+from pymritools.recon.loraks.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
 
+
+class AC_LORAKS:
+    def __init__(
+            self,
+            k_space_xyzct: torch.Tensor,
+            rank: int,
+            regularization_lambda: float = 0.0,
+            loraks_neighborhood_side_size: int = 5,
+            loraks_matrix_type: str = "S",
+            fast_compute: bool = True,
+            batch_channel_dim: int = -1,
+            sampling_mask_xyt: torch.Tensor = None,
+            max_num_iter: int = 20,
+            conv_tol: float = 1e-3,
+            process_slice: bool = False,
+            device: torch.device = torch.get_default_device()):
+        log_module.info("Initialize LORAKS reconstruction algortihm")
+        self.rank: int = rank
+        self.regularization_lambda: float = regularization_lambda
+        self.loraks_matrix_type = loraks_matrix_type.capitalize()
+        self.loraks_neighborhood_side_size: int = loraks_neighborhood_side_size
+        self.max_num_iter: int = max_num_iter
+        self.conv_tol: float = conv_tol
+        self.device: torch.device = device
+        self._log(f"Using device: {device}")
+
+        if k_space_xyzct.shape.__len__() < 5:
+            self._log_error(
+                "Found less than 5 dimensional tensors, "
+                "shape tensor e.g. unsqueeze all singular dimensions to fit x-y-z-c-t shape."
+            )
+        if process_slice:
+            self._log(f"Processing single slice toggled (usually for testing performance or parameters).")
+            k_space_xyzct = k_space_xyzct[:, :, k_space_xyzct.shape[2] // 2, None]
+        if sampling_mask_xyt is None:
+            sampling_mask_xyt = torch.abs(k_space_xyzct) > 1e-9
+            sampling_mask_xyt = sampling_mask_xyt[:, :, 0, 0]
+        else:
+            if sampling_mask_xyt.shape.__len__() != 3:
+                self._log_error(
+                    "sampling_mask_xyt has wrong shape, ensure 3D tensor e.g. unsqueeze x-y-t shape. "
+                    "It is assumed that slices and channels are sampled with the same sampling scheme."
+                )
+        self.sampling_mask_xyt: torch.Tensor = sampling_mask_xyt.to(torch.int)
+
+        # using channel wise computation, save shape
+        self._log(f"Input k-space shape: {k_space_xyzct.shape}")
+        self.shape_xyct = k_space_xyzct[:, :, 0].shape
+        self.k_us_xyzct: torch.Tensor = k_space_xyzct.to(torch.complex64)
+
+        # find ac region
+        self.ac_data = self._find_ac_region()
+
+        if torch.numel(self.ac_data) > 1e2:
+            self._log(f"Using AC Region - detected region of shape {self.ac_data.shape}")
+        else:
+            self._log_error(f"No AC Region found or Region too small ({torch.numel(self.ac_data)}")
+
+        # check batching
+        if 1 < batch_channel_dim < self.shape_xyct[-2]:
+            if self.shape_xyct[-2] % batch_channel_dim > 1e-9:
+                self._log_error(
+                    f"Channel dimension must be divisible by channel batchsize, "
+                    f"otherwise batched matrices will have varzing dimensions and would need varying rank settings."
+                )
+            self.batch_channel_size: int = batch_channel_dim
+            self.num_batches = self.shape_xyct[-2] // batch_channel_dim
+            self._log(f"Using batched channel dimension (size: {batch_channel_dim} / {self.shape_xyct[-2]})")
+            ac_shape = torch.tensor(self.ac_data[:, :, 0].shape)
+            ac_shape[-2] = batch_channel_dim
+            self.ac_shape = tuple(ac_shape.tolist())
+            shape = torch.tensor(self.shape_xyct)
+            shape[-2] = batch_channel_dim
+            self.shape_xyct = tuple(shape.tolist())
+        else:
+            self.num_batches = 1
+            self.batch_channel_size: int = self.shape_xyct[-2]
+            self.ac_shape = self.ac_data[:, :, 0].shape
+
+        self.sampling_mask_xyct_bool = self.sampling_mask_xyt.to(torch.bool)[:, :, None].expand(self.shape_xyct)
+
+        # set indices of ac region - remember this is slice wise (hence 4D)
+        indices, ac_matrix_shape = get_linear_indices(
+            k_space_shape=self.ac_shape,
+            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size, -1, -1),
+            sample_directions=(1, 1, 0, 0)
+        )
+        self.ac_indices = indices.to(self.device)
+        # set indices for k space - remember this is slice wise (hence 4D)
+        indices, matrix_shape = get_linear_indices(
+            k_space_shape=self.shape_xyct,
+            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size, -1, -1),
+            sample_directions=(1, 1, 0, 0)
+        )
+        self.indices = indices.to(self.device)
+
+        if self.loraks_matrix_type == "S":
+            self._log("Using S - Matrix formulation")
+            self.operator = s_operator
+            self.operator_adjoint = s_adjoint_operator
+            self.ac_matrix_shape = tuple([2*i for i in ac_matrix_shape])
+            self.matrix_shape = tuple([2*i for i in matrix_shape])
+        elif self.loraks_matrix_type == "C":
+            self._log("Using C - Matrix formulation")
+            self.operator = c_operator
+            self.operator_adjoint = c_adjoint_operator
+            self.ac_matrix_shape = ac_matrix_shape
+            self.matrix_shape = matrix_shape
+        else:
+            self._log_error(f"Matrix formulation ({loraks_matrix_type}) not implemented, choose either 'S' or 'C'")
+
+        if self.regularization_lambda < 1e-9:
+            # set strict data consistency
+            self._log("Using strict data consistency algorithm")
+            self.use_data_consistency = True
+        else:
+            # set regularization version
+            self._log(f"Using regularized algorithm (lambda: {self.regularization_lambda:.3f})")
+            self.use_data_consistency = False
+
+        if fast_compute:
+            # set fft algorithm
+            self._log("Using fast computation via FFTs")
+            self.fast_compute = True
+        else:
+            self._log("Using operator based (slower) algorithm")
+            self.fast_compute = False
+
+        # in the end we need an M operator and a b vector to solve Mf = b least squares via cgd
+        self.count_matrix = self._get_count_matrix()
+        torch.cuda.empty_cache()
+
+    @staticmethod
+    def _log(msg):
+        msg = f"\t\t- {msg}"
+        log_module.info(msg)
+
+    @staticmethod
+    def _log_error(msg):
+        log_module.error(msg)
+        raise AttributeError(msg)
+
+    def _get_count_matrix(self):
+        in_ones = torch.ones(self.shape_xyct, device=self.device, dtype=torch.complex64)
+        ones_matrix = self.operator(
+            k_space=in_ones, indices=self.indices, matrix_shape=self.matrix_shape
+        )
+        count_matrix = self.operator_adjoint(
+            ones_matrix,
+            indices=self.indices, k_space_dims=self.shape_xyct
+        ).real.to(torch.int)
+        return count_matrix
+
+    def _find_ac_region(self) -> torch.Tensor:
+        """
+        Find the central rectangular region by expanding from the center,
+        ensuring full sampling and consistency across dimensions.
+
+        Args:
+            tensor (torch.Tensor): Input tensor of 3 or more dimensions
+
+        Returns:
+            tuple: A slice tuple representing the AC region
+        """
+
+        # Reduced mask across all but first two dimensions to check consistency
+        reduced_mask_2d = self.sampling_mask_xyt.all(dim=tuple(range(2, 3)))
+
+        # Function to find central fully-sampled region in a dimension
+        def find_central_region(dim_mask):
+            # Find indices of non-zero elements
+            non_zero_indices = torch.where(dim_mask)[0]
+
+            if len(non_zero_indices) == 0:
+                raise ValueError("No non-zero elements in dimension")
+
+            # Compute dimension size and center
+            dim_size = len(dim_mask)
+            center = dim_size // 2
+
+            # Initialize region from center
+            left = right = center
+
+            # Expand region outwards, ensuring consistent sampling
+            while True:
+                # Check if we can expand left
+                can_expand_left = left > 0 and dim_mask[left - 1]
+                # Check if we can expand right
+                can_expand_right = right < dim_size - 1 and dim_mask[right + 1]
+
+                # If can't expand either direction, we're done
+                if not (can_expand_left or can_expand_right):
+                    break
+
+                # Prioritize symmetric expansion
+                if can_expand_left and (not can_expand_right or
+                                        (center - (left - 1)) <= (right + 1 - center)):
+                    left -= 1
+                elif can_expand_right:
+                    right += 1
+
+            return left, right + 1
+
+        # Find central region for first two dimensions
+        ac_slices = []
+        for dim in range(2):
+            # Reduce to current dimension
+            dim_mask = reduced_mask_2d.any(dim=1 - dim)
+            start, end = find_central_region(dim_mask)
+            ac_slices.append(slice(start, end))
+
+        # Add full slices for additional dimensions
+        ac_slices.extend([slice(None) for _ in range(2, 5)])
+
+        # Create and verify the region
+        ac_region_slices = tuple(ac_slices)
+        ac_region = self.k_us_xyzct[ac_region_slices]
+
+        # Ensure fully non-zero
+        if (ac_region == 0).any():
+            raise ValueError("Found region contains zero values")
+
+        return ac_region
+
+    def _get_k_batch(self, idx_slice: int, idx_batch: int):
+        return self.k_us_xyzct[
+        :, :, idx_slice, idx_batch * self.batch_channel_size:(idx_batch + 1 * self.batch_channel_size)
+        ]
+
+    def _get_m_operator(self, vvh: torch.Tensor):
+        if self.use_data_consistency:
+            if self.fast_compute:
+                raise NotImplementedError
+            else:
+
+                def _m_op(x):
+                    m = self.count_matrix[~self.sampling_mask_xyct_bool] * x
+
+                    tmp = torch.zeros(self.shape_xyct, dtype=self.k_us_xyzct.dtype, device=self.device)
+                    tmp[~self.sampling_mask_xyct_bool] = x
+                    mvs = s_adjoint_operator(
+                        torch.matmul(
+                            s_operator(tmp, indices=self.indices, matrix_shape=self.matrix_shape), vvh
+                        ),
+                        indices=self.indices, k_space_dims=self.shape_xyct
+                    )[~self.sampling_mask_xyct_bool]
+                    return m - mvs
+
+        else:
+            if self.fast_compute:
+                raise NotImplementedError
+            else:
+                aha = (
+                        self.sampling_mask_xyt.unsqueeze(-2).to(self.device) +
+                        self.regularization_lambda * self.count_matrix
+                )
+
+                def _m_op(x):
+                    m_v = s_adjoint_operator(
+                        torch.matmul(
+                            s_operator(x, indices=self.indices, matrix_shape=self.matrix_shape),
+                            vvh
+                        ),
+                        indices=self.indices, k_space_dims=self.shape_xyct
+                    )
+                    return aha * x - self.regularization_lambda * m_v
+
+        return _m_op
+
+    def _get_b_vector(self, idx_slice: int, idx_batch: int, vvh: torch.Tensor):
+        k_batch = self._get_k_batch(idx_slice=idx_slice, idx_batch=idx_batch).to(self.device).contiguous()
+        if self.use_data_consistency:
+            if self.fast_compute:
+                raise NotImplementedError
+            else:
+                return s_adjoint_operator(
+                    torch.matmul(
+                        s_operator(
+                            k_batch,
+                            indices=self.indices,
+                            matrix_shape=self.matrix_shape),
+                        vvh
+                    ),
+                    indices=self.indices, k_space_dims=self.shape_xyct
+                )[~self.sampling_mask_xyct_bool]
+        else:
+            if self.fast_compute:
+                raise NotImplementedError
+            else:
+                return k_batch
+
+    def _get_vvh_matrix_of_ac_subspace(self, idx_slice: int, idx_batch: int):
+        # find the V matrix for the ac subspaces
+        k_ac = self.ac_data[
+                    :, :, idx_slice, idx_batch*self.batch_channel_size:(idx_batch+1*self.batch_channel_size)
+                    ].contiguous().to(self.device)
+        m_ac = self.operator(
+            k_space=k_ac,
+            indices=self.ac_indices,
+            matrix_shape=self.ac_matrix_shape
+        )
+        # via eigh
+        eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
+        m_ac_rank = eig_vals.shape[-1]
+        # get subspaces from svd of subspace matrix
+        eig_vals, idxs = torch.sort(torch.abs(eig_vals), descending=True)
+        eig_vecs = eig_vecs[:, idxs]
+        v_sub = eig_vecs[:, :self.rank] if not self.fast_compute else eig_vecs[:, self.rank:]
+        if m_ac_rank < self.rank:
+            err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
+            log_module.error(err)
+            raise ValueError(err)
+        return torch.matmul(v_sub, v_sub.conj().T)
+
+    def reconstruct(self):
+        log_module.info("Reconstructing k - space data")
+        k_recon = torch.zeros_like(self.k_us_xyzct, device=torch.device("cpu"))
+        for idx_s in range(self.k_us_xyzct.shape[2]):
+            log_module.info(f"\t* Processing slice: {idx_s + 1} / {self.k_us_xyzct.shape[2]}")
+            bar = tqdm.trange(self.num_batches, desc="Processing batch")
+            for idx_b in bar:
+                vvh = self._get_vvh_matrix_of_ac_subspace(
+                    idx_slice=idx_s, idx_batch=idx_b
+                )
+
+                m_op = self._get_m_operator(vvh=vvh)
+                b = self._get_b_vector(idx_slice=idx_s, idx_batch=idx_b, vvh=vvh)
+
+                xmin, resi, results = cgd(
+                    func_operator=m_op, x=torch.zeros_like(b), b=b,
+                    iter_bar=bar, max_num_iter=self.max_num_iter, conv_tol=self.conv_tol
+                )
+                if self.use_data_consistency:
+                    tmp = torch.zeros(self.shape_xyct, dtype=self.k_us_xyzct.dtype, device=xmin.device)
+                    tmp[~self.sampling_mask_xyct_bool] = xmin
+
+                    result = self._get_k_batch(idx_slice=idx_s, idx_batch=idx_b) + tmp.cpu()
+                else:
+                    result = xmin.cpu()
+                k_recon[
+                    :, :, idx_s, idx_b * self.batch_channel_size:(idx_b + 1) * self.batch_channel_size
+                ] = result
+        return k_recon
 
 
 def recon_data_consistency(
@@ -124,56 +468,6 @@ def recon_data_consistency(
     return k_recon.cpu()
 
 
-def recon_tiago():
-    logging.info("Set Device")
-    device = torch.device("cuda")
-
-    log_module.info(f"Set Paths")
-    path = plib.Path(
-        "/data/pt_np-jschmidt/data/12_tiago_repro/data/test_692_MSE_vFA_LORAKS/processed/").absolute()
-    path_out = path.joinpath("recon")
-    path_fig = path_out.joinpath("figures").absolute()
-    path_fig.mkdir(exist_ok=True, parents=True)
-
-    k_space = torch_load(path.joinpath("k_space.pt")).to(torch.complex64)
-    sampling = torch_load(path.joinpath("sampling_mask.pt"))
-
-    k_shape = k_space.shape
-
-    img_fft = torch.zeros((*k_shape[:3], k_shape[-1]))
-    log_module.info("FFT & RSOS")
-    for idx_z in tqdm.trange(k_shape[2]):
-        tmp = fft(k_space[:, :, idx_z], img_to_k=False, axes=(0, 1))
-        img_fft[:, :, idx_z] = root_sum_of_squares(tmp, dim_channel=-2)
-
-    nifti_save(img_fft, img_aff=torch.eye(4), path_to_dir=path_out, file_name="naive_fft_img")
-
-    k_space_slice = k_space[:, :, k_shape[2] // 2].clone()
-    k_slice_shape = k_space_slice.shape
-
-    sampling = sampling[:, :, None, :].expand(k_slice_shape).contiguous()
-
-    log_module.info(f"Batching")
-    batch_size = 6
-    num_batches = int(np.ceil(k_space.shape[-2] / batch_size))
-    k_recon_slice = torch.zeros_like(k_space_slice)
-
-    for b in range(num_batches):
-        log_module.info(f"Processing batch {b+1} / {num_batches}")
-        start = b * batch_size
-        end = min((b + 1) * batch_size, k_space.shape[3])
-        k_recon_slice[..., start:end, :] = recon_data_consistency(
-            k_space=k_space_slice[..., start:end, :], sampling_mask=sampling[..., start:end, :],
-            rank=150, loraks_neighborhood_size=5, matrix_type="S",
-            max_num_iter=200, device=device
-        )
-
-    img_recon_slice = fft(k_recon_slice, img_to_k=False, axes=(0, 1))
-    img_recon_slice = root_sum_of_squares(img_recon_slice, dim_channel=-2)
-
-    nifti_save(img_recon_slice, img_aff=torch.eye(4), path_to_dir=path_out, file_name="recon_img_plo_cb6_1250")
-
-
 def main_pbp():
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     logging.info(f"Set Device: {device}")
@@ -184,33 +478,38 @@ def main_pbp():
     path_fig.mkdir(exist_ok=True, parents=True)
 
     logging.info("Set Phantom")
-    nx, ny, nc, ne = (256, 256, 32, 8)
+    nx, ny, nc, ne = (256, 256, 4, 2)
     phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
     sl_us = phantom.sub_sample_ac_random_lines(acceleration=4, ac_lines=40)
 
     sl_us = sl_us.contiguous()
     img_us = torch.abs(fft(sl_us, axes=(0, 1)))
     # img_us = root_sum_of_squares(img_us, dim_channel=-2)
-    mask = (torch.abs(sl_us) > 1e-9).to(torch.int)
+
+    ac_loraks = AC_LORAKS(
+        k_space_xyzct=sl_us.unsqueeze(2), rank=50, regularization_lambda=0.05,
+        fast_compute=False, device=device, process_slice=True
+    )
+    k_recon = ac_loraks.reconstruct()[:, :, 0]
 
     # k_recon = recon(
     #     k_space=sl_us, sampling_mask=mask, rank=50,
     #     loraks_neighborhood_size=5, lambda_reg=0.1, matrix_type="S",
     #     max_num_iter=200, device=device
     # )
-    k_recon = torch.zeros_like(sl_us)
-
-    batch_size_channels = 16
-    num_batches = int(np.ceil(k_recon.shape[-2] / batch_size_channels))
-
-    for idx_b in range(num_batches):
-        log_module.info(f"Processing batch: {idx_b + 1} / {num_batches}")
-        start = idx_b * batch_size_channels
-        end = min((idx_b + 1) * batch_size_channels, k_recon.shape[-2])
-        k_recon[..., start:end, :] = recon_data_consistency(
-            k_space=sl_us[..., start:end, :], sampling_mask=mask[..., start:end, :], rank=150, max_num_iter=150,
-            loraks_neighborhood_size=5, matrix_type="S", device=device
-        )
+    # k_recon = torch.zeros_like(sl_us)
+    #
+    # batch_size_channels = 16
+    # num_batches = int(np.ceil(k_recon.shape[-2] / batch_size_channels))
+    #
+    # for idx_b in range(num_batches):
+    #     log_module.info(f"Processing batch: {idx_b + 1} / {num_batches}")
+    #     start = idx_b * batch_size_channels
+    #     end = min((idx_b + 1) * batch_size_channels, k_recon.shape[-2])
+    #     k_recon[..., start:end, :] = recon_data_consistency(
+    #         k_space=sl_us[..., start:end, :], sampling_mask=mask[..., start:end, :], rank=150, max_num_iter=150,
+    #         loraks_neighborhood_size=5, matrix_type="S", device=device
+    #     )
     img_recon = torch.abs(fft(k_recon, axes=(0, 1)))
 
     fig = psub.make_subplots(
@@ -238,4 +537,4 @@ def main_pbp():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    recon_tiago()
+    main_pbp()
