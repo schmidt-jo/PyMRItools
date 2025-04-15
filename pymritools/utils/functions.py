@@ -57,22 +57,22 @@ def fft(
             torch.fft.fftn(
                 torch.fft.ifftshift(
                     input_data,
-                    dim=axes
+                    dim=dims
                 ),
-                dim=axes
+                dim=dims
             ),
-            dim=axes
+            dim=dims
         )
     else:
         return np.fft.fftshift(
             np.fft.fftn(
                 np.fft.ifftshift(
                     input_data,
-                    axes=axes
+                    axes=dims
                 ),
-                axes=axes
+                axes=dims
             ),
-            axes=axes
+            axes=dims
         )
 
 def ifft(
@@ -86,22 +86,22 @@ def ifft(
             torch.fft.ifftn(
                 torch.fft.ifftshift(
                     input_data,
-                    dim=axes
+                    dim=dims
                 ),
-                dim=axes
+                dim=dims
             ),
-            dim=axes
+            dim=dims
         )
     else:
         return np.fft.fftshift(
             np.fft.ifftn(
                 np.fft.ifftshift(
                     input_data,
-                    axes=axes
+                    axes=dims
                 ),
-                axes=axes
+                axes=dims
             ),
-            axes=axes
+            axes=dims
         )
 
 
