@@ -8,7 +8,7 @@ import plotly.subplots as psub
 import tqdm
 
 from pymritools.utils.phantom import SheppLogan
-from pymritools.utils import fft, gaussian_2d_kernel, root_sum_of_squares
+from pymritools.utils import fft, ifft, gaussian_2d_kernel, root_sum_of_squares
 from pymritools.config.processing import DenoiseSettingsMPK
 
 from pymritools.processing.denoising.mppca_k_filter.functions import (
@@ -39,7 +39,7 @@ def main():
 
     # build composite image dims [nx, ny, nch]
     sl_cs_phantom = sl_img[:, :, None] * coil_sens * 100
-    sl_k_cs = fft(input_data=sl_cs_phantom, img_to_k=True, axes=(0, 1))
+    sl_k_cs = fft(input_data=sl_cs_phantom, dims=(0, 1))
 
     fig = psub.make_subplots(
         rows=4, cols=nc // 4,
@@ -64,7 +64,7 @@ def main():
     fig.write_image(file_name)
 
     # convert to k_space
-    sl_k = fft(input_data=sl_img, img_to_k=True, axes=(0, 1))[:,:,None]
+    sl_k = fft(input_data=sl_img, dims=(0, 1))[:,:,None]
 
     snrs = [20, 10, 5, 3, 2]
     # want to plot some rows (different denoising stages) and some cols (different snrs) for some data variants
@@ -100,28 +100,28 @@ def main():
         for idx_d, d in enumerate([k_noise, filt_k, rem_noise, filt_k_wo, rem_noise_biased]):
             # rSoS of mpk
             plot_data_mpk_rsos[1+idx_d, idx_n] = root_sum_of_squares(
-                torch.squeeze(fft(input_data=d, img_to_k=False, axes=(0, 1))), dim_channel=-1
+                torch.squeeze(ifft(input_data=d, dims=(0, 1))), dim_channel=-1
             )
             # channel 1
             plot_data_mpk_ch1[1+idx_d, idx_n] = torch.abs(torch.squeeze(
-                fft(input_data=d, img_to_k=False, axes=(0, 1))
+                ifft(input_data=d, dims=(0, 1))
             ))[:, :, 0]
             # channel 2
             plot_data_mpk_ch2[1+idx_d, idx_n] = torch.abs(torch.squeeze(
-                fft(input_data=d, img_to_k=False, axes=(0, 1))
+                ifft(input_data=d, dims=(0, 1))
             ))[:, :, 1]
         for idx_d, d in enumerate([ch_k_noise, ch_filt_k, ch_rem_noise, ch_filt_k_wo, ch_rem_noise_biased]):
             # rSoS of mpch
             plot_data_mpch_rsos[1+idx_d, idx_n] = root_sum_of_squares(
-                torch.squeeze(fft(input_data=d, img_to_k=False, axes=(0, 1))), dim_channel=-1
+                torch.squeeze(ifft(input_data=d, dims=(0, 1))), dim_channel=-1
             )
             # channel 1
             plot_data_mpch_ch1[1+idx_d, idx_n] = torch.abs(torch.squeeze(
-                fft(input_data=d, img_to_k=False, axes=(0, 1))
+                ifft(input_data=d, dims=(0, 1))
             ))[:, :, 0]
             # channel 2
             plot_data_mpch_ch2[1+idx_d, idx_n] = torch.abs(torch.squeeze(
-                fft(input_data=d, img_to_k=False, axes=(0, 1))
+                ifft(input_data=d, dims=(0, 1))
             ))[:, :, 1]
 
 

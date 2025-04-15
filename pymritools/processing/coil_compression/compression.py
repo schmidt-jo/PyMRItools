@@ -20,7 +20,7 @@ import numpy as np
 import logging
 import tqdm
 
-from pymritools.utils import fft
+from pymritools.utils import fft, ifft
 
 log_module = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def compress_channels_2d(
     # deduce here the sampled dims. we want to do gcc in all fs dimensions, for know we hardcode the use case
     # need to revisit this if we want to automate this more
     # get all fs dimensions into img space
-    in_comp_data = fft(input_data=sampled_data, img_to_k=False, axes=(0,))
+    in_comp_data = ifft(input_data=sampled_data, dims=(0,))
 
     # we do slice wise processing (2d function), hence we do not account for geometric offsets in slice direction
     # get slice dim as batch dim up front
@@ -127,7 +127,7 @@ def compress_channels_2d(
             a_x[i+1] = torch.matmul(p, a_x[i+1])
 
         # prep input k-space data - take slice
-        uncomp_data = fft(input_k_space[:, :, idx_z].to(device), img_to_k=False, axes=(0,))
+        uncomp_data = ifft(input_k_space[:, :, idx_z].to(device), dims=(0,))
         # do the coil compression at each location of all slice data!
         out_comp_data[:, :, idx_z] = torch.einsum("xdc, xyce -> xyde", a_x, uncomp_data).cpu()
 
@@ -137,7 +137,7 @@ def compress_channels_2d(
     # out_comp_data = torch.movedim(out_comp_data, -2, -1)
 
     # reverse fft in x dim
-    out_comp_data = fft(out_comp_data, img_to_k=True, axes=(0,))
+    out_comp_data = fft(out_comp_data, dims=(0,))
     out_comp_data = torch.movedim(out_comp_data, 0, read_dir)
     torch.cuda.empty_cache()
     return out_comp_data.cpu()
@@ -326,8 +326,8 @@ def compress_channels_arxv(input_k_space: torch.tensor, sampling_pattern: torch.
     if use_gcc_along_read:
         # we want to compute coil compression along fs read dim, create hybrid data with slice
         # and read in img domain
-        in_comp_data = fft(in_comp_data, img_to_k=False, axes=(0,))
-        ac_data = fft(ac_data, img_to_k=False, axes=(0,))
+        in_comp_data = ifft(in_comp_data, dims=(0,))
+        ac_data = ifft(ac_data, dims=(0,))
     # allocate output_data
     compressed_data = torch.zeros(
         (n_read, n_phase, nz, num_compressed_channels, nt),

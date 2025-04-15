@@ -48,17 +48,13 @@ def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.
 
 def fft(
         input_data: np.ndarray | torch.Tensor,
-        img_to_k: bool = False, axes: tuple | int = (-1, -2)):
-    if isinstance(axes, int):
+        dims: tuple | int = (-1, -2)):
+    if isinstance(dims, int):
         # make tuple
-        axes = (axes,)
+        dims = (dims,)
     if torch.is_tensor(input_data):
-        if img_to_k:
-            func = torch.fft.ifftn
-        else:
-            func = torch.fft.fftn
         return torch.fft.fftshift(
-            func(
+            torch.fft.fftn(
                 torch.fft.ifftshift(
                     input_data,
                     dim=axes
@@ -68,12 +64,37 @@ def fft(
             dim=axes
         )
     else:
-        if img_to_k:
-            func = np.fft.ifftn
-        else:
-            func = np.fft.fftn
         return np.fft.fftshift(
-            func(
+            np.fft.fftn(
+                np.fft.ifftshift(
+                    input_data,
+                    axes=axes
+                ),
+                axes=axes
+            ),
+            axes=axes
+        )
+
+def ifft(
+        input_data: np.ndarray | torch.Tensor,
+        dims: tuple | int = (-1, -2)):
+    if isinstance(dims, int):
+        # make tuple
+        dims = (dims,)
+    if torch.is_tensor(input_data):
+        return torch.fft.fftshift(
+            torch.fft.ifftn(
+                torch.fft.ifftshift(
+                    input_data,
+                    dim=axes
+                ),
+                dim=axes
+            ),
+            dim=axes
+        )
+    else:
+        return np.fft.fftshift(
+            np.fft.ifftn(
                 np.fft.ifftshift(
                     input_data,
                     axes=axes

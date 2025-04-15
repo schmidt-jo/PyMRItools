@@ -7,7 +7,7 @@ import torch
 import numpy as np
 import logging
 import tqdm
-from pymritools.utils.funtions import fft
+from pymritools.utils.funtions import fft, ifft
 
 log_module = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ def batch_process_torch(
     n_dim_batch = data_batch.shape[0]
     n_c_k = data_batch.shape[-1]
     # we want to get the fourier coefficients of the initial image
-    c_k = fft(data_batch, img_to_k=True, axes=(-1,))
+    c_k = fft(data_batch, dims=(-1,))
     # compute shifted images
     i_s = torch.sum(
         c_k[:, None, None, :] * torch.exp(
@@ -254,8 +254,8 @@ def gibbs_unring_nd(
 
     log_module.info(f"\t\t - filter image")
     # create modified filter images
-    i_x = fft(fft(nd_data, img_to_k=True, axes=(-2, -1)) * g_x[None, :, :], img_to_k=False, axes=(-2, -1))
-    i_y = fft(fft(nd_data, img_to_k=True, axes=(-2, -1)) * g_y[None, :, :], img_to_k=False, axes=(-2, -1))
+    i_x = ifft(fft(nd_data, dims=(-2, -1)) * g_x[None, :, :], dims=(-2, -1))
+    i_y = ifft(fft(nd_data, dims=(-2, -1)) * g_y[None, :, :], dims=(-2, -1))
 
     log_module.info(f"\t\t --> process ix ____")
     # process x dim of ix

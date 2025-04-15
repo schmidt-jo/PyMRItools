@@ -6,9 +6,9 @@ import tqdm
 
 from pymritools.config.recon import PyLoraksConfig
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.utils import torch_save, torch_load, root_sum_of_squares, nifti_save, fft
+from pymritools.utils import torch_save, torch_load, root_sum_of_squares, nifti_save, fft, ifft
 from pymritools.processing.coil_compression import compress_channels_2d
-from pymritools.recon.loraks.algorithms import ac_loraks, loraks
+from pymritools.recon.loraks.algorithms import ac_loraks, loraks, ac_lorals_exact_data_consistency
 
 log_module = logging.getLogger(__name__)
 
@@ -90,6 +90,12 @@ def recon(settings: PyLoraksConfig, mode: str):
     loraks_name = loraks_name.replace(".", "p")
 
     if mode == "ac-loraks":
+        # loraks_recon = ac_lorals_exact_data_consistency(
+        #     k_space_x_y_z_ch_t=k_space, sampling_mask_x_y_t=sampling_mask, radius=settings.radius,
+        #     max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol,
+        #     rank_s=settings.s_rank, batch_size_channels=settings.batch_size, visualize=settings.visualize,
+        #     device=device, path_visuals=path_figs
+        # )
         loraks_recon = ac_loraks(
             k_space_x_y_z_ch_t=k_space, sampling_mask_x_y_t=sampling_mask,
             radius=settings.radius,
@@ -128,7 +134,7 @@ def recon(settings: PyLoraksConfig, mode: str):
     loraks_recon_img = torch.zeros_like(loraks_recon)
     loraks_recon_mag = torch.zeros_like(torch.abs(loraks_recon[:, :, :, 0]))
     for idx_z in bar:
-        loraks_recon_img[:, :, idx_z] = fft(loraks_recon[:, :, idx_z], img_to_k=False, axes=(0, 1))
+        loraks_recon_img[:, :, idx_z] = ifft(loraks_recon[:, :, idx_z], dims=(0, 1))
         # for nii we rSoS combine channels
         loraks_recon_mag[:, :, idx_z] = root_sum_of_squares(
             input_data=loraks_recon_img[:, :, idx_z], dim_channel=dim_channel

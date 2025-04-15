@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 
 from pymritools.config.processing.coil_sens import CoilSensConfig
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.utils import nifti_save, nifti_load, torch_load, root_sum_of_squares, fft
+from pymritools.utils import nifti_save, nifti_load, torch_load, root_sum_of_squares, fft, ifft
 
 log_module = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def smap(settings: CoilSensConfig):
         batch_data = data[:, :, idx_z].to(device)
         # put in image space
         if not settings.input_in_img_space:
-            batch_data = torch.abs(fft(batch_data, img_to_k=False, axes=(0, 1)))
+            batch_data = torch.abs(ifft(batch_data, dims=(0, 1)))
         # do rsos
         batch_data_rsos = root_sum_of_squares(batch_data, dim_channel=dim_channels-1)
 
@@ -81,7 +81,7 @@ def smap(settings: CoilSensConfig):
 
         # smooth
         nx, ny = batch_data_smap.shape[:2]
-        bd_smap_k = fft(batch_data_smap, img_to_k=True, axes=(0, 1))
+        bd_smap_k = fft(batch_data_smap, dims=(0, 1))
         nxh = int(nx / 2)
         nyh = int(ny / 2)
         kh = int(settings.smoothing_kernel / 2)
@@ -89,7 +89,7 @@ def smap(settings: CoilSensConfig):
         bd_smap_k[nxh+kh:] = 0
         bd_smap_k[:, :nyh-kh] = 0
         bd_smap_k[:, nyh+kh:] = 0
-        bd_smap_smoothed = torch.abs(fft(bd_smap_k, img_to_k=False, axes=(0, 1)))
+        bd_smap_smoothed = torch.abs(ifft(bd_smap_k, dims=(0, 1)))
 
         # fill in
         smap[:, :, idx_z] = bd_smap_smoothed.cpu()

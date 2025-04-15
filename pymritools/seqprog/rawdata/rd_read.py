@@ -8,7 +8,7 @@ import numpy as np
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd, load_siemens_rd
-from pymritools.utils import torch_save, fft, root_sum_of_squares, nifti_save, HidePrints
+from pymritools.utils import torch_save, ifft, root_sum_of_squares, nifti_save, HidePrints
 import twixtools
 
 log_module = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def pulseq_rd_to_torch(config: RD):
         # transform into image
         img = np.zeros_like(k_space)
         for i in tqdm.trange(img.shape[2], desc="FFT"):
-            img[:, :, i] = fft(k_space[:, :, i], img_to_k=False, axes=(0, 1))
+            img[:, :, i] = ifft(k_space[:, :, i], dims=(0, 1))
         if config.debug:
             for i in np.random.randint(low=0, high=img.shape[3], size=(3,)):
                 nifti_save(data=np.abs(img[:, :, :, i]), img_aff=aff, path_to_dir=path_out,
@@ -166,7 +166,7 @@ def siemens_rd_to_torch(config: RD):
 
     if config.visualize:
         # transform into image
-        img = fft(k_space, img_to_k=False, axes=(0, 1))
+        img = ifft(k_space, dims=(0, 1))
         # do rSoS
         img = np.squeeze(root_sum_of_squares(img, dim_channel=-2))
         # nifti save

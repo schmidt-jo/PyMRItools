@@ -167,7 +167,7 @@ class Phantom:
 
     def get_2d_k_space(self) -> torch.Tensor:
         im = self.get_2d_image()
-        return fft(input_data=im, img_to_k=True, axes=(0, 1))
+        return fft(input_data=im, dims=(0, 1))
 
     # __ subsampling
     def sub_sample_ac_skip_lines(self, acceleration: int, ac_lines: int) -> torch.Tensor:
@@ -255,7 +255,7 @@ class JupiterImage:
         t_mask = torch.from_numpy(self._mask).to(dtype=torch.bool).unsqueeze(0)
         return (
             t_im,
-            fft(input_data=t_im, img_to_k=True, axes=(0, 1)),
+            fft(input_data=t_im, dims=(0, 1)),
             t_mask
         )
 

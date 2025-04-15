@@ -7,7 +7,7 @@ import plotly.subplots as psub
 
 from pymritools.utils.phantom import Phantom
 from pymritools.utils import (
-    fft,
+    fft, ifft,
     get_idx_2d_circular_neighborhood_patches_in_shape,
     get_idx_2d_rectangular_grid,
     get_idx_2d_grid_circle_within_radius
@@ -27,8 +27,7 @@ def c_operator(k_space_x_y_ch_t: torch.Tensor, indices: torch.Tensor):
     return k_space_x_y_ch_t[indices[:, :, 0], indices[:, :, 1]].permute(0, 2, 1).flatten(1)
 
 
-
-def c_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple, device=None):
+def c_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
     # Do we need to ensure dimensions? k-space in first, neighborhood / ch / t in second.
     # store shapes
     sm, sk = matrix.shape
@@ -126,7 +125,7 @@ if __name__ == '__main__':
     )
     # cast to dimensions [x, y, ch, t]
     sl_us_k = sl_us_k[:, :, None, None]
-    img_recon_us = fft(sl_us_k, img_to_k=False, axes=(0, 1))
+    img_recon_us = ifft(sl_us_k, dims=(0, 1))
 
     # get indices
     nb_indices = get_idx_2d_circular_neighborhood_patches_in_shape(shape_2d=(size_x, size_y), nb_radius=3)
@@ -164,7 +163,7 @@ if __name__ == '__main__':
     mask = c_count_matrix > 1e-9
     k_recon_c[mask] = k_recon_c[mask] / c_count_matrix[mask]
     # fft
-    img_recon_c = fft(k_recon_c, img_to_k=False, axes=(0, 1))
+    img_recon_c = ifft(k_recon_c, dims=(0, 1))
 
     log_module.info("S matrix")
     # construct c matrix
@@ -199,7 +198,7 @@ if __name__ == '__main__':
     mask = s_count_matrix > 1e-9
     k_recon_s[mask] = k_recon_s[mask] / s_count_matrix[mask]
     # fft
-    img_recon_s = fft(k_recon_s, img_to_k=False, axes=(0, 1))
+    img_recon_s = ifft(k_recon_s, dims=(0, 1))
 
     plots = [sl_fs_img, img_recon_us, img_recon_c, img_recon_s, c_count_matrix, s_count_matrix]
     names = ["phantom", "us fft", "c recon", "s recon", "c counts", "s counts"]
