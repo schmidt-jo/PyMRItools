@@ -3,6 +3,7 @@ import pathlib as plib
 
 import numpy as np
 import torch
+from scipy.io import loadmat
 from torch.nn.functional import pad
 
 import plotly.graph_objects as go
@@ -11,7 +12,7 @@ import tqdm
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.recon.loraks_dev.operators import c_operator, s_operator, c_adjoint_operator, s_adjoint_operator
-from pymritools.utils import Phantom, fft, root_sum_of_squares, torch_load, nifti_save
+from pymritools.utils import Phantom, fft, ifft, root_sum_of_squares, torch_load, nifti_save, torch_save
 from pymritools.recon.loraks.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
@@ -242,7 +243,7 @@ class AC_LORAKS:
 
     def _get_k_batch(self, idx_slice: int, idx_batch: int):
         return self.k_us_xyzct[
-        :, :, idx_slice, idx_batch * self.batch_channel_size:(idx_batch + 1 * self.batch_channel_size)
+            :, :, idx_slice, idx_batch * self.batch_channel_size:(idx_batch + 1 * self.batch_channel_size)
         ]
 
     def _get_m_operator_orig(self, vvh: torch.Tensor):
@@ -296,27 +297,37 @@ class AC_LORAKS:
         else:
            return k_batch
 
+    def _m_op_base(self, x: torch.Tensor, v_c: torch.Tensor, v_s: torch.Tensor):
+        pc = self.loraks_neighborhood_side_size + 1
+        fft_x = torch.fft.fft2(
+            torch.reshape(x, (*self.shape_xyct[:2], -1)),
+            dim=(0, 1),
+            s=tuple([s + pc for s in self.shape_xyct[:2]])
+        )
+        # dims [nx + nb, ny + nb, nce]
+
+        mv_c = torch.sum(v_c * fft_x.unsqueeze(-1), 2)
+        mv_s = torch.sum(v_s * torch.conj(fft_x).unsqueeze(-1), 2)
+
+        imv_c = torch.fft.ifft2(mv_c, dim=(0, 1))[:-pc, :-pc]
+        imv_s = torch.fft.ifft2(mv_s, dim=(0, 1))[:-pc, :-pc]
+
+        return torch.reshape(imv_c - imv_s, self.shape_xyct)
+
     def _get_m_operator_fft(self, v_s: torch.Tensor, v_c: torch.Tensor):
         if self.use_data_consistency:
-            raise NotImplementedError
+            def _m_op(x):
+                tmp = torch.zeros(self.shape_xyct, dtype=self.k_us_xyzct.dtype, device=self.device)
+                tmp[~self.sampling_mask_xyct_bool] = x
+                m = self._m_op_base(tmp, v_c=v_c, v_s=v_s)
+                return 2 * m[~self.sampling_mask_xyct_bool]
+
         else:
             aha = self.sampling_mask_xyt.unsqueeze(-2).to(self.device)
             # x has shape [mx, ny, nc, ne]
 
             def _m_op(x):
-                padded_x = pad(
-                    torch.reshape(x, (*self.shape_xyct[:2], -1)),
-                    (0, 0, 0, 2 * self.loraks_neighborhood_side_size, 0, 2 * self.loraks_neighborhood_side_size),
-                    mode="constant", value=0.0
-                )
-                fft_x = torch.fft.fft2(padded_x, dim=(0, 1))
-                mv_c = torch.sum(v_c * fft_x.unsqueeze(-1), 2)
-                mv_s = torch.sum(v_s * torch.conj(fft_x).unsqueeze(-1), 2)
-                imv_c = torch.fft.ifft2(mv_c, dim=(0, 1))
-                imv_s = torch.fft.ifft2(mv_s, dim=(0, 1))
-                mv_c = imv_c[:self.shape_xyct[0], :self.shape_xyct[1]]
-                mv_s = imv_s[:self.shape_xyct[0], :self.shape_xyct[1]]
-                m = torch.reshape((mv_c - mv_s), self.shape_xyct)
+                m = self._m_op_base(x, v_c=v_c, v_s=v_s)
                 return aha * x + 2 * self.regularization_lambda * m
 
         return _m_op
@@ -324,10 +335,10 @@ class AC_LORAKS:
     def _get_b_vector_fft(self, idx_slice: int, idx_batch: int, v_s: torch.Tensor, v_c: torch.Tensor):
         k_batch = self._get_k_batch(idx_slice=idx_slice, idx_batch=idx_batch).to(self.device).contiguous()
         if self.use_data_consistency:
-            raise NotImplementedError
+            m = self._m_op_base(k_batch, v_c=v_c, v_s=v_s)
+            return - 2 * m[~self.sampling_mask_xyct_bool]
         else:
             return k_batch
-
 
     def _get_v_matrix_of_ac_subspace(self, idx_slice: int, idx_batch: int, use_nullspace: bool = False):
             # find the V matrix for the ac subspaces
@@ -340,95 +351,99 @@ class AC_LORAKS:
             matrix_shape=self.ac_matrix_shape
         )
         # via eigh
-        eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.T, m_ac))
+        eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.mH, m_ac))
         m_ac_rank = eig_vals.shape[-1]
         # get subspaces from svd of subspace matrix
-        eig_vals, idxs = torch.sort(torch.abs(eig_vals), descending=True)
-        eig_vecs = eig_vecs[:, idxs]
-        v_sub = eig_vecs[:, self.rank:] if use_nullspace else eig_vecs[:, :self.rank]
+        # eigenvalues are in ascending order
+        v_sub = eig_vecs[:, :-self.rank] if use_nullspace else eig_vecs[:, -self.rank:]
         if m_ac_rank < self.rank:
             err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
             log_module.error(err)
             raise ValueError(err)
-        return v_sub
+        return v_sub.mH
 
     def _get_vvh_matrix_of_ac_subspace(self, idx_slice: int, idx_batch: int, use_nullspace: bool = False):
         v_sub = self._get_v_matrix_of_ac_subspace(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=use_nullspace)
-        return torch.matmul(v_sub, v_sub.conj().T)
+        return torch.matmul(v_sub.mH, v_sub)
 
     def _v_fft_prep(self, v: torch.Tensor, matrix_type: str = "S"):
-        nce = torch.prod(torch.tensor(self.shape_xyct[2:])).item()
-        v = torch.reshape(v, (self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size, nce * 2, v.shape[-1]))
+        n1, n2, nc, ne = self.shape_xyct
+        nce = nc * ne
+        n_filt = v.shape[0]
         # complex subspace representation
-        v = v[:, :, ::2] + 1j * v[:, :, 1::2]
-        n1, n2 = self.shape_xyct[:2]
+        v = torch.reshape(v, (n_filt, -1, 2 * nce))
+        v = v[..., ::2] + 1j * v[..., 1::2]
 
-        filtfilt = v.clone()
+        # movedims
+        v = torch.movedim(torch.squeeze(v), 0, -1)
+
+        v = torch.reshape(
+            v,
+            (self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size, nce, n_filt)
+        )
+        # embedd and ad one 0 in each dir
+        # v = pad(
+        #     v,
+        #     (0, 0, 0, 0, 1, 1, 1, 1),
+        #     mode='constant', value=0.0
+        # )
+
         # Conjugate of filters
-        cfilt = torch.conj(filtfilt)
+        cfilt = torch.conj(v)
 
         # Determine ffilt based on opt
         if matrix_type == 'S':  # for S matrix
-            ffilt = torch.conj(filtfilt)
+            ffilt = torch.conj(v)
         else:  # for C matrix
-            ffilt = torch.flip(torch.flip(filtfilt, [0]), [1])
+            ffilt = torch.flip(v, dims=(0, 1))
 
         # Perform 2D FFT
         ccfilt = torch.fft.fft2(
             cfilt,
             dim=(0, 1),
-            s=(2 * self.loraks_neighborhood_side_size, 2 * self.loraks_neighborhood_side_size)
+            s=(2 * self.loraks_neighborhood_side_size + 1, 2 * self.loraks_neighborhood_side_size + 1)
         )
         fffilt = torch.fft.fft2(
             ffilt,
             dim=(0, 1),
-            s=(2 * self.loraks_neighborhood_side_size, 2 * self.loraks_neighborhood_side_size)
+            s=(2 * self.loraks_neighborhood_side_size + 1, 2 * self.loraks_neighborhood_side_size + 1)
         )
+        # dims [2 * nb - 1, 2 * nb - 1, nce, n_filters]
 
         # Reshape for multiplication and sum
-        ccfilt = ccfilt.unsqueeze(3)
-        fffilt = fffilt.unsqueeze(2)
+        ccfilt = ccfilt.unsqueeze(2)
+        fffilt = fffilt.unsqueeze(3)
+        mcf = torch.sum(ccfilt * fffilt, dim=-1)
+        # dims [2 * nb - 1, 2 * nb - 1, nce, nce]
 
         # Compute patch via inverse FFT of element-wise multiplication and sum
-        patch = torch.fft.ifft2(
-            torch.sum(ccfilt * fffilt, dim=4),
-            dim=(0, 1)
+        patch = torch.fft.ifft2(mcf, dim=(0, 1))
+        # dims [2 * nb - 1, 2 * nb - 1, nce, nce]
+
+        padded = pad(
+            patch,
+            (
+                0, 0, 0, 0,
+                0, n2 - self.loraks_neighborhood_side_size, 0, n1 - self.loraks_neighborhood_side_size
+            ),
+            mode='constant', value=0.0
         )
+        # dims [n1 + nb, n2 + nb, nce, nce]
+        # where from [0:2*nb, 0:2*nb, ...] sits the patch
 
-        # Pad and circshift based on opt
-        if matrix_type == 'S':  # for S matrix
-            padded = pad(
-                patch,
-                (
-                    0, 0, 0, 0,
-                    0, n1, 0, n2
-                ),
-                mode='constant', value=0.0
-            )
+        if matrix_type == "S":
             shifted = torch.roll(
                 padded,
-                shifts=(-2 * self.loraks_neighborhood_side_size - n1 % 2, -2 * self.loraks_neighborhood_side_size - n2 % 2),
+                shifts=(-2 * self.loraks_neighborhood_side_size - n1 % 2 + 2, -2 * self.loraks_neighborhood_side_size - n2 % 2 + 2),
                 dims=(0, 1)
             )
-            nic = torch.fft.fft2(shifted, dim=(0, 1))
-        else:  # for C matrix
-            padded = pad(
-                patch,
-                (
-                    0, 0, 0, 0,
-                    0, n1, 0, n2
-                ),
-                mode='constant', value=0.0
-            )
+        else:
             shifted = torch.roll(
                 padded,
-                shifts=(-self.loraks_neighborhood_side_size, -self.loraks_neighborhood_side_size),
+                shifts=(- self.loraks_neighborhood_side_size + 1, - self.loraks_neighborhood_side_size + 1),
                 dims=(0, 1)
             )
-            nic = torch.fft.fft2(shifted, dim=(0, 1))
-
-        return nic
-
+        return torch.fft.fft2(shifted, dim=(0, 1))
 
     def _prep_batch(self, idx_slice: int, idx_batch: int):
         # for each batch we do one time computations
@@ -441,7 +456,7 @@ class AC_LORAKS:
             v_c = self._v_fft_prep(v, matrix_type="C")
 
             m_op = self._get_m_operator_fft(v_s=v_s, v_c=v_c)
-            b = self._get_b_vector_fft(idx_slice=idx_slice, idx_batch=idx_batch, v_s=v_s, v_c = v_c)
+            b = self._get_b_vector_fft(idx_slice=idx_slice, idx_batch=idx_batch, v_s=v_s, v_c=v_c)
 
         else:
             # if not fast computation is enabled, we use the subspace in all cases
@@ -449,7 +464,6 @@ class AC_LORAKS:
             m_op = self._get_m_operator_orig(vvh=v)
             b = self._get_b_vector_orig(idx_slice=idx_slice, idx_batch=idx_batch, vvh=v)
         return m_op, b
-
 
     def reconstruct(self):
         log_module.info("Reconstructing k - space data")
@@ -460,7 +474,7 @@ class AC_LORAKS:
 
             for idx_b in bar:
                 # for each batch we precompute one time computations and chose operators
-                m_op ,b = self._prep_batch(idx_slice=idx_s, idx_batch=idx_b)
+                m_op, b = self._prep_batch(idx_slice=idx_s, idx_batch=idx_b)
                 if self.use_data_consistency:
                     x_in = torch.zeros_like(b)
                 else:
@@ -603,15 +617,18 @@ def main_pbp():
     logging.info("Set Phantom")
     nx, ny, nc, ne = (256, 256, 4, 2)
     phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
-    sl_us = phantom.sub_sample_ac_random_lines(acceleration=4, ac_lines=40)
+    sl_us = phantom.sub_sample_ac_random_lines(acceleration=3, ac_lines=40)
+
 
     sl_us = sl_us.contiguous()
-    img_us = torch.abs(fft(sl_us, axes=(0, 1)))
+    img_us = torch.abs(fft(sl_us, dims=(0, 1)))
     # img_us = root_sum_of_squares(img_us, dim_channel=-2)
 
     ac_loraks = AC_LORAKS(
-        k_space_xyzct=sl_us.unsqueeze(2), rank=50, regularization_lambda=0.0,
-        fast_compute=False, device=device, process_slice=True
+        k_space_xyzct=sl_us.unsqueeze(2), rank=50, regularization_lambda=0.05,
+        loraks_neighborhood_side_size=7,
+        fast_compute=True, device=device, process_slice=True, max_num_iter=20,
+        conv_tol=1e-3
     )
     k_recon = ac_loraks.reconstruct()[:, :, 0]
 
@@ -633,7 +650,7 @@ def main_pbp():
     #         k_space=sl_us[..., start:end, :], sampling_mask=mask[..., start:end, :], rank=150, max_num_iter=150,
     #         loraks_neighborhood_size=5, matrix_type="S", device=device
     #     )
-    img_recon = torch.abs(fft(k_recon, axes=(0, 1)))
+    img_recon = torch.abs(fft(k_recon, dims=(0, 1)))
 
     fig = psub.make_subplots(
         rows=3, cols=4
