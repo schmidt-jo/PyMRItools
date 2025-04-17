@@ -97,30 +97,31 @@ class AC_LORAKS:
 
         self.sampling_mask_xyct_bool = self.sampling_mask_xyt.to(torch.bool)[:, :, None].expand(self.shape_xyct)
 
-        # merge ct already
-        self.sampling_mask_xyct = torch.reshape(
-            self.sampling_mask_xyt[:,:,None].expand(self.shape_xyct),
-            (*self.shape_xyct[:2], -1)
+        self._log("Merging channel and time dimension")
+        self.sampling_mask_xyct = self._combine_channel_echo_dim(
+            self.sampling_mask_xyt[:, :, None].expand(self.shape_xyct)
         )
-        self.sampling_mask_xyct_bool = torch.reshape(
-            self.sampling_mask_xyct_bool,
-            (*self.shape_xyct[:2], -1)
+        self.sampling_mask_xyct_bool = self._combine_channel_echo_dim(
+            self.sampling_mask_xyct_bool
         ).to(torch.bool)
-        self.ac_shape = (*self.ac_shape[:2], self.ac_shape[2] * self.ac_shape[3])
-        self.shape_xyct = (*self.shape_xyct[:2], self.shape_xyct[2] * self.shape_xyct[3])
+
+        # we reverse axis order since we will do all computations on the 2D spatial axes and
+        # want to avoid shaping or ordering fuckups
+        self.ac_shape = (self.ac_shape[2] * self.ac_shape[3], self.ac_shape[1], self.ac_shape[0])
+        self.shape_xyct = (self.shape_xyct[2] * self.shape_xyct[3], self.shape_xyct[1], self.shape_xyct[0])
 
         # set indices of ac region - remember this is slice wise (hence 4D)
         indices, ac_matrix_shape = get_linear_indices(
             k_space_shape=self.ac_shape,
-            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size, -1),
-            sample_directions=(1, 1, 0)
+            patch_shape=(-1, loraks_neighborhood_side_size, loraks_neighborhood_side_size),
+            sample_directions=(0, 1, 1)
         )
         self.ac_indices = indices.to(self.device)
         # set indices for k space - remember this is slice wise (hence 4D)
         indices, matrix_shape = get_linear_indices(
             k_space_shape=self.shape_xyct,
-            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size, -1),
-            sample_directions=(1, 1, 0)
+            patch_shape=(-1, loraks_neighborhood_side_size, loraks_neighborhood_side_size),
+            sample_directions=(0, 1, 1)
         )
         self.indices = indices.to(self.device)
 
@@ -161,6 +162,16 @@ class AC_LORAKS:
         # in the end we need an M operator and a b vector to solve Mf = b least squares via cgd
         self.count_matrix = self._get_count_matrix()
         torch.cuda.empty_cache()
+
+    @staticmethod
+    def _combine_channel_echo_dim(x: torch.Tensor):
+        shape = x.shape
+        if shape.__len__() != 4:
+            msg = (f"called function to combine channel and echo dimension on tensor of shape ({shape}). "
+                   f"This function assumes a 4D tensor with channel and echo dimension in last two.")
+            log_module.error(msg)
+            raise AttributeError(msg)
+        return torch.reshape(x, (*shape[:2], -1))
 
     @staticmethod
     def _log(msg):
@@ -255,11 +266,10 @@ class AC_LORAKS:
         return ac_region
 
     def _get_k_batch(self, idx_slice: int, idx_batch: int):
-        return torch.reshape(
+        return self._combine_channel_echo_dim(
             self.k_us_xyzct[
                 :, :, idx_slice, idx_batch * self.batch_channel_size:(idx_batch + 1 * self.batch_channel_size)
-            ],
-            self.shape_xyct
+            ]
         )
 
     def _get_m_operator_orig(self, vvh: torch.Tensor):
@@ -320,7 +330,7 @@ class AC_LORAKS:
             (0, 0, self._fft_pad_size, self._fft_pad_size, self._fft_pad_size, self._fft_pad_size),
             mode="constant", value=0.0
         )
-        fft_x = fft(pad_x)
+        fft_x = fft(pad_x, dims=(0, 1))
         # dims [nx + nb, ny + nb, nce]
 
         mv_c = torch.sum(v_c * fft_x.unsqueeze(-1), 2)
@@ -358,66 +368,75 @@ class AC_LORAKS:
         else:
             return k_batch
 
-    def _get_v_matrix_of_ac_subspace(self, idx_slice: int, idx_batch: int, use_nullspace: bool = False):
-            # find the V matrix for the ac subspaces
-        k_ac = torch.reshape(
-            self.ac_data[
-                :, :, idx_slice, idx_batch*self.batch_channel_size:(idx_batch+1*self.batch_channel_size)
-            ].contiguous().to(self.device),
-            self.ac_shape
-        )
-        m_ac = self.operator(
+    def _get_ac_matrix(self, idx_slice: int, idx_batch: int):
+        ac_data = self.ac_data[
+                :, :, idx_slice, idx_batch * self.batch_channel_size:(idx_batch + 1 * self.batch_channel_size)
+            ]
+        # retrieve data in reversed axis order
+        k_ac = self._combine_channel_echo_dim(ac_data).permute(2, 1, 0).contiguous().to(self.device)
+        return self.operator(
             k_space=k_ac,
             indices=self.ac_indices,
             matrix_shape=self.ac_matrix_shape
         )
+
+    def _get_ac_subspace_v(self, idx_slice: int, idx_batch: int, use_nullspace: bool = False):
+            # find the V matrix for the ac subspaces
+        m_ac = self._get_ac_matrix(idx_slice=idx_slice, idx_batch=idx_batch)
         # via eigh
         eig_vals, eig_vecs = torch.linalg.eigh(torch.matmul(m_ac.mH, m_ac))
         m_ac_rank = eig_vals.shape[-1]
         # get subspaces from svd of subspace matrix
-        # eigenvalues are in ascending order
-        v_sub = eig_vecs[:, :-self.rank] if use_nullspace else eig_vecs[:, -self.rank:]
+        # eigenvalues are in ascending order but not absolute value wise!
+        idx = torch.argsort(torch.abs(eig_vals), dim=-1, descending=True)
+        eig_vecs = eig_vecs[:, idx]
+        # eigenvectors are contained as columns
+        v_sub = eig_vecs[:, self.rank:] if use_nullspace else eig_vecs[:, :self.rank]
         if m_ac_rank < self.rank:
             err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
             log_module.error(err)
             raise ValueError(err)
-        return v_sub
+        return v_sub.mH
 
     def _get_vvh_matrix_of_ac_subspace(self, idx_slice: int, idx_batch: int, use_nullspace: bool = False):
-        v_sub = self._get_v_matrix_of_ac_subspace(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=use_nullspace)
-        return torch.matmul(v_sub, v_sub.mH)
+        v_sub = self._get_ac_subspace_v(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=use_nullspace)
+        return torch.matmul(v_sub.mH, v_sub)
 
     def _complex_subspace_rep(self, v: torch.Tensor):
         # extract sizes
-        filt_size, nfilt = v.shape
+        nfilt, filt_size = v.shape
         # get neighborhood and channel sizes
         nb = self.loraks_neighborhood_side_size**2
         nce = torch.prod(torch.tensor(self.shape_xyct[2:])).item()
-        # reshape first dim
+
+        # reshape
         v = torch.reshape(
             v,
-            (nb, nce * 2, nfilt)
+            (nfilt, nb, 2 * nce)
         )
 
         # complex subspace representation
-        v = v[:, ::2] + 1j * v[:, 1::2]
+        v = torch.squeeze(v[..., ::2] + 1j * v[..., 1::2])
         # shape to patch size
-        v = torch.reshape(v, (self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size, nce, nfilt))
+
+        v = torch.reshape(
+            v.permute(0, 3, 1, 2),
+            (nfilt, nce, self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size)
+        )
         return v
 
     def _v_0_phase_filter(self, v: torch.Tensor, matrix_type: str = "S"):
         v = self._complex_subspace_rep(v)
-        n1, n2 = self.shape_xyct[:2]
+        # v = (v + torch.flip(v, dims=(0, 1))) / 2
 
-        filtfilt = v.clone()
         # Conjugate of filters
-        cfilt = torch.conj(filtfilt)
+        cfilt = torch.conj(v)
 
         # Determine ffilt based on opt
         if matrix_type == 'S':  # for S matrix
-            ffilt = torch.conj(filtfilt)
+            ffilt = torch.conj(v)
         else:  # for C matrix
-            ffilt = torch.flip(torch.flip(filtfilt, [0]), [1])
+            ffilt = torch.flip(v, dims=(0, 1))
 
         # Perform 2D FFT
         ccfilt = torch.fft.fft2(
@@ -443,40 +462,39 @@ class AC_LORAKS:
 
         # Compute patch via inverse FFT of element-wise multiplication and sum
         patch = torch.fft.ifft2(
-            torch.sum(ccfilt * fffilt, dim=4),
+            torch.sum(ccfilt * fffilt, dim=-1),
             dim=(0, 1)
         )
 
-        return patch[:-self.loraks_neighborhood_side_size, :-self.loraks_neighborhood_side_size]
+        return patch[:-self._fft_pad_size, :-self._fft_pad_size]
 
     def _v_fft_prep(self, v: torch.Tensor, matrix_type: str = "S"):
         v_filtered = self._v_0_phase_filter(v, matrix_type=matrix_type)
         # set patch into the middle of a patched k-space representation
         # the padded size is  k-space size (first 2D) + pad size on each side
-        v_padded = torch.zeros(
+        nx, ny = self.shape_xyct[:2]
+        pad_x = nx + 2 * self._fft_pad_size - self.loraks_neighborhood_side_size
+        pad_y = ny + 2 * self._fft_pad_size - self.loraks_neighborhood_side_size
+        v_padded = pad(
+            v_filtered,
             (
-                self.shape_xyct[0] + 2 * self._fft_pad_size,
-                self.shape_xyct[1] + 2 * self._fft_pad_size,
-                *v_filtered.shape[2:]
-             ),
-            dtype=v.dtype, device=v.device
+                0, 0, 0, 0,
+                int(pad_y / 2), int(np.ceil(pad_y / 2)),
+                int(pad_x / 2), int(np.ceil(pad_x / 2))
+            ),
+            mode="constant", value=0.0
         )
-        v_padded[
-            int((v_padded.shape[0] - v.shape[0]) / 2):int(np.ceil((v_padded.shape[0] + v.shape[0]))),
-            int((v_padded.shape[1] - v.shape[1]) / 2):int(np.ceil((v_padded.shape[1] + v.shape[1])))
-        ] = v_filtered
-
         # for the s_matrix we roll the whole pad into negative frequencies
         if matrix_type == 'S':  # for S matrix
             v_padded = torch.roll(
                 v_padded,
                 shifts=(
-                    -self.loraks_neighborhood_side_size // 2 + v_padded.shape[0] % 2,
-                    -self.loraks_neighborhood_side_size // 2 + v_padded.shape[1] % 2
+                    -self.loraks_neighborhood_side_size // 2 + self.loraks_neighborhood_side_size % 2,
+                    -self.loraks_neighborhood_side_size // 2 + self.loraks_neighborhood_side_size % 2
                 ),
                 dims=(0, 1)
             )
-        return fft(v_padded)
+        return fft(v_padded, dims=(0, 1))
 
     def _v_fft_prep_arxv(self, v: torch.Tensor, matrix_type: str = "S"):
         nce = torch.prod(torch.tensor(self.shape_xyct[2:])).item()
@@ -547,7 +565,7 @@ class AC_LORAKS:
         # in AC LORAKS terms we compute the subspace or nullspace from AC data and do some manipulation
         # on this space based on which algorithm method we use
         if self.fast_compute:
-            v = self._get_v_matrix_of_ac_subspace(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=True)
+            v = self._get_ac_subspace_v(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=True)
             # we prepare the space via FFT for fast computation
             v_s = self._v_fft_prep(v, matrix_type="S")
             v_c = self._v_fft_prep(v, matrix_type="C")
@@ -577,6 +595,7 @@ class AC_LORAKS:
                 else:
                     x_in = b.clone()
                 # and solve via cgd
+
                 xmin, resi, results = cgd(
                     func_operator=m_op, x=x_in, b=b,
                     iter_bar=bar, max_num_iter=self.max_num_iter, conv_tol=self.conv_tol
@@ -725,7 +744,7 @@ def main_pbp():
     ac_loraks = AC_LORAKS(
         k_space_xyzct=sl_us.unsqueeze(2), rank=50, regularization_lambda=0.0,
         loraks_neighborhood_side_size=5,
-        fast_compute=False, device=device, process_slice=True, max_num_iter=20,
+        fast_compute=True, device=device, process_slice=True, max_num_iter=20,
         conv_tol=1e-3
     )
     k_recon = ac_loraks.reconstruct()[:, :, 0]
