@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="Jochen Schmidt" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Writing Code - PyMRITools</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../assets/_mkdocstrings.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Writing Code";
+        var mkdocs_page_input_path = "contribute/howto_write_code.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> PyMRITools
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../installation/">Installation</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../contributing/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../howto_write_docs/">Writing Documentation</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Writing Code</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1-why-we-write-unit-tests-wherever-possible">1. Why We Write Unit Tests Wherever Possible</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2-why-we-use-branches-and-pull-requests">2. Why We Use Branches and Pull Requests</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3-why-we-use-english-for-variables-and-documentation">3. Why We Use English for Variables and Documentation</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4-why-we-use-type-hints">4. Why We Use Type Hints</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5-why-we-write-docstrings">5. Why We Write Docstrings</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Tools</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../simulation/">Simulation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../sequence_programming/">Sequence Programming</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../recon/">Reconstruction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../processing/">Data Processing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../modeling/">Modeling</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Automatic Code Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/">API Reference</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">PyMRITools</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Contributing</li>
+      <li class="breadcrumb-item active">Writing Code</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/schmidt-jo/PyMRItools/edit/dev/docs/contribute/howto_write_code.md">Edit on PyMRItools</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="rules-for-writing-code">Rules for Writing Code<a class="headerlink" href="#rules-for-writing-code" title="Permanent link">&para;</a></h1>
+<p>There are a few rules when you write code that need to be followed:</p>
+<ol>
+<li>We write unit tests wherever possible, and all tests must pass before code is merged.</li>
+<li>We develop on branches and use pull requests and code reviews.</li>
+<li>Variable names and code documentation must always be in English.</li>
+<li>We always try to use Python type hints for your functions and methods</li>
+<li>We always write docstrings for functions, classes, modules, etc.
+   Use <a href="https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings">Google style documentation</a>.</li>
+</ol>
+<h2 id="1-why-we-write-unit-tests-wherever-possible">1. Why We Write Unit Tests Wherever Possible<a class="headerlink" href="#1-why-we-write-unit-tests-wherever-possible" title="Permanent link">&para;</a></h2>
+<p>Unit tests are fundamental to maintaining code quality and preventing regression bugs. 
+They serve multiple critical purposes:</p>
+<ul>
+<li>They verify that individual components work as expected</li>
+<li>They act as documentation by showing how code should be used</li>
+<li>They make it safer to refactor code by quickly catching unintended changes</li>
+<li>They help catch bugs early in the development process</li>
+<li>They reduce the cost of fixing bugs by identifying issues before they reach production</li>
+</ul>
+<h2 id="2-why-we-use-branches-and-pull-requests">2. Why We Use Branches and Pull Requests<a class="headerlink" href="#2-why-we-use-branches-and-pull-requests" title="Permanent link">&para;</a></h2>
+<p>Working with branches and conducting code reviews is essential for maintaining code quality and team collaboration:</p>
+<ul>
+<li>Branches allow developers to work on features or fixes without affecting the main codebase</li>
+<li>Pull requests provide a formal process for code integration</li>
+<li>Code reviews help catch bugs and design issues early</li>
+<li>Team members can learn from each other's code and share knowledge</li>
+<li>It maintains a clean and stable main branch</li>
+<li>It creates documentation of why changes were made through PR descriptions and review comments</li>
+</ul>
+<h2 id="3-why-we-use-english-for-variables-and-documentation">3. Why We Use English for Variables and Documentation<a class="headerlink" href="#3-why-we-use-english-for-variables-and-documentation" title="Permanent link">&para;</a></h2>
+<p>Using English throughout the codebase ensures:</p>
+<ul>
+<li>Global accessibility and understanding of the code</li>
+<li>Consistency across the entire codebase</li>
+<li>Easier collaboration with international team members</li>
+<li>Better integration with most programming languages and libraries, which use English keywords</li>
+<li>Simpler maintenance and support as English is the de facto standard in programming</li>
+</ul>
+<h2 id="4-why-we-use-type-hints">4. Why We Use Type Hints<a class="headerlink" href="#4-why-we-use-type-hints" title="Permanent link">&para;</a></h2>
+<p>Type hints improve code quality and development experience by:</p>
+<ul>
+<li>Making code more self-documenting</li>
+<li>Enabling better IDE support with accurate code completion and refactoring</li>
+<li>Catching type-related bugs before runtime</li>
+<li>Making it easier for new developers to understand function interfaces</li>
+<li>Improving maintainability by clarifying code intentions</li>
+<li>Supporting static type checking tools like mypy</li>
+</ul>
+<h2 id="5-why-we-write-docstrings">5.  Why We Write Docstrings<a class="headerlink" href="#5-why-we-write-docstrings" title="Permanent link">&para;</a></h2>
+<p>Docstrings using Google style are crucial because they:</p>
+<ul>
+<li>Are automatically included in the documentation website</li>
+<li>Provide clear and standardized documentation for code components</li>
+<li>Help developers understand how to use functions, classes, and modules</li>
+<li>Enable automatic documentation generation</li>
+<li>Make code more maintainable by explaining complex logic or algorithms</li>
+<li>Support IDE features like hover documentation and quick help</li>
+<li>Create a consistent documentation style across the project</li>
+<li>Help new team members get up to speed quickly</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../howto_write_docs/" class="btn btn-neutral float-left" title="Writing Documentation"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../../simulation/" class="btn btn-neutral float-right" title="Simulation">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+      <p>Copyright &copy; 2025 Jochen Schmidt</p>
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/schmidt-jo/PyMRItools" class="fa fa-code-fork" style="color: #fcfcfc"> PyMRItools</a>
+        </span>
+    
+    
+      <span><a href="../howto_write_docs/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../../simulation/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

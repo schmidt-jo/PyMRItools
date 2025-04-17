@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="Jochen Schmidt" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Installation - PyMRITools</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../assets/_mkdocstrings.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Installation";
+        var mkdocs_page_input_path = "installation.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> PyMRITools
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <ul class="current">
+                <li class="toctree-l1 current"><a class="reference internal current" href="#">Installation</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#pip">Pip</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#conda">Conda</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#building-an-apptainer-for-hpc">Building an Apptainer for HPC</a>
+    </li>
+    </ul>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../contribute/contributing/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../contribute/howto_write_docs/">Writing Documentation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../contribute/howto_write_code/">Writing Code</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Tools</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../simulation/">Simulation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../sequence_programming/">Sequence Programming</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../recon/">Reconstruction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../processing/">Data Processing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../modeling/">Modeling</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Automatic Code Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/">API Reference</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">PyMRITools</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Installation</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/schmidt-jo/PyMRItools/edit/dev/docs/installation.md">Edit on PyMRItools</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h1>
+<h2 id="pip">Pip<a class="headerlink" href="#pip" title="Permanent link">&para;</a></h2>
+<p>You can install the <code>PyMRItools</code> package directly from GitHub using Python 3.10 and <code>pip</code>.
+We advise
+<a href="https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/#create-and-use-virtual-environments">working in a virtual environment</a>
+using <code>venv</code> to keep your system's Python installation
+untouched.</p>
+<pre class="codehilite"><code class="language-shell"># Create a new virtual environment in the .venv directory
+python3.10 -m venv .venv
+
+# Install PyMRItools directory from GitHub
+pip install git+https://github.com/schmidt-jo/PyMRItools
+</code></pre>
+
+<h2 id="conda">Conda<a class="headerlink" href="#conda" title="Permanent link">&para;</a></h2>
+<p>For the development of the package, we prefer <code>conda</code> with a dedicated environment
+where PyMRItools are installed as an <em>editable</em> package.
+First, clone the PyMRItools repository or your clone of it:</p>
+<pre class="codehilite"><code class="language-shell">git clone https://github.com/schmidt-jo/PyMRItools.git
+cd PyMRItools
+</code></pre>
+
+<p>Now create a conda environment from the <code>environment.yml</code> provided in the project directory.
+We prefer
+<a href="https://conda-forge.org/download/">conda-forge</a>
+and from within the PyMRItools directory,
+the <code>mri_tools_env</code> environment can be created with (we use <code>mamba</code>, but <code>conda</code> is also fine):</p>
+<pre class="codehilite"><code class="language-shell">mamba env create -f environment.yml
+</code></pre>
+
+<p>The next step is to activate the environment and install PyMRItools in edit mode.
+Since all package dependencies are already available in the conda environment,
+we include the <code>--no-deps</code> option:</p>
+<pre class="codehilite"><code class="language-shell">mamba activate mri_tools_env
+pip install --no-deps -e .
+</code></pre>
+
+<p>Now you can use PyMRItools in this virtual environment, and if you work on the code,
+changes are directly reflected.</p>
+<h2 id="building-an-apptainer-for-hpc">Building an Apptainer for HPC<a class="headerlink" href="#building-an-apptainer-for-hpc" title="Permanent link">&para;</a></h2>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href=".." class="btn btn-neutral float-left" title="Home"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../contribute/contributing/" class="btn btn-neutral float-right" title="Overview">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+      <p>Copyright &copy; 2025 Jochen Schmidt</p>
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/schmidt-jo/PyMRItools" class="fa fa-code-fork" style="color: #fcfcfc"> PyMRItools</a>
+        </span>
+    
+    
+      <span><a href=".." style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../contribute/contributing/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

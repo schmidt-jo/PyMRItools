@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="Jochen Schmidt" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Writing Documentation - PyMRITools</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../assets/_mkdocstrings.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Writing Documentation";
+        var mkdocs_page_input_path = "contribute/howto_write_docs.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> PyMRITools
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../installation/">Installation</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../contributing/">Overview</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Writing Documentation</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#documentation-structure">Documentation Structure</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#understanding-the-mkdocs-configuration">Understanding the MkDocs Configuration</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#automatic-documentation-building-with-github-actions">Automatic Documentation Building with GitHub Actions</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#how-it-works">How it Works</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#what-this-means-for-contributors">What This Means for Contributors</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#writing-documentation">Writing Documentation</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#rules-for-writing">Rules for Writing</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#markdown-tips">Markdown Tips</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#testing-your-documentation-locally">Testing Your Documentation Locally</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../howto_write_code/">Writing Code</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Tools</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../simulation/">Simulation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../sequence_programming/">Sequence Programming</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../recon/">Reconstruction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../processing/">Data Processing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../modeling/">Modeling</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Automatic Code Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/">API Reference</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">PyMRITools</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Contributing</li>
+      <li class="breadcrumb-item active">Writing Documentation</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/schmidt-jo/PyMRItools/edit/dev/docs/contribute/howto_write_docs.md">Edit on PyMRItools</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="how-to-write-documentation">How to write documentation<a class="headerlink" href="#how-to-write-documentation" title="Permanent link">&para;</a></h1>
+<p>This guide explains how to write and contribute to the documentation for the PyMRITools project.
+It covers the documentation structure, how the configuration works,
+and how the documentation is automatically built and deployed.</p>
+<h2 id="documentation-structure">Documentation Structure<a class="headerlink" href="#documentation-structure" title="Permanent link">&para;</a></h2>
+<p>The documentation for this project is built using <a href="https://www.mkdocs.org/">MkDocs</a>, a fast and simple static site generator that's geared towards building project documentation. The documentation source files are written in Markdown and are stored in the <code>docs/</code> directory of the repository.</p>
+<h2 id="understanding-the-mkdocs-configuration">Understanding the MkDocs Configuration<a class="headerlink" href="#understanding-the-mkdocs-configuration" title="Permanent link">&para;</a></h2>
+<p>The <code>mkdocs.yml</code> file at the root of the repository is the configuration file for MkDocs. It defines:</p>
+<ol>
+<li><strong>Basic information</strong>: Site name, description, and author</li>
+<li><strong>Repository information</strong>: Repository name, URL, and edit URI</li>
+<li><strong>Theme</strong>: The visual theme for the documentation (we use ReadTheDocs)</li>
+<li><strong>Markdown extensions</strong>: Additional Markdown features enabled</li>
+<li><strong>Navigation structure</strong>: The organization of pages in the documentation</li>
+<li><strong>Plugins</strong>: Additional functionality for the documentation</li>
+</ol>
+<p>When you want to <strong>add</strong> a new documentation page, you need to:</p>
+<ol>
+<li>Create a Markdown file in the <code>docs/</code> directory or a subdirectory</li>
+<li>Add the page to the <code>nav</code> section in <code>mkdocs.yml</code> if you want it to appear in the navigation menu</li>
+</ol>
+<h2 id="automatic-documentation-building-with-github-actions">Automatic Documentation Building with GitHub Actions<a class="headerlink" href="#automatic-documentation-building-with-github-actions" title="Permanent link">&para;</a></h2>
+<p>One of the powerful features of our documentation setup is that it's automatically built and deployed whenever changes are pushed to the <code>main</code> branch.
+This is done using <a href="https://github.com/features/actions">GitHub Actions</a>, a continuous integration and continuous deployment (CI/CD) platform.</p>
+<h3 id="how-it-works">How it Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Trigger</strong>: When someone pushes changes to the <code>main</code> branch</li>
+<li><strong>Build Environment</strong>: GitHub Actions sets up a virtual machine with Ubuntu</li>
+<li><strong>Setup</strong>: Python is installed, along with MkDocs</li>
+<li><strong>Build and Deploy</strong>: MkDocs builds the documentation and deploys it to GitHub Pages</li>
+</ol>
+<p>The entire process is defined in the <code>.github/workflows/mkdocs.yml</code> file:</p>
+<h3 id="what-this-means-for-contributors">What This Means for Contributors<a class="headerlink" href="#what-this-means-for-contributors" title="Permanent link">&para;</a></h3>
+<p>As a contributor, you don't need to worry about manually building or deploying the documentation.
+When your changes are merged into the main branch:</p>
+<ol>
+<li>GitHub Actions automatically detects the changes</li>
+<li>It builds the documentation using MkDocs</li>
+<li>It deploys the built documentation to the <code>gh-pages</code> branch</li>
+<li>GitHub Pages serves the documentation from the <code>gh-pages</code> branch</li>
+</ol>
+<p>This means you can focus on writing good documentation content without worrying about the technical details of deployment.</p>
+<h2 id="writing-documentation">Writing Documentation<a class="headerlink" href="#writing-documentation" title="Permanent link">&para;</a></h2>
+<p>When writing documentation:</p>
+<ol>
+<li><strong>Use Markdown</strong>: All documentation is written in Markdown format</li>
+<li><strong>Follow the structure</strong>: Place your files in the appropriate directories</li>
+<li><strong>Update navigation</strong>: Add your page to the <code>nav</code> section in <code>mkdocs.yml</code> if needed</li>
+<li><strong>Preview locally</strong>: You can run <code>mkdocs serve</code> locally to preview changes</li>
+<li><strong>Commit and push</strong>: Once you're satisfied, commit your changes and create a pull request</li>
+</ol>
+<h3 id="rules-for-writing">Rules for Writing<a class="headerlink" href="#rules-for-writing" title="Permanent link">&para;</a></h3>
+<p>There is a small set of rules that are non-negotiable:</p>
+<ol>
+<li>Always write in English and use spell and grammar check.
+   In PyCharm you can use the Grazie plugin for checking your English.</li>
+<li>Start a new line after the end of each sentence.
+   This makes it much easier to see differences in pull-requests.</li>
+<li>Always remember, you are writing documentation for people who don't know how things work.
+   Be precise and clear in your writing.
+   Your future You will thank you.</li>
+</ol>
+<h3 id="markdown-tips">Markdown Tips<a class="headerlink" href="#markdown-tips" title="Permanent link">&para;</a></h3>
+<p>MkDocs supports standard Markdown syntax plus some extensions:</p>
+<pre class="codehilite"><code class="language-markdown"># Heading 1
+## Heading 2
+
+*Italic text*
+**Bold text**
+
+- Bullet point
+- Another bullet point
+
+1. Numbered item
+2. Another numbered item
+
+[Link text](https://example.com)
+
+![Image alt text](path/to/image.png)
+
+`inline code`
+
+!!! note
+    This is an admonition box for notes
+</code></pre>
+
+<h2 id="testing-your-documentation-locally">Testing Your Documentation Locally<a class="headerlink" href="#testing-your-documentation-locally" title="Permanent link">&para;</a></h2>
+<p>Before submitting your changes, it's a good idea to preview them locally:</p>
+<ol>
+<li>Either use the conda environment from <code>python_setup/environment.yml</code> or install MkDocs: <code>pip install mkdocs</code></li>
+<li>Navigate to the repository root</li>
+<li>Run <code>mkdocs serve</code></li>
+<li>Open your browser to <code>http://127.0.0.1:8000/</code></li>
+</ol>
+<p>This will give you a live preview of the documentation that updates as you make changes.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../contributing/" class="btn btn-neutral float-left" title="Overview"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../howto_write_code/" class="btn btn-neutral float-right" title="Writing Code">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+      <p>Copyright &copy; 2025 Jochen Schmidt</p>
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/schmidt-jo/PyMRItools" class="fa fa-code-fork" style="color: #fcfcfc"> PyMRItools</a>
+        </span>
+    
+    
+      <span><a href="../contributing/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../howto_write_code/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
