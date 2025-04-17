@@ -3,7 +3,6 @@ import pathlib as plib
 
 import numpy as np
 import torch
-from scipy.io import loadmat
 from torch.nn.functional import pad
 
 import plotly.graph_objects as go
@@ -145,6 +144,8 @@ class AC_LORAKS:
             self._log("Using operator based (slower) algorithm")
             self.fast_compute = False
 
+        # for fast compute we set an fft pad size
+        self._fft_pad_size = self.loraks_neighborhood_side_size
         # in the end we need an M operator and a b vector to solve Mf = b least squares via cgd
         self.count_matrix = self._get_count_matrix()
         torch.cuda.empty_cache()
@@ -360,33 +361,109 @@ class AC_LORAKS:
             err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
             log_module.error(err)
             raise ValueError(err)
-        return v_sub.mH
+        return v_sub
 
     def _get_vvh_matrix_of_ac_subspace(self, idx_slice: int, idx_batch: int, use_nullspace: bool = False):
         v_sub = self._get_v_matrix_of_ac_subspace(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=use_nullspace)
-        return torch.matmul(v_sub.mH, v_sub)
+        return torch.matmul(v_sub, v_sub.mH)
 
-    def _v_fft_prep(self, v: torch.Tensor, matrix_type: str = "S"):
-        n1, n2, nc, ne = self.shape_xyct
-        nce = nc * ne
-        n_filt = v.shape[0]
-        # complex subspace representation
-        v = torch.reshape(v, (n_filt, -1, 2 * nce))
-        v = v[..., ::2] + 1j * v[..., 1::2]
-
-        # movedims
-        v = torch.movedim(torch.squeeze(v), 0, -1)
-
+    def _complex_subspace_rep(self, v: torch.Tensor):
+        # extract sizes
+        filt_size, nfilt = v.shape
+        # get neighborhood and channel sizes
+        nb = self.loraks_neighborhood_side_size**2
+        nce = torch.prod(torch.tensor(self.shape_xyct[2:])).item()
+        # reshape first dim
         v = torch.reshape(
             v,
-            (self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size, nce, n_filt)
+            (nb, nce * 2, nfilt)
         )
-        # embedd and ad one 0 in each dir
-        # v = pad(
-        #     v,
-        #     (0, 0, 0, 0, 1, 1, 1, 1),
-        #     mode='constant', value=0.0
-        # )
+
+        # complex subspace representation
+        v = v[:, ::2] + 1j * v[:, 1::2]
+        # shape to patch size
+        v = torch.reshape(v, (self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size, nce, nfilt))
+        return v
+
+    def _v_0_phase_filter(self, v: torch.Tensor, matrix_type: str = "S"):
+        v = self._complex_subspace_rep(v)
+        n1, n2 = self.shape_xyct[:2]
+
+        filtfilt = v.clone()
+        # Conjugate of filters
+        cfilt = torch.conj(filtfilt)
+
+        # Determine ffilt based on opt
+        if matrix_type == 'S':  # for S matrix
+            ffilt = torch.conj(filtfilt)
+        else:  # for C matrix
+            ffilt = torch.flip(torch.flip(filtfilt, [0]), [1])
+
+        # Perform 2D FFT
+        ccfilt = torch.fft.fft2(
+            cfilt,
+            dim=(0, 1),
+            s=(
+                self.loraks_neighborhood_side_size + self._fft_pad_size,
+                self.loraks_neighborhood_side_size + self._fft_pad_size,
+            )
+        )
+        fffilt = torch.fft.fft2(
+            ffilt,
+            dim=(0, 1),
+            s=(
+                self.loraks_neighborhood_side_size + self._fft_pad_size,
+                self.loraks_neighborhood_side_size + self._fft_pad_size,
+            )
+        )
+
+        # Reshape for multiplication and sum
+        ccfilt = ccfilt.unsqueeze(3)
+        fffilt = fffilt.unsqueeze(2)
+
+        # Compute patch via inverse FFT of element-wise multiplication and sum
+        patch = torch.fft.ifft2(
+            torch.sum(ccfilt * fffilt, dim=4),
+            dim=(0, 1)
+        )
+
+        return patch[:-self.loraks_neighborhood_side_size, :-self.loraks_neighborhood_side_size]
+
+    def _v_fft_prep(self, v: torch.Tensor, matrix_type: str = "S"):
+        v_filtered = self._v_0_phase_filter(v, matrix_type=matrix_type)
+        # set patch into the middle of a patched k-space representation
+        # the padded size is  k-space size (first 2D) + pad size on each side
+        v_padded = torch.zeros(
+            (
+                self.shape_xyct[0] + 2 * self._fft_pad_size,
+                self.shape_xyct[1] + 2 * self._fft_pad_size,
+                *v_filtered.shape[2:]
+             ),
+            dtype=v.dtype, device=v.device
+        )
+        v_padded[
+            int((v_padded.shape[0] - v.shape[0]) / 2):int(np.ceil((v_padded.shape[0] + v.shape[0]))),
+            int((v_padded.shape[1] - v.shape[1]) / 2):int(np.ceil((v_padded.shape[1] + v.shape[1])))
+        ] = v_filtered
+
+        # for the s_matrix we roll the whole pad into negative frequencies
+        if matrix_type == 'S':  # for S matrix
+            v_padded = torch.roll(
+                v_padded,
+                shifts=(
+                    -self.loraks_neighborhood_side_size // 2 + v_padded.shape[0] % 2,
+                    -self.loraks_neighborhood_side_size // 2 + v_padded.shape[1] % 2
+                ),
+                dims=(0, 1)
+            )
+        return fft(v_padded)
+
+    def _v_fft_prep_arxv(self, v: torch.Tensor, matrix_type: str = "S"):
+        nce = torch.prod(torch.tensor(self.shape_xyct[2:])).item()
+        v = torch.reshape(v, (self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size, nce * 2, v.shape[-1]))
+        # complex subspace representation
+        v = v[:, :, ::2] + 1j * v[:, :, 1::2]
+        n1, n2 = self.shape_xyct[:2]
 
         # Conjugate of filters
         cfilt = torch.conj(v)
@@ -626,7 +703,7 @@ def main_pbp():
 
     ac_loraks = AC_LORAKS(
         k_space_xyzct=sl_us.unsqueeze(2), rank=50, regularization_lambda=0.05,
-        loraks_neighborhood_side_size=7,
+        loraks_neighborhood_side_size=5,
         fast_compute=True, device=device, process_slice=True, max_num_iter=20,
         conv_tol=1e-3
     )
