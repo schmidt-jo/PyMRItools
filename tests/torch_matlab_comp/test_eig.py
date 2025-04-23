@@ -1,9 +1,10 @@
 import os
 import torch
-import numpy as np
 import scipy.io as sio
 from tests.utils import get_test_result_output_dir
-from tests.torch_matlab_comp.matlab_utils import compare_matrices, run_matlab_script
+from tests.torch_matlab_comp.matlab_utils import run_matlab_script
+from tests.torch_matlab_comp.compare_matrices import check_matrices
+
 
 def perform_eig_decomposition(input_matrix_path, output_dir):
     """
@@ -36,11 +37,10 @@ def test_eig_comparison():
     This test:
     1. Creates a random PyTorch complex 2D matrix
     2. Uses get_test_result_output_dir to create output directory
-    3. Saves the matrix in both PyTorch and MATLAB formats
-    4. Performs eigenvalue decomposition with PyTorch and saves the result
-    5. Calls MATLAB to perform the same eigenvalue decomposition
-    6. Calls MATLAB to compare the results
-    7. Asserts that the comparison shows no difference
+    3. Saves the matrix in MATLAB format
+    4. Calls MATLAB to perform the same eigenvalue decomposition
+    5. Performs eigenvalue decomposition with PyTorch
+    6. Asserts that the comparison shows no difference
     """
     # 1. Create a hermitian random PyTorch complex 2D matrix
     matrix_size = 10  # Size of the square matrix
@@ -51,11 +51,6 @@ def test_eig_comparison():
 
     # 2. Create the output directory
     output_dir = get_test_result_output_dir("test_eig_comparison")
-
-    # 3. Save the matrix in both PyTorch and MATLAB formats
-    # PyTorch format
-    torch_input_path = os.path.join(output_dir, "input_matrix.pt")
-    torch.save(matrix, torch_input_path)
 
     # MATLAB format (.mat)
     matlab_input_path = os.path.join(output_dir, "input_matrix.mat")
@@ -68,22 +63,20 @@ def test_eig_comparison():
 
     # 4. Load mat file
     mat = sio.loadmat(matlab_output_path)
-    mat_eigenvalues = mat['eigenvalues']
-    mat_eigenvectors = mat['eigenvectors']
+    mat_eigenvalues = torch.from_numpy(mat['eigenvalues']).squeeze()
+    mat_eigenvectors = torch.from_numpy(mat['eigenvectors']).squeeze()
 
     # 4. Perform eigenvalue decomposition with PyTorch
     # We need to flip the result to get the largest eigenvalues first
     eigenvalues, eigenvectors = torch.linalg.eigh(matrix)
-    eigenvalues = eigenvalues.flip(-1)
-    eigenvectors = eigenvectors.flip(-1)
+    idx = torch.sort(torch.abs(eigenvalues), descending=True).indices
+    eigenvalues = eigenvalues[..., idx]
+    eigenvectors = eigenvectors[..., idx]
 
-    # 5. Compare eigenvectors
-    eigenvectors_equal = compare_matrices(
-        matlab_torch_output_path, 
-        matlab_output_path, 
-        'eigenvectors', 
-        output_dir
-    )
+    # 5. Compare eigenvalues
+    check_matrices(eigenvalues, mat_eigenvalues, name="Eigenvalues")
 
-    assert eigenvalues_equal, "PyTorch and MATLAB eigenvalues differ"
-    assert eigenvectors_equal, "PyTorch and MATLAB eigenvectors differ"
+    # 6. Compare eigenvectors
+    # eigenvectors are not unique, different software might compute different values up to a phase offset,
+    # try comparing abs
+    check_matrices(torch.abs(eigenvectors), torch.abs(mat_eigenvectors), name="Eigenvectors")

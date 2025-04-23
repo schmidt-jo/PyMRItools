@@ -23,7 +23,7 @@ matrix = input_data.matrix;
 eigenvalues_unsorted = diag(D);
 
 % Sort eigenvalues in descending order and get the sorting indices
-[sorted_eigenvalues, sort_indices] = sort(eigenvalues_unsorted, 'descend');
+[sorted_eigenvalues, sort_indices] = sort(abs(eigenvalues_unsorted), 'descend');
 
 % Reorder the eigenvectors accordingly
 eigenvectors = V(:, sort_indices);
