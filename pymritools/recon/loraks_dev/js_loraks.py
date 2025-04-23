@@ -18,6 +18,39 @@ from pymritools.recon.loraks.algorithms import cgd
 log_module = logging.getLogger(__name__)
 
 
+def new_matlike_s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):
+    k_flip = torch.flip(k_space, dims=(0, 1))
+    s_p = k_space.view(-1, k_space.shape[-1])[indices].view(*matrix_shape, -1)
+    s_m = k_flip.view(-1, k_space.shape[-1])[indices].view(*matrix_shape, -1)
+
+    s_p_m = (s_p - s_m)
+    s_u = torch.concatenate([s_p_m.real, -s_p_m.imag], dim=1)
+    s_p_m = (s_p + s_m)
+    s_d = torch.concatenate([s_p_m.imag, s_p_m.real], dim=1)
+
+    s = torch.concatenate([s_u, s_d], dim=0)
+    s = torch.concatenate([s_sub for s_sub in s.permute(2, 0, 1)], dim=-1)
+    return s
+
+
+def new_s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):
+    k_flip = torch.flip(k_space, dims=(0, 1))
+    s_p = k_space.view(-1)[indices].view(matrix_shape)
+    s_m = k_flip.view(-1)[indices].view(matrix_shape)
+
+    matrix_shape_result = tuple([2*s for s in matrix_shape])
+    # Todo: Check how to handle floating point size
+    dtype = torch.float32 if k_space.dtype == torch.complex64 else torch.float64
+    result = torch.zeros(matrix_shape_result, dtype=dtype, device=k_space.device)
+    s_p_m = (s_p - s_m)
+    result[:matrix_shape[0], :matrix_shape[1]] = s_p_m.real
+    result[matrix_shape[0]:, :matrix_shape[1]] = -s_p_m.imag
+    s_p_m = (s_p + s_m)
+    result[:matrix_shape[0], matrix_shape[1]:] = s_p_m.imag
+    result[matrix_shape[0]:, matrix_shape[1]:] = s_p_m.real
+    return result
+
+
 class AC_LORAKS:
     def __init__(
             self,
@@ -110,25 +143,27 @@ class AC_LORAKS:
 
         # set indices of ac region - remember this is slice wise (hence 3D with batched channel and time)
         indices, ac_matrix_shape = get_linear_indices(
-            k_space_shape=self.ac_shape,
-            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size, -1),
-            sample_directions=(1, 1, 0)
+            k_space_shape=self.ac_shape[:2],
+            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size),
+            sample_directions=(1, 1)
         )
         self.ac_indices = indices.to(self.device)
         # set indices for k space - remember this is slice wise (hence 4D)
         indices, matrix_shape = get_linear_indices(
-            k_space_shape=self.shape_batch,
-            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size, -1),
-            sample_directions=(1, 1, 0)
+            k_space_shape=self.shape_batch[:2],
+            patch_shape=(loraks_neighborhood_side_size, loraks_neighborhood_side_size),
+            sample_directions=(1, 1)
         )
         self.indices = indices.to(self.device)
 
         if self.loraks_matrix_type == "S":
             self._log("Using S - Matrix formulation")
-            self.operator = s_operator
+            self.operator = new_matlike_s_operator
             self.operator_adjoint = s_adjoint_operator
-            self.ac_matrix_shape = tuple([2*i for i in ac_matrix_shape])
-            self.matrix_shape = tuple([2*i for i in matrix_shape])
+            # self.ac_matrix_shape = tuple([2*i for i in ac_matrix_shape])
+            self.ac_matrix_shape = ac_matrix_shape
+            # self.matrix_shape = tuple([2*i for i in matrix_shape])
+            self.matrix_shape = matrix_shape
         elif self.loraks_matrix_type == "C":
             self._log("Using C - Matrix formulation")
             self.operator = c_operator
@@ -184,9 +219,14 @@ class AC_LORAKS:
         ones_matrix = self.operator(
             k_space=in_ones, indices=self.indices, matrix_shape=self.matrix_shape
         )
+        indices, _ = get_linear_indices(
+            k_space_shape=self.shape_batch,
+            patch_shape=(self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size, -1),
+            sample_directions=(1, 1, 0)
+        )
         count_matrix = self.operator_adjoint(
             ones_matrix,
-            indices=self.indices, k_space_dims=self.shape_batch
+            indices=indices.to(self.device), k_space_dims=self.shape_batch
         ).real.to(torch.int)
         return count_matrix
 
@@ -395,7 +435,7 @@ class AC_LORAKS:
             err = f"loraks rank parameter is too large, cant be bigger than ac matrix dimensions."
             log_module.error(err)
             raise ValueError(err)
-        return v_sub.mH
+        return v_sub.conj()
 
     def _get_vvh_matrix_of_ac_subspace(self, idx_slice: int, idx_batch: int, use_nullspace: bool = False):
         v_sub = self._get_ac_subspace_v(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=use_nullspace)
@@ -537,8 +577,8 @@ class AC_LORAKS:
         if self.fast_compute:
             v = self._get_ac_subspace_v(idx_slice=idx_slice, idx_batch=idx_batch, use_nullspace=True)
             # ## we prepare the space via FFT for fast computation
-            mat_s = loadmat("/data/pt_np-jschmidt/code/PyMRItools/resources/vs_matlab_tests/loraks_test_data/filtfilt_s.mat")
-            v = torch.from_numpy(mat_s["filtfilt"]).to(device=self.device, dtype=self.k_us_xyzct.dtype)
+            # mat_s = loadmat("/data/pt_np-jschmidt/code/PyMRItools/resources/vs_matlab_tests/loraks_test_data/filtfilt_s.mat")
+            # v = torch.from_numpy(mat_s["filtfilt"]).to(device=self.device, dtype=self.k_us_xyzct.dtype)
             v_s = self._v_fft_prep(v, matrix_type="S")
             v_c = self._v_fft_prep(v, matrix_type="C")
 
