@@ -63,36 +63,21 @@ def test_eig_comparison():
     matrix_np = matrix.numpy()
     sio.savemat(matlab_input_path, {'matrix': matrix_np})
 
+    # 3. Call MATLAB to perform eigenvalue decomposition
+    matlab_output_path = perform_eig_decomposition(matlab_input_path, output_dir)
+
+    # 4. Load mat file
+    mat = sio.loadmat(matlab_output_path)
+    mat_eigenvalues = mat['eigenvalues']
+    mat_eigenvectors = mat['eigenvectors']
+
     # 4. Perform eigenvalue decomposition with PyTorch
     # We need to flip the result to get the largest eigenvalues first
     eigenvalues, eigenvectors = torch.linalg.eigh(matrix)
     eigenvalues = eigenvalues.flip(-1)
     eigenvectors = eigenvectors.flip(-1)
 
-    # Save PyTorch results
-    torch_output_path = os.path.join(output_dir, "torch_eig_result.pt")
-    torch.save({'eigenvalues': eigenvalues, 'eigenvectors': eigenvectors}, torch_output_path)
-
-    # Save PyTorch results in MATLAB format for comparison
-    matlab_torch_output_path = os.path.join(output_dir, "torch_eig_result.mat")
-    sio.savemat(matlab_torch_output_path, {
-        'eigenvalues': eigenvalues.numpy(),
-        'eigenvectors': eigenvectors.numpy()
-    })
-
-    # 5. Call MATLAB to perform eigenvalue decomposition
-    matlab_output_path = perform_eig_decomposition(matlab_input_path, output_dir)
-
-    # 6. Call MATLAB to compare the results
-    # Compare eigenvalues
-    eigenvalues_equal = compare_matrices(
-        matlab_torch_output_path, 
-        matlab_output_path, 
-        'eigenvalues', 
-        output_dir
-    )
-
-    # Compare eigenvectors
+    # 5. Compare eigenvectors
     eigenvectors_equal = compare_matrices(
         matlab_torch_output_path, 
         matlab_output_path, 
