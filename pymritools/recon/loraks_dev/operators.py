@@ -57,7 +57,13 @@ def s_adjoint_operator(s_matrix: torch.Tensor, indices: torch.Tensor, k_space_di
     sip = sip_p_sim - msip_p_sim
     sim = msip_p_sim + sip_p_sim
 
-    dtype = torch.complex64 if s_matrix.dtype == torch.float32 else torch.complex128
+    match s_matrix.dtype:
+        case torch.float32:
+            dtype = torch.complex64
+        case torch.float64:
+            dtype = torch.complex128
+        case _:
+            dtype = torch.complex64
     # crucial preventing loops: index add usage of 1d indexing
     adj_s_matrix_p = torch.zeros(dim, dtype=dtype, device=s_matrix.device).index_add(
         0, indices.view(-1), (srp + 1j * sip).view(-1)
