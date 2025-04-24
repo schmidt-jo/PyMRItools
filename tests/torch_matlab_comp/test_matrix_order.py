@@ -16,7 +16,7 @@ def test_matrix_order_eig():
     matrix_cp = matrix[:, idx_c]
 
     # 4. do eigenvalue decomposition
-    eig_vals, eig_vecs = torch.linalg.eigh(matrix.mH @ matrix_rp)
+    eig_vals, eig_vecs = torch.linalg.eigh(matrix.mH @ matrix)
     eig_vals_rp, eig_vecs_rp = torch.linalg.eigh(matrix_rp.mH @ matrix_rp)
     eig_vals_cp, eig_vecs_cp = torch.linalg.eigh(matrix_cp.mH @ matrix_cp)
 
