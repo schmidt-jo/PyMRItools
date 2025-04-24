@@ -36,8 +36,45 @@ def get_indices(k_space_shape: tuple, nb_radius: int):
     nb_x, nb_y = torch.meshgrid(
         torch.arange(-nb_radius, nb_radius + 1),
         torch.arange(-nb_radius, nb_radius + 1),
+        indexing='ij'  # Use 'ij' indexing to match the shape correctly
     )
-    nb_r = nb_x**2 + nb_y**2 <= nb_radius**2
+
+    # Create a mask for the circular neighborhood
+    nb_r = nb_x ** 2 + nb_y ** 2 <= nb_radius ** 2
+
+    # Get the indices of the circular neighborhood
+    neighborhood_indices = torch.nonzero(nb_r).squeeze()
+
+    # Calculate offsets relative to the center
+    offsets = neighborhood_indices - nb_radius
+
+    # Function to check if an index is within the k-space shape
+    def is_valid_index(center, offset):
+        new_idx = center + offset
+        return torch.all((new_idx >= 0) & (new_idx < torch.tensor(k_space_shape[:2])))
+
+    # Prepare to collect valid linear indices
+    linear_indices = []
+
+    # Iterate through the k-space to find valid neighborhoods
+    for y in range(k_space_shape[0]):
+        for x in range(k_space_shape[1]):
+            # Check if all neighborhood indices are valid
+            valid_neighborhood = [
+                is_valid_index(torch.tensor([y, x]), offset)
+                for offset in offsets
+            ]
+
+            if all(valid_neighborhood):
+                # Convert 2D indices to linear indices
+                neighborhood_linear_indices = [
+                    (y + offset[0]) * k_space_shape[1] + (x + offset[1])
+                    for offset in offsets
+                ]
+                linear_indices.append(neighborhood_linear_indices)
+
+    return torch.tensor(linear_indices)
+
 
 def new_matlike_s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):
     match k_space.dtype:
@@ -72,15 +109,35 @@ def test_nullspace_extraction():
     matlab_input_path = os.path.join(output_dir, "input_data.mat")
     # Convert to numpy for saving to .mat format
     k_data = k_data.numpy()
-    savemat(matlab_input_path, {'k_data': k_data})
+    # savemat(matlab_input_path, {'k_data': k_data})
 
     # 3. Call MATLAB to perform eigenvalue decomposition
-    matlab_output_path = perform_nullspace_extraction(matlab_input_path, output_dir)
+    # matlab_output_path = perform_nullspace_extraction(matlab_input_path, output_dir)
 
     # 4. Load mat file
-    mat = loadmat(matlab_output_path)
+    # mat = loadmat(matlab_output_path)
 
     # do python version
+    # build indices
+    indices = get_indices(k_space_shape=k_data.shape, nb_radius=3)
+    nb_size = indices.shape[-1]
+
+    # build s matrix
+    s_matrix = k_data.flatten()[indices]
+
+    # eigenvalue decomposition
+    e_vals, e_vecs = torch.linalg.eigh(s_matrix.mH @ s_matrix)
+    idx = torch.argsort(torch.abs(e_vals), descending=True)
+
+    um = e_vecs[:, idx]
+    nmm = um.mH
+
+    nfilt, filt_size = nmm.shape
+    nss_c = torch.reshape(nmm, (nfilt, nb_size, -1))
+    nss_c = nss_c[:, ::2] + 1j * nss_c[:, 1::2]
+
+    print("")
+
 
 
 
