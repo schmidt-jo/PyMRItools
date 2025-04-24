@@ -7,6 +7,7 @@ kData = input_data.k_data;
 [N1, N2, Nc] = size(kData);
 % set neighborhood radius
 R = 3;
+rank = 20;
 
 % s - matrix
 s_matrix = s_operator(kData, N1, N2, Nc, R);
@@ -18,12 +19,14 @@ U = U(:,idx);
 
 nmm = U(:, 1+rank:end)';
 
+nf = size(nmm,1);
+fsz = size(nmm,2)/(2*Nc);
 nmm = reshape(nmm,[nf, fsz, 2*Nc]);
 % nss_c: complex number representation of the null space
 nss_c = reshape(nmm(:,:,1:2:end)+1j*nmm(:,:,2:2:end),[nf, fsz*Nc]);
 nmm = reshape(nmm,[nf, fsz*2*Nc]);
 
-%% setup filtfilt
+% setup filtfilt
 fltlen = size(nss_c,2)/Nc;    % filter length
 numflt = size(nss_c,1);       % number of filters
 
@@ -36,8 +39,8 @@ in2 = in2(idx)';
 
 ind = sub2ind([2*R+1, 2*R+1],R+1+in1,R+1+in2);
 
-filtfilt = zeros([(2*R+1)*(2*R+1),Nc,numflt],'like',ncc);
-filtfilt(ind,:,:) = reshape(permute(ncc,[2,1]),[fltlen,Nc,numflt]);
+filtfilt = zeros([(2*R+1)*(2*R+1),Nc,numflt],'like',nss_c);
+filtfilt(ind,:,:) = reshape(permute(nss_c,[2,1]),[fltlen,Nc,numflt]);
 filtfilt = reshape(filtfilt,(2*R+1),(2*R+1),Nc,numflt);
 
 output_path = fullfile(output_dir, 'matlab_loraks_nmm.mat');
@@ -78,4 +81,8 @@ function op = s_operator(x, N1, N2, Nc, R)
     op = reshape(result, patchSize*Nc*2,(N1-2*R-even(N1))*(N2-2*R-even(N2))*2);
 end
 
+function result = even(int)
+result = not(rem(int,2));
+end
 
+end

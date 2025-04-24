@@ -66,10 +66,10 @@ def test_nullspace_extraction():
     k_data = torch.randn((40, 40, 1), dtype=torch.complex128)
 
     # 2. Create the output directory
-    output_dir = get_test_result_output_dir("test_eig_comparison")
+    output_dir = get_test_result_output_dir("test_ac_loraks_nullspace_extraction")
 
     # MATLAB format (.mat)
-    matlab_input_path = os.path.join(output_dir, "input_matrix.mat")
+    matlab_input_path = os.path.join(output_dir, "input_data.mat")
     # Convert to numpy for saving to .mat format
     k_data = k_data.numpy()
     savemat(matlab_input_path, {'k_data': k_data})
