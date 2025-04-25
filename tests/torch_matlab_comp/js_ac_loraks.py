@@ -31,60 +31,45 @@ def perform_nullspace_extraction(input_matrix_path, output_dir):
     return os.path.join(output_dir, "matlab_loraks_nmm.mat")
 
 
-def get_indices(k_space_shape: tuple, nb_radius: int, reversed: bool = False):
-    # Create meshgrid for circular neighborhood
+def get_indices(k_space_shape: tuple, nb_radius: int):
+    # want a circular neighborhood radius and convert to linear indices
     nb_x, nb_y = torch.meshgrid(
         torch.arange(-nb_radius, nb_radius + 1),
         torch.arange(-nb_radius, nb_radius + 1),
-        indexing='ij'
+        indexing='ij'  # Use 'ij' indexing to match the shape correctly
     )
-
     # Create a mask for the circular neighborhood
     nb_r = nb_x ** 2 + nb_y ** 2 <= nb_radius ** 2
-
     # Get the indices of the circular neighborhood
     neighborhood_indices = torch.nonzero(nb_r).squeeze()
-
     # Calculate offsets relative to the center
     offsets = neighborhood_indices - nb_radius
 
+    # Function to check if an index is within the k-space shape
+    def is_valid_index(center, offset):
+        new_idx = center + offset
+        return torch.all(
+            (new_idx >= torch.tensor([1 - s % 2 for s in k_space_shape[:2]])) &
+            (new_idx < torch.tensor(k_space_shape[:2]))
+        )
+
     # Prepare to collect valid linear indices
     linear_indices = []
-
-    # Determine the mirroring center based on shape dimensions
-    if reversed:
-        # For odd dimensions, use the exact center
-        # For even dimensions, use the floor of the dimension divided by 2
-        mirror_center_y = (k_space_shape[0] - 1) // 2
-        mirror_center_x = (k_space_shape[1] - 1) // 2
-
     # Iterate through the k-space to find valid neighborhoods
     for y in range(k_space_shape[0]):
         for x in range(k_space_shape[1]):
-            # Check if the neighborhood is completely within the k-space shape
-            valid_neighborhood = all(
-                (0 <= y + offset[0] < k_space_shape[0]) and
-                (0 <= x + offset[1] < k_space_shape[1])
+            # Check if all neighborhood indices are valid
+            valid_neighborhood = [
+                is_valid_index(torch.tensor([y, x]), offset)
                 for offset in offsets
-            )
-
-            if valid_neighborhood:
-                if not reversed:
-                    # Convert 2D indices to linear indices for original neighborhood
-                    neighborhood_linear_indices = [
-                        (y + offset[0]) * k_space_shape[1] + (x + offset[1])
-                        for offset in offsets
-                    ]
-                    linear_indices.append(neighborhood_linear_indices)
-                else:
-                    # Calculate mirrored neighborhood indices
-                    mirrored_indices = [
-                        (mirror_center_y * 2 - (y + offset[0])) * k_space_shape[1] +
-                        (mirror_center_x * 2 - (x + offset[1]))
-                        for offset in offsets
-                    ]
-                    linear_indices.append(mirrored_indices)
-
+            ]
+            if all(valid_neighborhood):
+                # Convert 2D indices to linear indices
+                neighborhood_linear_indices = [
+                    (y + offset[0]) * k_space_shape[1] + (x + offset[1])
+                    for offset in offsets
+                ]
+                linear_indices.append(neighborhood_linear_indices)
     return torch.tensor(linear_indices)
 
 
