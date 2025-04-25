@@ -12,6 +12,9 @@ rank = 20;
 % s - matrix
 s_matrix = s_operator(kData, N1, N2, Nc, R);
 
+% c - matrix
+c_matrix = c_operator(kData, N1, N2, Nc, R);
+
 % eigenvalue decomposition
 [U,E] = eig(s_matrix*s_matrix');
 [~,idx] = sort(abs(diag(E)),'descend');
@@ -44,7 +47,7 @@ filtfilt(ind,:,:) = reshape(permute(nss_c,[2,1]),[fltlen,Nc,numflt]);
 filtfilt = reshape(filtfilt,(2*R+1),(2*R+1),Nc,numflt);
 
 output_path = fullfile(output_dir, 'matlab_loraks_nmm.mat');
-save(output_path, 'filtfilt', 'nmm', 'nss_c', 's_matrix', 'U');
+save(output_path, 'kData', 'filtfilt', 'nmm', 'nss_c', 'c_matrix', 's_matrix', 'U');
 
 
 % s - operator
@@ -81,8 +84,36 @@ function op = s_operator(x, N1, N2, Nc, R)
     op = reshape(result, patchSize*Nc*2,(N1-2*R-even(N1))*(N2-2*R-even(N2))*2);
 end
 
+function op = c_operator(x, N1, N2, Nc, R)
+    x = reshape(x,N1*N2,Nc);
+
+    [in1,in2] = meshgrid(-R:R,-R:R);
+    i = find(in1.^2+in2.^2<=R^2);
+
+    in1 = in1(i)';
+    in2 = in2(i)';
+
+    patchSize = numel(in1);
+
+    op = zeros(patchSize*Nc,(N1-2*R-even(N1))*(N2-2*R-even(N2)),'like',x);
+
+    k = 0;
+    for i = R+1+even(N1):N1-R
+        for j = R+1+even(N2):N2-R
+            k = k+1;
+            ind = sub2ind([N1,N2],i+in1,j+in2);
+            op(:,k) = vect(x(ind,:));
+        end
+    end
+end
+
+
 function result = even(int)
 result = not(rem(int,2));
+end
+
+function out = vect( in )
+out = in(:);
 end
 
 end
