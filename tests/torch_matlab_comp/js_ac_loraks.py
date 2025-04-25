@@ -59,6 +59,37 @@ def get_indices(k_space_shape: tuple, nb_radius: int, reversed: bool = False):
     # Calculate offsets relative to the center
     offsets = neighborhood_indices - nb_radius
 
+    y, x = torch.meshgrid(torch.arange(k_space_shape[-2]), torch.arange(k_space_shape[-1]))
+
+    yx = torch.concatenate((y.unsqueeze(-1), x.unsqueeze(-1)), dim=-1)
+    yx = torch.reshape(yx, (-1, 2))
+
+    yxnb = yx.unsqueeze(0) + offsets.unsqueeze(1)
+    idx = torch.all(
+        (yxnb >= torch.tensor([1 - s % 2 for s in k_space_shape[:2]])) &
+        (yxnb < torch.tensor(k_space_shape[:2])),
+        dim=(0, 2)
+    )
+
+    if reversed:
+        yxnb = torch.tensor(k_space_shape[:2]).unsqueeze(0).unsqueeze(1) - yx.unsqueeze(0) + offsets.unsqueeze(1)
+    else:
+        yxnb = yx.unsqueeze(0) + offsets.unsqueeze(1)
+
+    yxnb = yxnb[:, idx]
+    # convert to linear indices
+    neighborhood_linear_indices = yxnb[..., 0] * k_space_shape[1] + yxnb[..., 1]
+    return neighborhood_linear_indices
+
+
+def get_indices_arxv(k_space_shape: tuple, nb_radius: int, reversed: bool = False):
+
+    # want a circular neighborhood radius and convert to linear indices
+    neighborhood_indices = get_circular_nb_indices(nb_radius=nb_radius)
+
+    # Calculate offsets relative to the center
+    offsets = neighborhood_indices - nb_radius
+
     # Function to check if an index is within the k-space shape
     def is_valid_index(center, offset):
         new_idx = center + offset
@@ -240,6 +271,7 @@ def zero_phase_filter(v: torch.Tensor, nb_patch_side_length: int, matrix_type: s
         dim=(-2, -1)
     )
     return patch
+
 def v_pad(v_patch: torch.Tensor, nx : int, ny: int, nb_patch_side_length: int):
     # assumed dims of v_patch [px, py, nce, nce]
     pad_x = nx - nb_patch_side_length
