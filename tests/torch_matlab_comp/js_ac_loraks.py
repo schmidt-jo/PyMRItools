@@ -137,17 +137,26 @@ def new_matlike_s_operator_rev(k_space: torch.Tensor, indices: torch.Tensor, ind
     return s.view(-1, s.shape[-1])
 
 
-def plot_matrices(matrices: list | torch.Tensor, name: str):
+def plot_matrices(matrices: list | torch.Tensor, name: str, data_names: list | str = ""):
     if isinstance(matrices, torch.Tensor):
         matrices = [matrices]
+    use_names = True
+    if isinstance(data_names, str):
+        if data_names:
+            data_names = [data_names]
+        else:
+            use_names = False
     if matrices[0].shape.__len__() < 3:
         cols = 1
     elif matrices[0].shape.__len__() > 3:
         cols = matrices[0].shape[-3]
     else:
         cols = matrices[0].shape[0]
-
-    fig = psub.make_subplots(rows=len(matrices), cols=cols)
+    fig = psub.make_subplots(
+        rows=len(matrices),
+        cols=cols,
+        row_titles=data_names if use_names else [""]*len(matrices),
+    )
     for i, d in enumerate(matrices):
         while d.shape.__len__() < 3:
             d = d.unsqueeze(0)
@@ -158,6 +167,7 @@ def plot_matrices(matrices: list | torch.Tensor, name: str):
                 go.Heatmap(z=torch.abs(m), showscale=False),
                 row=i + 1, col=c + 1
             )
+    fig.update_layout(title=name)
     fname = os.path.join(get_test_result_output_dir(test_nullspace_extraction), name)
     print(f"Saving {fname}.html")
     fig.write_html(f"{fname}.html")
@@ -168,14 +178,15 @@ def test_nullspace_extraction():
     torch.manual_seed(10)
     nx = 40
     ny = 30
+    nc = 2
 
     rank = 20
     r = 3
 
     # create k-space
     k_data = (
-            torch.randn((1, ny, nx), dtype=torch.complex128) +
-            torch.linspace(1, 20, ny*nx).reshape(1, ny, nx).to(dtype=torch.complex128)
+            torch.randn((nc, ny, nx), dtype=torch.complex128) +
+            torch.linspace(1, 20, nc*ny*nx).reshape(nc, ny, nx).to(dtype=torch.complex128)
     )
 
     print("\nMatlab subpprocessing")
@@ -195,15 +206,15 @@ def test_nullspace_extraction():
     )
 
     # 3. Call MATLAB to perform eigenvalue decomposition
-    # matlab_output_path = perform_nullspace_extraction(matlab_input_path, output_dir)
-    matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_nullspace_extraction/matlab_loraks_nmm.mat"
+    matlab_output_path = perform_nullspace_extraction(matlab_input_path, output_dir)
+    # matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_nullspace_extraction/matlab_loraks_nmm.mat"
 
     # 4. Load mat file
     mat = loadmat(matlab_output_path)
 
     print("\nK Space Input")
-    mat_k_data = torch.from_numpy(mat["kData"]).to(dtype=k_data.dtype)
-    plot_matrices([torch.squeeze(k_data), mat_k_data], name="01_k-space")
+    mat_k_data = torch.from_numpy(mat["kData"]).to(dtype=k_data.dtype).permute(2, 0, 1)
+    plot_matrices([torch.squeeze(k_data), mat_k_data], data_names=["torch", "matlab"], name="01_k-space")
     check_matrices(k_data, mat_k_data, name="Input K Space")
 
     print("\nBuild Indices")
@@ -219,17 +230,31 @@ def test_nullspace_extraction():
 
     print("\nBuild C Matrix")
     # build c matrix
-    c_matrix = k_data.view(*k_data.shape[:-2], -1)[:, indices].view(indices.shape)
+    c_matrix = torch.reshape(k_data.view(*k_data.shape[:-2], -1)[:, indices], (-1, indices.shape[-1]))
     c_matrix_sq = k_data.view(-1)[indices_sq].view(matrix_shape_sq).mT
     # get matlab matrix
     mat_c_matrix = torch.from_numpy(mat["c_matrix"]).to(dtype=c_matrix.dtype)
-    plot_matrices([c_matrix, c_matrix_sq, mat_c_matrix], "02_c-matrix")
+    plot_matrices(
+        [c_matrix, c_matrix_sq, mat_c_matrix],
+        data_names=["torch", "torch squared patches", "matlab"],
+        name="02_c-matrix"
+    )
     check_matrices(c_matrix, mat_c_matrix, name="C-Matrix")
 
     # test mirroring
-    c_matrix_flipped_indexing = k_data.view(*k_data.shape[:-2], -1)[:, indices_rev].view(indices.shape)
-    c_matrix_flipped_k = torch.flip(k_data, dims=(-2, -1)).view(*k_data.shape[:-2], -1)[:, indices].view(indices.shape)
-    plot_matrices([c_matrix_flipped_indexing, c_matrix_flipped_k], "02_c-matrix_mirrored_idx")
+    c_matrix_flipped_indexing = torch.reshape(
+        k_data.view(*k_data.shape[:-2], -1)[:, indices_rev],
+        (-1, indices.shape[-1])
+    )
+    c_matrix_flipped_k = torch.reshape(
+        torch.flip(k_data, dims=(-2, -1)).view(*k_data.shape[:-2], -1)[:, indices],
+        (-1, indices.shape[-1])
+    )
+    plot_matrices(
+        [c_matrix_flipped_indexing, c_matrix_flipped_k],
+        data_names=["flipped indices", "flipped k -space"],
+        name="02_c-matrix_mirrored_idx"
+    )
 
     print("\nBuild S-Matrix")
     # build s matrix
@@ -241,7 +266,11 @@ def test_nullspace_extraction():
     )
     # get matlab matrix
     mat_s_matrix = torch.from_numpy(mat["s_matrix"]).to(dtype=s_matrix.dtype)
-    plot_matrices([s_matrix, s_matrix_rev, mat_s_matrix], "03_s-matrix")
+    plot_matrices(
+        [s_matrix, s_matrix_rev, mat_s_matrix],
+        data_names=["torch flipped k", "torch reversed indexing", "matlab"],
+        name="03_s-matrix"
+    )
     check_matrices(s_matrix_rev, mat_s_matrix, name="S-Matrices")
 
     print("\nEigenvalue decomposition")
@@ -253,14 +282,22 @@ def test_nullspace_extraction():
 
     um = e_vecs[:, idx]
     mat_um = torch.from_numpy(mat["U"]).to(dtype=um.dtype)
-    plot_matrices([um, mat_um], "04-um")
+    plot_matrices(
+        [um, mat_um],
+        data_names=["torch", "matlab"],
+        name="04-um"
+    )
     check_matrices(torch.abs(um), torch.abs(mat_um), name="abs Eigenvectors")
     check_matrices(um, mat_um, name="Eigenvectors")
 
     print("\nBuild Nullspace")
     nmm = um[:, rank:].mH
     mat_nmm = torch.from_numpy(mat["nmm"]).to(dtype=um.dtype)
-    plot_matrices([nmm, mat_nmm], "05-nmm")
+    plot_matrices(
+        [nmm, mat_nmm],
+        data_names=["torch", "matlab"],
+        name="05-nmm"
+    )
     check_matrices(nmm, mat_nmm, name="Nullspace")
 
     print("\nComplexify Nullspace")
@@ -269,7 +306,11 @@ def test_nullspace_extraction():
     nss_c = nss_c[:, ::2] + 1j * nss_c[:, 1::2]
     nss_c = torch.reshape(nss_c, (nfilt, -1))
     mat_nss_c = torch.from_numpy(mat["nss_c"]).to(dtype=nss_c.dtype)
-    plot_matrices([nss_c, mat_nss_c], "06-nss_c")
+    plot_matrices(
+        [nss_c, mat_nss_c],
+        data_names=["torch", "matlab"],
+        name="06-nss_c"
+    )
     check_matrices(nss_c, mat_nss_c, name="Complex Nullspace")
 
 
