@@ -49,8 +49,13 @@ v_patch = reshape(v_patch,(2*R+1),(2*R+1),Nc,numflt);
 vs_patch = filtfilt_patch(nss_c, "S", N1, N2, Nc, R);
 vc_patch = filtfilt_patch(nss_c, "C", N1, N2, Nc, R);
 
-vs = filtfilt_nic(vs_patch, "S", N1, N2, R);
-vc = filtfilt_nic(vc_patch, "C", N1, N2, R);
+vs_pad = padarray(vs_patch, [N1-1-2*R N2-1-2*R],'post');
+vs_shift = circshift(vs_pad,[-4*R-rem(N1,2) -4*R-rem(N2,2)]);
+vs = fft2(vs_shift);
+
+vc_pad = padarray(vc_patch, [N1-1-2*R N2-1-2*R], 'post');
+vc_shift = circshift(vc_pad,[-2*R -2*R]);
+vc = fft2(vc_shift);
 
 data = kData(:);
 
@@ -67,13 +72,16 @@ i_vs_k = i_vs_k(1:N1, 1:N2, :, :);
 i_vc_k = ifft2(vc_k);
 i_vc_k = i_vc_k(1:N1, 1:N2, :, :);
 
+m = 2 * (i_vc_k - i_vs_k);
+
 output_path = fullfile(output_dir, 'matlab_ac_loraks.mat');
 save(output_path, ...
     'kData', 'v_patch', 'nmm', 'nss_c', ...
     'c_matrix', 's_matrix', ...
     'U', 'vs', 'vc', 'vs_patch', 'vc_patch', ...
+    'vc_pad', 'vc_shift', 'vs_pad', 'vs_shift', ...
     'pad_k', 'fft_k', 'vs_k', 'vc_k', ...
-    'i_vs_k', 'i_vc_k' ...
+    'i_vs_k', 'i_vc_k', 'm' ...
     );
 
 % s - operator

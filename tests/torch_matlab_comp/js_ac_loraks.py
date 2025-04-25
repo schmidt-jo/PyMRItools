@@ -1,6 +1,7 @@
 import os
 
 import torch
+from torch.nn.functional import pad
 from scipy.io import loadmat, savemat
 from tests.utils import get_test_result_output_dir
 
@@ -233,17 +234,44 @@ def zero_phase_filter(v: torch.Tensor, nb_patch_side_length: int, matrix_type: s
         )
     )
 
-    # Reshape for multiplication and sum
-    ccfilt = ccfilt.unsqueeze(1)
-    fffilt = fffilt.unsqueeze(2)
-
     # Compute patch via inverse FFT of element-wise multiplication and sum
     patch = torch.fft.ifft2(
-        torch.sum(ccfilt * fffilt, dim=0),
+        torch.sum(ccfilt.unsqueeze(2) * fffilt.unsqueeze(1), dim=0),
         dim=(-2, -1)
     )
     return patch
+def v_pad(v_patch: torch.Tensor, nx : int, ny: int, nb_patch_side_length: int):
+    # assumed dims of v_patch [px, py, nce, nce]
+    pad_x = nx - nb_patch_side_length
+    pad_y = ny - nb_patch_side_length
+    return pad(
+        v_patch,
+        (
+            0, pad_x,
+            0, pad_y
+        ),
+        mode='constant', value=0.0
+    )
 
+def v_shift(v_pad: torch.Tensor, nx : int, ny: int, nb_patch_side_length: int, matrix_type: str = "S"):
+    if matrix_type == 'S':
+        return torch.roll(
+            v_pad,
+            dims=(-2, -1),
+            shifts=(
+                -2 * nb_patch_side_length + 2 - ny % 2,
+                -2 * nb_patch_side_length + 2 - nx % 2
+            )
+        )
+    else:
+        return torch.roll(
+            v_pad,
+            dims=(-2, -1),
+            shifts=(
+                - nb_patch_side_length + 1,
+                - nb_patch_side_length + 1
+            )
+        )
 
 def test_ac_loraks_vs_matlab():
     print("\nK Space creation")
@@ -254,6 +282,8 @@ def test_ac_loraks_vs_matlab():
 
     rank = 20
     r = 3
+    # side length for squared patch
+    nb_patch_side_length = 2 * r + 1
 
     # create k-space
     k_data = (
@@ -278,8 +308,8 @@ def test_ac_loraks_vs_matlab():
     )
 
     # 3. Call MATLAB to perform eigenvalue decomposition
-    matlab_output_path = perform_matlab_computations(matlab_input_path, output_dir)
-    # matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_nullspace_extraction/matlab_ac_loraks.mat"
+    # matlab_output_path = perform_matlab_computations(matlab_input_path, output_dir)
+    matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_ac_loraks_vs_matlab/matlab_ac_loraks.mat"
 
     # 4. Load mat file
     mat = loadmat(matlab_output_path)
@@ -398,7 +428,7 @@ def test_ac_loraks_vs_matlab():
     check_matrices(v_patch, mat_v_patch, name="Filtfilt")
 
     print("\nPrep 0 phase filter")
-    vs_patch = zero_phase_filter(v_patch, nb_patch_side_length=2*r+1, matrix_type="S")
+    vs_patch = zero_phase_filter(v_patch.clone(), nb_patch_side_length=nb_patch_side_length, matrix_type="S")
     mat_vs_patch = torch.from_numpy(mat["vs_patch"]).to(dtype=vs_patch.dtype).permute(3, 2, 0, 1)
     plot_matrices(
         [vs_patch, mat_vs_patch],
@@ -407,14 +437,103 @@ def test_ac_loraks_vs_matlab():
     )
     check_matrices(vs_patch, mat_vs_patch, name="VS Patch")
 
-    vc_patch = zero_phase_filter(v_patch, nb_patch_side_length=2*r+1, matrix_type="C")
+    vc_patch = zero_phase_filter(v_patch.clone(), nb_patch_side_length=nb_patch_side_length, matrix_type="C")
     mat_vc_patch = torch.from_numpy(mat["vc_patch"]).to(dtype=vc_patch.dtype).permute(3, 2, 0, 1)
     plot_matrices(
         [vc_patch, mat_vc_patch],
         data_names=["torch", "matlab"],
-        name="08-vc patch"
+        name=f"08-vc patch"
     )
     check_matrices(vc_patch, mat_vc_patch, name="VC Patch")
+
+    print(f"\nPrep filter convolutions")
+    vs_pad_shift = v_shift(
+        v_pad(
+            vs_patch, nx=nx, ny=ny, nb_patch_side_length=nb_patch_side_length
+        ),
+        nx=nx, ny=ny, nb_patch_side_length=nb_patch_side_length, matrix_type="S"
+    )
+    vs = torch.fft.fft2(vs_pad_shift, dim=(-2, -1))
+    mat_vs = torch.from_numpy(mat["vs"]).to(dtype=vs.dtype).permute(3, 2, 0, 1)
+    plot_matrices(
+        [vs, mat_vs],
+        data_names=["torch", "matlab"],
+        name="09-vs"
+    )
+    check_matrices(vs, mat_vs, name="VS")
+
+    vc_pad_shift = v_shift(
+        v_pad(
+            vc_patch, nx=nx, ny=ny, nb_patch_side_length=nb_patch_side_length
+        ),
+        nx=nx, ny=ny, nb_patch_side_length=nb_patch_side_length, matrix_type="C"
+    )
+    vc = torch.fft.fft2(vc_pad_shift)
+    mat_vc = torch.from_numpy(mat["vc"]).to(dtype=vc.dtype).permute(3, 2, 0, 1)
+    plot_matrices(
+        [vc, mat_vc],
+        data_names=["torch", "matlab"],
+        name="09-vc"
+    )
+    check_matrices(vc, mat_vc, name="VC")
+
+    print("\nPrep k-space")
+    pad_k = pad(k_data, (0, nb_patch_side_length - 1, 0, nb_patch_side_length - 1), mode="constant", value=0.0)
+    fft_k = torch.fft.fft2(pad_k, dim=(-2, -1))
+    mat_fft_k = torch.from_numpy(mat["fft_k"]).permute(2, 0, 1).to(dtype=fft_k.dtype)
+    plot_matrices(
+        [fft_k, mat_fft_k],
+        data_names=["torch", "matlab"],
+        name="10-fft-k"
+    )
+    check_matrices(fft_k, mat_fft_k, name="FFT K")
+
+    print("\nCompute convolutions")
+    # dims [nx + nb - 1, ny + nb - 1, nce]
+    mv_c = torch.sum(vc * fft_k.unsqueeze(0), dim=1)
+    mat_mv_c = torch.squeeze(torch.from_numpy(mat["vc_k"])).to(dtype=mv_c.dtype).permute(2, 0, 1)
+    plot_matrices(
+        [mv_c, mat_mv_c],
+        data_names=["torch", "matlab"],
+        name="11-mvc-k"
+    )
+
+    mv_s = torch.sum(vs * torch.conj(fft_k).unsqueeze(0), dim=1)
+    mat_mv_s = torch.squeeze(torch.from_numpy(mat["vs_k"])).to(dtype=mv_c.dtype).permute(2, 0, 1)
+    plot_matrices(
+        [mv_s, mat_mv_s],
+        data_names=["torch", "matlab"],
+        name="11-mvs-k"
+    )
+
+    imv_c = torch.fft.ifft2(mv_c, dim=(-2, -1))[..., :ny, :nx]
+    mat_imv_c = torch.squeeze(torch.from_numpy(mat["i_vc_k"])).to(dtype=imv_c.dtype).permute(2, 0, 1)
+    plot_matrices(
+        [imv_c, mat_imv_c],
+        data_names=["torch", "matlab"],
+        name="12-imvc-k"
+    )
+    check_matrices(imv_c, mat_imv_c, name="IMVC K")
+
+    imv_s = torch.fft.ifft2(mv_s, dim=(-2, -1))[..., :ny, :nx]
+    mat_imv_s = torch.squeeze(torch.from_numpy(mat["i_vs_k"])).to(dtype=imv_c.dtype).permute(2, 0, 1)
+    plot_matrices(
+        [imv_s, mat_imv_s],
+        data_names=["torch", "matlab"],
+        name="12-imvs-k"
+    )
+    check_matrices(imv_s, mat_imv_s, name="IMVS K")
+
+    print("\nResults")
+    m = 2 * (imv_c - imv_s)
+    mat_m = torch.squeeze(torch.from_numpy(mat["m"])).to(dtype=m.dtype).permute(2, 0, 1)
+    plot_matrices(
+        [m, mat_m],
+        data_names=["torch", "matlab"],
+        name="13-m"
+    )
+    check_matrices(m, mat_m, name="M")
+
 
 
 
