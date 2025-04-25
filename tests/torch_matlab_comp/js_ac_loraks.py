@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 
 
-def perform_nullspace_extraction(input_matrix_path, output_dir):
+def perform_matlab_computations(input_matrix_path, output_dir):
     """
     Perform eigenvalue decomposition using MATLAB.
 
@@ -34,11 +34,11 @@ def perform_nullspace_extraction(input_matrix_path, output_dir):
     run_matlab_script("ac_loraks", script_args)
 
     # Return the path to the output file
-    return os.path.join(output_dir, "matlab_loraks_nmm.mat")
+    return os.path.join(output_dir, "matlab_ac_loraks.mat")
 
 
-def get_indices(k_space_shape: tuple, nb_radius: int, reversed: bool = False):
-    # want a circular neighborhood radius and convert to linear indices
+def get_circular_nb_indices(nb_radius):
+    # want a circular neighborhood, i.e. find all indices within a radius
     nb_x, nb_y = torch.meshgrid(
         torch.arange(-nb_radius, nb_radius + 1),
         torch.arange(-nb_radius, nb_radius + 1),
@@ -47,7 +47,14 @@ def get_indices(k_space_shape: tuple, nb_radius: int, reversed: bool = False):
     # Create a mask for the circular neighborhood
     nb_r = nb_x ** 2 + nb_y ** 2 <= nb_radius ** 2
     # Get the indices of the circular neighborhood
-    neighborhood_indices = torch.nonzero(nb_r).squeeze()
+    return torch.nonzero(nb_r).squeeze()
+
+
+def get_indices(k_space_shape: tuple, nb_radius: int, reversed: bool = False):
+
+    # want a circular neighborhood radius and convert to linear indices
+    neighborhood_indices = get_circular_nb_indices(nb_radius=nb_radius)
+
     # Calculate offsets relative to the center
     offsets = neighborhood_indices - nb_radius
 
@@ -168,12 +175,77 @@ def plot_matrices(matrices: list | torch.Tensor, name: str, data_names: list | s
                 row=i + 1, col=c + 1
             )
     fig.update_layout(title=name)
-    fname = os.path.join(get_test_result_output_dir(test_nullspace_extraction), name)
+    fname = os.path.join(get_test_result_output_dir(test_ac_loraks_vs_matlab), name)
     print(f"Saving {fname}.html")
     fig.write_html(f"{fname}.html")
 
 
-def test_nullspace_extraction():
+def complex_subspace_representation(v: torch.Tensor, nb_size: int):
+    nfilt, filt_size = v.shape
+    nss_c = torch.reshape(v, (nfilt, -1, nb_size))
+    nss_c = nss_c[:, ::2] + 1j * nss_c[:, 1::2]
+    return torch.reshape(nss_c, (nfilt, -1))
+
+
+def embed_circular_patch(v: torch.Tensor, nb_radius: int):
+    nfilt, filt_size = v.shape
+
+    # get indices
+    circular_nb_indices = get_circular_nb_indices(nb_radius=nb_radius)
+    # find neighborhood size
+    nb_size = circular_nb_indices.shape[0]
+
+    # build squared patch
+    v = torch.reshape(v, (nfilt, -1, nb_size))
+    nc = v.shape[1]
+
+    v_patch = torch.zeros((nfilt, nc, 2 * nb_radius + 1, 2 * nb_radius + 1), dtype=v.dtype)
+    v_patch[:, :, circular_nb_indices[:, 0], circular_nb_indices[:, 1]] = v
+
+    return v_patch
+
+
+def zero_phase_filter(v: torch.Tensor, nb_patch_side_length: int, matrix_type: str = "S"):
+    # Conjugate of filters
+    cfilt = torch.conj(v)
+
+    # Determine ffilt based on opt
+    if matrix_type == 'S':  # for S matrix
+        ffilt = torch.conj(v)
+    else:  # for C matrix
+        ffilt = torch.flip(v, dims=(-2, -1))
+
+    # Perform 2D FFT
+    ccfilt = torch.fft.fft2(
+        cfilt,
+        dim=(-2, -1),
+        s=(
+            2 * nb_patch_side_length - 1,
+            2 * nb_patch_side_length - 1
+        )
+    )
+    fffilt = torch.fft.fft2(
+        ffilt,
+        dim=(-2, -1),
+        s=(
+            2 * nb_patch_side_length - 1,
+            2 * nb_patch_side_length - 1
+        )
+    )
+
+    # Reshape for multiplication and sum
+    ccfilt = ccfilt.unsqueeze(1)
+    fffilt = fffilt.unsqueeze(2)
+
+    # Compute patch via inverse FFT of element-wise multiplication and sum
+    patch = torch.fft.ifft2(
+        torch.sum(ccfilt * fffilt, dim=0),
+        dim=(-2, -1)
+    )
+    return patch
+
+
+def test_ac_loraks_vs_matlab():
     print("\nK Space creation")
     torch.manual_seed(10)
     nx = 40
@@ -192,7 +264,7 @@ def test_nullspace_extraction():
     print("\nMatlab subpprocessing")
 
     # 2. Create the output directory
-    output_dir = get_test_result_output_dir("test_nullspace_extraction")
+    output_dir = get_test_result_output_dir(test_ac_loraks_vs_matlab)
 
     # MATLAB format (.mat)
     matlab_input_path = os.path.join(output_dir, "input_data.mat")
@@ -206,8 +278,8 @@ def test_nullspace_extraction():
     )
 
     # 3. Call MATLAB to perform eigenvalue decomposition
-    matlab_output_path = perform_nullspace_extraction(matlab_input_path, output_dir)
-    # matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_nullspace_extraction/matlab_loraks_nmm.mat"
+    matlab_output_path = perform_matlab_computations(matlab_input_path, output_dir)
+    # matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_nullspace_extraction/matlab_ac_loraks.mat"
 
     # 4. Load mat file
     mat = loadmat(matlab_output_path)
@@ -301,10 +373,7 @@ def test_nullspace_extraction():
     check_matrices(nmm, mat_nmm, name="Nullspace")
 
     print("\nComplexify Nullspace")
-    nfilt, filt_size = nmm.shape
-    nss_c = torch.reshape(nmm, (nfilt, -1, nb_size))
-    nss_c = nss_c[:, ::2] + 1j * nss_c[:, 1::2]
-    nss_c = torch.reshape(nss_c, (nfilt, -1))
+    nss_c = complex_subspace_representation(nmm, nb_size=nb_size)
     mat_nss_c = torch.from_numpy(mat["nss_c"]).to(dtype=nss_c.dtype)
     plot_matrices(
         [nss_c, mat_nss_c],
@@ -312,5 +381,42 @@ def test_nullspace_extraction():
         name="06-nss_c"
     )
     check_matrices(nss_c, mat_nss_c, name="Complex Nullspace")
+
+    print("\nPrep 0 phase input")
+    v_patch = embed_circular_patch(nss_c, nb_radius=r)
+    mat_v_patch = torch.from_numpy(mat["v_patch"]).to(dtype=v_patch.dtype).permute(3, 2, 0, 1)
+    plot_matrices(
+        [v_patch, mat_v_patch],
+        data_names=["torch", "matlab"],
+        name="07-filtfilt"
+    )
+    plot_matrices(
+        [v_patch[:10, 0], mat_v_patch[:10, 0]],
+        data_names=["torch", "matlab"],
+        name="07-filtfilt_b"
+    )
+    check_matrices(v_patch, mat_v_patch, name="Filtfilt")
+
+    print("\nPrep 0 phase filter")
+    vs_patch = zero_phase_filter(v_patch, nb_patch_side_length=2*r+1, matrix_type="S")
+    mat_vs_patch = torch.from_numpy(mat["vs_patch"]).to(dtype=vs_patch.dtype).permute(3, 2, 0, 1)
+    plot_matrices(
+        [vs_patch, mat_vs_patch],
+        data_names=["torch", "matlab"],
+        name="08-vs patch"
+    )
+    check_matrices(vs_patch, mat_vs_patch, name="VS Patch")
+
+    vc_patch = zero_phase_filter(v_patch, nb_patch_side_length=2*r+1, matrix_type="C")
+    mat_vc_patch = torch.from_numpy(mat["vc_patch"]).to(dtype=vc_patch.dtype).permute(3, 2, 0, 1)
+    plot_matrices(
+        [vc_patch, mat_vc_patch],
+        data_names=["torch", "matlab"],
+        name="08-vc patch"
+    )
+    check_matrices(vc_patch, mat_vc_patch, name="VC Patch")
+
+
+
 
 

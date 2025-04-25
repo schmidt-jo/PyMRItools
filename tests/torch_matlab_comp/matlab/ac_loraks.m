@@ -42,13 +42,39 @@ in2 = in2(idx)';
 
 ind = sub2ind([2*R+1, 2*R+1],R+1+in1,R+1+in2);
 
-filtfilt = zeros([(2*R+1)*(2*R+1),Nc,numflt],'like',nss_c);
-filtfilt(ind,:,:) = reshape(permute(nss_c,[2,1]),[fltlen,Nc,numflt]);
-filtfilt = reshape(filtfilt,(2*R+1),(2*R+1),Nc,numflt);
+v_patch = zeros([(2*R+1)*(2*R+1),Nc,numflt],'like',nss_c);
+v_patch(ind,:,:) = reshape(permute(nss_c,[2,1]),[fltlen,Nc,numflt]);
+v_patch = reshape(v_patch,(2*R+1),(2*R+1),Nc,numflt);
 
-output_path = fullfile(output_dir, 'matlab_loraks_nmm.mat');
-save(output_path, 'kData', 'filtfilt', 'nmm', 'nss_c', 'c_matrix', 's_matrix', 'U');
+vs_patch = filtfilt_patch(nss_c, "S", N1, N2, Nc, R);
+vc_patch = filtfilt_patch(nss_c, "C", N1, N2, Nc, R);
 
+vs = filtfilt_nic(vs_patch, "S", N1, N2, R);
+vc = filtfilt_nic(vc_patch, "C", N1, N2, R);
+
+data = kData(:);
+
+pad_k = padarray(reshape(data,[N1 N2 Nc]),[2*R, 2*R], 'post');
+fft_k = fft2(pad_k);
+re_fft_k = repmat(fft_k,[1 1 1 Nc]);
+re_conj_fft_k = conj(re_fft_k);
+
+vs_k = sum(vs.*re_conj_fft_k, 3);
+vc_k = sum(vc.*re_fft_k, 3);
+
+i_vs_k = ifft2(vs_k);
+i_vs_k = i_vs_k(1:N1, 1:N2, :, :);
+i_vc_k = ifft2(vc_k);
+i_vc_k = i_vc_k(1:N1, 1:N2, :, :);
+
+output_path = fullfile(output_dir, 'matlab_ac_loraks.mat');
+save(output_path, ...
+    'kData', 'v_patch', 'nmm', 'nss_c', ...
+    'c_matrix', 's_matrix', ...
+    'U', 'vs', 'vc', 'vs_patch', 'vc_patch', ...
+    'pad_k', 'fft_k', 'vs_k', 'vc_k', ...
+    'i_vs_k', 'i_vc_k' ...
+    );
 
 % s - operator
 function op = s_operator(x, N1, N2, Nc, R)
@@ -84,6 +110,7 @@ function op = s_operator(x, N1, N2, Nc, R)
     op = reshape(result, patchSize*Nc*2,(N1-2*R-even(N1))*(N2-2*R-even(N2))*2);
 end
 
+% c-operator
 function op = c_operator(x, N1, N2, Nc, R)
     x = reshape(x,N1*N2,Nc);
 
@@ -107,6 +134,47 @@ function op = c_operator(x, N1, N2, Nc, R)
     end
 end
 
+% zero phase filter
+function patch = filtfilt_patch(ncc, opt, N1, N2, Nc, R)
+    % Fast computation of zero phase filtering (for alg=4)
+    fltlen = size(ncc,2)/Nc;    % filter length
+    numflt = size(ncc,1);       % number of filters
+
+    % LORAKS kernel is circular.
+    % Following indices account for circular elements in a square patch
+    [in1,in2] = meshgrid(-R:R,-R:R);
+    idx = find(in1.^2+in2.^2<=R^2);
+    in1 = in1(idx)';
+    in2 = in2(idx)';
+
+    ind = sub2ind([2*R+1, 2*R+1],R+1+in1,R+1+in2);
+
+    filtfilt = zeros([(2*R+1)*(2*R+1),Nc,numflt],'like',ncc);
+    filtfilt(ind,:,:) = reshape(permute(ncc,[2,1]),[fltlen,Nc,numflt]);
+    filtfilt = reshape(filtfilt,(2*R+1),(2*R+1),Nc,numflt);
+
+    cfilt = conj(filtfilt);
+
+    if opt == 'S'       % for S matrix
+        ffilt = conj(filtfilt);
+    else                % for C matrix
+        ffilt = flip(flip(filtfilt,1),2);
+    end
+
+    ccfilt = fft2(cfilt,4*R+1, 4*R+1);
+    fffilt = fft2(ffilt,4*R+1, 4*R+1);
+
+    patch = ifft2(sum(bsxfun(@times,permute(reshape(ccfilt,4*R+1,4*R+1,Nc,1,numflt),[1 2 4 3 5]) ...
+        , reshape(fffilt,4*R+1,4*R+1,Nc,1,numflt)),5));
+end
+
+function Nic = filtfilt_nic(patch, opt, N1, N2, R)
+    if opt == 'S'       % for S matrix
+        Nic = fft2(circshift(padarray(patch, [N1-1-2*R N2-1-2*R],'post'),[-4*R-rem(N1,2) -4*R-rem(N2,2)]));
+    else                % for C matrix
+        Nic = fft2(circshift(padarray(patch, [N1-1-2*R N2-1-2*R], 'post'),[-2*R -2*R]));
+    end
+end
 
 function result = even(int)
 result = not(rem(int,2));
