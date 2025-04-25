@@ -31,7 +31,7 @@ def perform_nullspace_extraction(input_matrix_path, output_dir):
     return os.path.join(output_dir, "matlab_loraks_nmm.mat")
 
 
-def get_indices(k_space_shape: tuple, nb_radius: int):
+def get_indices(k_space_shape: tuple, nb_radius: int, reversed: bool = False):
     # want a circular neighborhood radius and convert to linear indices
     nb_x, nb_y = torch.meshgrid(
         torch.arange(-nb_radius, nb_radius + 1),
@@ -51,10 +51,20 @@ def get_indices(k_space_shape: tuple, nb_radius: int):
     # Function to check if an index is within the k-space shape
     def is_valid_index(center, offset):
         new_idx = center + offset
-        return torch.all((new_idx >= 0) & (new_idx < torch.tensor(k_space_shape[:2])))
+        return torch.all(
+            (new_idx >= torch.tensor([1 - s % 2 for s in k_space_shape[:2]])) &
+            (new_idx < torch.tensor(k_space_shape[:2]))
+        )
 
     # Prepare to collect valid linear indices
     linear_indices = []
+
+    # Determine the mirroring center based on shape dimensions
+    if reversed:
+        # For odd dimensions, use the exact center
+        # For even dimensions, use the floor of the dimension divided by 2
+        mirror_center_y = (k_space_shape[0] - 1) // 2
+        mirror_center_x = (k_space_shape[1] - 1) // 2
 
     # Iterate through the k-space to find valid neighborhoods
     for y in range(k_space_shape[0]):
@@ -71,7 +81,17 @@ def get_indices(k_space_shape: tuple, nb_radius: int):
                     (y + offset[0]) * k_space_shape[1] + (x + offset[1])
                     for offset in offsets
                 ]
-                linear_indices.append(neighborhood_linear_indices)
+
+                if reversed:
+                    # Calculate mirrored neighborhood indices
+                    mirrored_indices = [
+                        (mirror_center_y * 2 - (y + offset[0])) * k_space_shape[1] +
+                        (mirror_center_x * 2 - (x + offset[1]))
+                        for offset in offsets
+                    ]
+                    linear_indices.append(mirrored_indices)
+                else:
+                    linear_indices.append(neighborhood_linear_indices)
 
     return torch.tensor(linear_indices)
 
