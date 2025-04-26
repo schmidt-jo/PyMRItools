@@ -83,20 +83,20 @@ ZD = @(x) padarray(reshape(x,[N1 N2 Nc]),[2*R, 2*R], 'post');
 ZD_H = @(x) x(1:N1,1:N2,:,:);
 
 S.type='()';
-S.subs{:} = find(~kMask(:));
+S.subs{:} = find(~mask(:));
 
 A = @(x) data(:) + vect(subsasgn(tmp,S,x));    % embedding missing data operator
 tmp = zeros([N1 N2 Nc],'like',kData);
 
-Nis = filtfilt(nss_c,'C',N1,N2,Nc,R);
-Nis2 = filtfilt(nss_c,'S',N1,N2,Nc,R);
+Nis = vc;
+Nis2 = vs;
 
 M = @(x) 2*subsref(ZD_H(ifft2(squeeze(sum(Nis.*repmat(fft2(ZD(subsasgn(tmp,S,x))),[1 1 1 Nc]),3)))),S) ...
     -2*subsref(ZD_H(ifft2(squeeze(sum(Nis2.*repmat(conj(fft2(ZD(subsasgn(tmp,S,x)))),[1 1 1 Nc]),3)))),S);
 b = -2*subsref(ZD_H(ifft2(squeeze(sum(Nis.*repmat(fft2(ZD(data(:))),[1 1 1 Nc]),3)))),S) ...
     +2*subsref(ZD_H(ifft2(squeeze(sum(Nis2.*repmat(conj(fft2(ZD(data(:)))),[1 1 1 Nc]),3)))),S);
 
-[z] = pcg(M, b, tol, max_iter);
+[z] = pcg(M, b, 1e-3, 20);
 z = A(z);
 
 output_path = fullfile(output_dir, 'matlab_ac_loraks.mat');
@@ -107,7 +107,7 @@ save(output_path, ...
     'vc_pad', 'vc_shift', 'vs_pad', 'vs_shift', ...
     'pad_k', 'fft_k', 'vs_k', 'vc_k', ...
     'i_vs_k', 'i_vc_k', 'm', ...
-    'Nis', 'Nis2', 'z'
+    'Nis', 'Nis2', 'z' ...
     );
 
 % s - operator
