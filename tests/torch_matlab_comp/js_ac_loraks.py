@@ -191,7 +191,7 @@ def get_ac_matrix(k_data):
 
     idx = (torch.sum(mask_p, dim=0) == nb_size) & (torch.sum(mask_f, dim=0) == nb_size)
     idx = torch.concatenate([idx, idx], dim=0)
-    ac_matrix = ac_matrix[:, idx]
+    ac_matrix[:, ~idx] = 0.0
     return ac_matrix
 
 def plot_matrices(matrices: list | torch.Tensor, name: str, data_names: list | str = ""):

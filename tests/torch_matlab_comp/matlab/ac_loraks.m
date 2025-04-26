@@ -78,6 +78,27 @@ i_vc_k = i_vc_k(1:N1, 1:N2, :, :);
 
 m = 2 * (i_vc_k - i_vs_k);
 
+% define operators
+ZD = @(x) padarray(reshape(x,[N1 N2 Nc]),[2*R, 2*R], 'post');
+ZD_H = @(x) x(1:N1,1:N2,:,:);
+
+S.type='()';
+S.subs{:} = find(~kMask(:));
+
+A = @(x) data(:) + vect(subsasgn(tmp,S,x));    % embedding missing data operator
+tmp = zeros([N1 N2 Nc],'like',kData);
+
+Nis = filtfilt(nss_c,'C',N1,N2,Nc,R);
+Nis2 = filtfilt(nss_c,'S',N1,N2,Nc,R);
+
+M = @(x) 2*subsref(ZD_H(ifft2(squeeze(sum(Nis.*repmat(fft2(ZD(subsasgn(tmp,S,x))),[1 1 1 Nc]),3)))),S) ...
+    -2*subsref(ZD_H(ifft2(squeeze(sum(Nis2.*repmat(conj(fft2(ZD(subsasgn(tmp,S,x)))),[1 1 1 Nc]),3)))),S);
+b = -2*subsref(ZD_H(ifft2(squeeze(sum(Nis.*repmat(fft2(ZD(data(:))),[1 1 1 Nc]),3)))),S) ...
+    +2*subsref(ZD_H(ifft2(squeeze(sum(Nis2.*repmat(conj(fft2(ZD(data(:)))),[1 1 1 Nc]),3)))),S);
+
+[z] = pcg(M, b, tol, max_iter);
+z = A(z);
+
 output_path = fullfile(output_dir, 'matlab_ac_loraks.mat');
 save(output_path, ...
     'kData', 'v_patch', 'nmm', 'nss_c', ...
@@ -85,7 +106,8 @@ save(output_path, ...
     'U', 'vs', 'vc', 'vs_patch', 'vc_patch', ...
     'vc_pad', 'vc_shift', 'vs_pad', 'vs_shift', ...
     'pad_k', 'fft_k', 'vs_k', 'vc_k', ...
-    'i_vs_k', 'i_vc_k', 'm' ...
+    'i_vs_k', 'i_vc_k', 'm', ...
+    'Nis', 'Nis2', 'z'
     );
 
 % s - operator
@@ -202,7 +224,8 @@ function Mac = search_ACS(data, kMask, R)
     [N1, N2, Nc] = size(data);
 
     data = reshape(data,N1*N2,Nc);
-    mask = kMask(:,:,:);
+    % mask = kMask(:,:,:);
+    mask = reshape(kMask,N1*N2,Nc);
     [in1,in2] = meshgrid(-R:R,-R:R);
     i = find(in1.^2+in2.^2<=R^2);
 
@@ -219,7 +242,8 @@ function Mac = search_ACS(data, kMask, R)
             k = k+1;
             Ind = sub2ind([N1,N2],i+in1,j+in2);
             Indp = sub2ind([N1,N2],-i+in1+2*ceil((N1-1)/2)+2,-j+in2+2*ceil((N2-1)/2)+2);
-            if patchSize == sum(mask(Ind)) && patchSize == sum(mask(Indp))
+            if all(patchSize == sum(mask(Ind, :))) && all(patchSize == sum(mask(Indp, :)))
+            % if patchSize == sum(mask(Ind)) && patchSize == sum(mask(Indp))
                 tmp = data(Ind,:)-data(Indp,:);
                 Mac(:,1,:,k) = real(tmp);
                 Mac(:,2,:,k) = -imag(tmp);
