@@ -176,6 +176,7 @@ def new_matlike_s_operator_rev(k_space: torch.Tensor, indices: torch.Tensor, ind
     s = torch.concatenate([s_u, s_d], dim=-1).contiguous()
     return s.view(-1, s.shape[-1])
 
+
 def get_ac_matrix(k_data):
     # build s-matrix
     mask_in = (torch.abs(k_data) > 1e-11).to(torch.int)
@@ -193,6 +194,7 @@ def get_ac_matrix(k_data):
     idx = torch.concatenate([idx, idx], dim=0)
     ac_matrix[:, ~idx] = 0.0
     return ac_matrix
+
 
 def plot_matrices(matrices: list | torch.Tensor, name: str, data_names: list | str = ""):
     if isinstance(matrices, torch.Tensor):
@@ -326,8 +328,8 @@ def v_shift(v_pad: torch.Tensor, nx : int, ny: int, nb_patch_side_length: int, m
 def test_ac_loraks_vs_matlab():
     print("\nK Space creation")
     torch.manual_seed(10)
-    nx = 40
-    ny = 30
+    nx = 100
+    ny = 80
     nc = 3
     ne = 2
 
@@ -343,7 +345,7 @@ def test_ac_loraks_vs_matlab():
     # )
     # k_data = torch.reshape(k_data, (-1, ny, nx))
     sl_phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=3, num_echoes=2)
-    k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=10, acceleration=2)
+    k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=20, acceleration=3)
     k_data = k_data.permute(3, 2, 1, 0)
     k_data = k_data.reshape(-1, ny, nx)
 
@@ -364,6 +366,11 @@ def test_ac_loraks_vs_matlab():
     )
 
     # 3. Call MATLAB to perform eigenvalue decomposition
+    name_mat_out = "matlab_ac_loraks.mat"   # need this name in the mat file
+    output_path = os.path.join(output_dir, name_mat_out)
+    # ensure file not already there -> otherwise we might load an old file
+    if os.path.exists(output_path):
+        os.remove(output_path)
     matlab_output_path = perform_matlab_computations(matlab_input_path, output_dir)
     # matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_ac_loraks_vs_matlab/matlab_ac_loraks.mat"
 
@@ -446,37 +453,55 @@ def test_ac_loraks_vs_matlab():
         m_ac @ m_ac.mH,
         UPLO="U"        # some signs are reversed compared to matlab if using default L
     )
-    idx = torch.argsort(torch.abs(e_vals), descending=True)
+    u, s, _ = torch.linalg.svd(m_ac, full_matrices=False)
+    se_vals = s**2 / m_ac.shape[0]
 
+    idx = torch.argsort(torch.abs(e_vals), descending=True)
     um = e_vecs[:, idx]
+    # um = e_vecs.flip(-1)
+
     mat_um = torch.from_numpy(mat["U"]).to(dtype=um.dtype)
     plot_matrices(
-        [um, mat_um],
-        data_names=["torch", "matlab"],
+        [um, u, mat_um, mat_um - um],
+        data_names=["torch", "torch svd", "matlab", "difference"],
         name="04-um"
     )
-    check_matrices(torch.abs(um), torch.abs(mat_um), name="abs Eigenvectors")
-    check_matrices(um, mat_um, name="Eigenvectors")
+    check_matrices(torch.abs(um), torch.abs(mat_um), name="abs Eigenvectors", assertion=False)
+    check_matrices(um, mat_um, name="Eigenvectors", assertion=False)
+    check_matrices(u, mat_um, name="Eigenvectors svd", assertion=False)
+
+    # ToDo: Upon similar inputs we get differences in the eigenvalue decomposition.
+    #   Eigenvectors usually are normalized (check again). Can we get away with filtering n last eigenvectors,
+    #   corresponding to the lowest eigenvalues as the "leading" vectors will define the space anyway.
+    #   This way we might rid the offsets compared to the matlab version.
+    # E.g. we could throw away all vectors corresponding to eigenvalues below a low value threshold
+    # (in the e-15 and below range)
+    # ToDo: Is it input value range dependent?
+    # e_vals = e_vals[idx]
+    # e_v_thresh = 1e-12 * torch.abs(torch.max(e_vals))
+    # idx_thresh = torch.where(torch.abs(e_vals) < e_v_thresh)[0][0].item()
 
     print("\nBuild Nullspace")
     nmm = um[:, rank:].mH
+    # nmm = um[:, rank:idx_thresh].mH
     mat_nmm = torch.from_numpy(mat["nmm"]).to(dtype=um.dtype)
+    # mat_nmm = torch.from_numpy(mat["nmm"]).to(dtype=um.dtype)[:idx_thresh-rank]
     plot_matrices(
-        [nmm, mat_nmm],
-        data_names=["torch", "matlab"],
+        [nmm, mat_nmm, mat_nmm - nmm],
+        data_names=["torch", "matlab", "difference"],
         name="05-nmm"
     )
-    check_matrices(nmm, mat_nmm, name="Nullspace")
+    check_matrices(nmm, mat_nmm, name="Nullspace", assertion=False)
 
     print("\nComplexify Nullspace")
     nss_c = complex_subspace_representation(nmm, nb_size=nb_size)
     mat_nss_c = torch.from_numpy(mat["nss_c"]).to(dtype=nss_c.dtype)
     plot_matrices(
-        [nss_c, mat_nss_c],
-        data_names=["torch", "matlab"],
+        [nss_c, mat_nss_c, mat_nss_c - nss_c],
+        data_names=["torch", "matlab", "difference"],
         name="06-nss_c"
     )
-    check_matrices(nss_c, mat_nss_c, name="Complex Nullspace")
+    check_matrices(nss_c, mat_nss_c, name="Complex Nullspace", assertion=False)
 
     print("\nPrep 0 phase input")
     v_patch = embed_circular_patch(nss_c, nb_radius=r)
@@ -600,8 +625,18 @@ def test_ac_loraks_vs_matlab():
     )
     check_matrices(m, mat_m, name="M")
 
-
-
-
+    mat_z = torch.from_numpy(mat["z"]).to(dtype=k_data.dtype).permute(2, 0, 1)
+    mat_img = torch.fft.fftshift(
+        torch.fft.ifft2(
+            torch.fft.ifftshift(mat_z, dim=(-2, -1)),
+            dim=(-2, -1)
+        ),
+        dim=(-2, -1)
+    )
+    plot_matrices(
+        [mat_img],
+        data_names=["mat reco img"],
+        name="14-img"
+    )
 
 

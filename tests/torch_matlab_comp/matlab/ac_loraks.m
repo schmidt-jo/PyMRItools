@@ -85,8 +85,8 @@ ZD_H = @(x) x(1:N1,1:N2,:,:);
 S.type='()';
 S.subs{:} = find(~mask(:));
 
-A = @(x) data(:) + vect(subsasgn(tmp,S,x));    % embedding missing data operator
 tmp = zeros([N1 N2 Nc],'like',kData);
+A = @(x) data(:) + vect(subsasgn(tmp,S,x));    % embedding missing data operator
 
 Nis = vc;
 Nis2 = vs;
@@ -98,6 +98,7 @@ b = -2*subsref(ZD_H(ifft2(squeeze(sum(Nis.*repmat(fft2(ZD(data(:))),[1 1 1 Nc]),
 
 [z] = pcg(M, b, 1e-3, 20);
 z = A(z);
+z = reshape(z, [N1 N2 Nc]);
 
 output_path = fullfile(output_dir, 'matlab_ac_loraks.mat');
 save(output_path, ...
