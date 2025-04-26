@@ -176,6 +176,23 @@ def new_matlike_s_operator_rev(k_space: torch.Tensor, indices: torch.Tensor, ind
     s = torch.concatenate([s_u, s_d], dim=-1).contiguous()
     return s.view(-1, s.shape[-1])
 
+def get_ac_matrix(k_data):
+    # build s-matrix
+    mask_in = (torch.abs(k_data) > 1e-11).to(torch.int)
+
+    indices = get_indices(k_space_shape=k_data.shape[-2:], nb_radius=3, reversed=False)
+    indices_rev = get_indices(k_space_shape=k_data.shape[-2:], nb_radius=3, reversed=True)
+
+    nb_size = indices.shape[0] * k_data.shape[0]
+    ac_matrix = new_matlike_s_operator_rev(k_data, indices=indices, indices_rev=indices_rev, matrix_shape=indices.shape)
+
+    mask_p = torch.reshape(mask_in.view(*k_data.shape[:-2], -1)[:, indices], (-1, indices.shape[-1]))
+    mask_f = torch.reshape(mask_in.view(*k_data.shape[:-2], -1)[:, indices_rev], (-1, indices.shape[-1]))
+
+    idx = (torch.sum(mask_p, dim=0) == nb_size) & (torch.sum(mask_f, dim=0) == nb_size)
+    idx = torch.concatenate([idx, idx], dim=0)
+    ac_matrix = ac_matrix[:, idx]
+    return ac_matrix
 
 def plot_matrices(matrices: list | torch.Tensor, name: str, data_names: list | str = ""):
     if isinstance(matrices, torch.Tensor):
@@ -329,7 +346,6 @@ def test_ac_loraks_vs_matlab():
     k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=10, acceleration=2)
     k_data = k_data.permute(3, 2, 1, 0)
     k_data = k_data.reshape(-1, ny, nx)
-    mask = torch.abs(k_data) > 1e-10
 
     print("\nMatlab subpprocessing")
 
@@ -415,9 +431,19 @@ def test_ac_loraks_vs_matlab():
     )
     check_matrices(s_matrix_rev, mat_s_matrix, name="S-Matrices")
 
+    print("\nBuild AC Matrix")
+    m_ac = get_ac_matrix(k_data=k_data)
+    mat_m_ac = torch.from_numpy(mat["mac"]).to(dtype=m_ac.dtype)
+    plot_matrices(
+        [m_ac, mat_m_ac],
+        data_names=["torch", "matlab"],
+        name="04-mac"
+    )
+    check_matrices(m_ac, mat_m_ac, name="AC Matrix")
+
     print("\nEigenvalue decomposition")
     e_vals, e_vecs = torch.linalg.eigh(
-        s_matrix_rev @ s_matrix_rev.mH,
+        m_ac @ m_ac.mH,
         UPLO="U"        # some signs are reversed compared to matlab if using default L
     )
     idx = torch.argsort(torch.abs(e_vals), descending=True)

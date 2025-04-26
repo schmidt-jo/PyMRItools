@@ -2,6 +2,7 @@ function ac_loraks(input_path, output_dir)
 
 input_data = load(input_path);
 kData = input_data.k_data;
+mask = abs(kData) > 1e-10;
 
 % extract sizes
 [N1, N2, Nc] = size(kData);
@@ -15,8 +16,11 @@ s_matrix = s_operator(kData, N1, N2, Nc, R);
 % c - matrix
 c_matrix = c_operator(kData, N1, N2, Nc, R);
 
+% get autocalibration region
+mac = search_ACS(kData, mask, R);
+
 % eigenvalue decomposition
-[U,E] = eig(s_matrix*s_matrix');
+[U,E] = eig(mac*mac');
 [~,idx] = sort(abs(diag(E)),'descend');
 U = U(:,idx);
 
@@ -77,7 +81,7 @@ m = 2 * (i_vc_k - i_vs_k);
 output_path = fullfile(output_dir, 'matlab_ac_loraks.mat');
 save(output_path, ...
     'kData', 'v_patch', 'nmm', 'nss_c', ...
-    'c_matrix', 's_matrix', ...
+    'c_matrix', 's_matrix', 'mac', ...
     'U', 'vs', 'vc', 'vs_patch', 'vc_patch', ...
     'vc_pad', 'vc_shift', 'vs_pad', 'vs_shift', ...
     'pad_k', 'fft_k', 'vs_k', 'vc_k', ...
@@ -190,6 +194,56 @@ end
 
 function out = vect( in )
 out = in(:);
+end
+
+
+fffilt = fft2(ffilt,4*R+1, 4*R+1);
+
+patch = ifft2(sum(bsxfun(@times,permute(reshape(ccfilt,4*R+1,4*R+1,Nc,1,numflt),[1 2 4 3 5]) ...
+    , reshape(fffilt,4*R+1,4*R+1,Nc,1,numflt)),5));
+
+if opt == 'S'       % for S matrix
+    Nic = fft2(circshift(padarray(patch, [N1-1-2*R N2-1-2*R],'post'),[-4*R-rem(N1,2) -4*R-rem(N2,2)]));
+else                % for C matrix
+    Nic = fft2(circshift(padarray(patch, [N1-1-2*R N2-1-2*R], 'post'),[-2*R -2*R]));
+end
+end
+
+%%
+function Mac = search_ACS(data, kMask, R)
+% Mac: Matrix for calibration, constructed from ACS
+    [N1, N2, Nc] = size(data);
+
+    data = reshape(data,N1*N2,Nc);
+    mask = kMask(:,:,:);
+    [in1,in2] = meshgrid(-R:R,-R:R);
+    i = find(in1.^2+in2.^2<=R^2);
+
+    in1 = in1(i)';
+    in2 = in2(i)';
+
+    patchSize = numel(in1);
+
+    Mac = zeros(patchSize,2, Nc, (N1-2*R-even(N1))*(N2-2*R-even(N2)),2,'like',data);
+
+    k = 0;
+    for i = R+1+even(N1):N1-R
+        for j = R+1+even(N2):N2-R
+            k = k+1;
+            Ind = sub2ind([N1,N2],i+in1,j+in2);
+            Indp = sub2ind([N1,N2],-i+in1+2*ceil((N1-1)/2)+2,-j+in2+2*ceil((N2-1)/2)+2);
+            if patchSize == sum(mask(Ind)) && patchSize == sum(mask(Indp))
+                tmp = data(Ind,:)-data(Indp,:);
+                Mac(:,1,:,k) = real(tmp);
+                Mac(:,2,:,k) = -imag(tmp);
+
+                tmp = data(Ind,:)+data(Indp,:);
+                Mac(:,1,:,k,2) = imag(tmp);
+                Mac(:,2,:,k,2) = real(tmp);
+            end
+        end
+    end
+    Mac = reshape(Mac(:,:,:,1:k,:),patchSize*Nc*2,[]);
 end
 
 end
