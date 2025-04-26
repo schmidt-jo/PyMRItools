@@ -9,6 +9,7 @@ from tests.torch_matlab_comp.matlab_utils import run_matlab_script
 from tests.torch_matlab_comp.compare_matrices import check_matrices
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
+from pymritools.utils import Phantom
 
 import plotly.graph_objects as go
 import plotly.subplots as psub
@@ -310,7 +311,8 @@ def test_ac_loraks_vs_matlab():
     torch.manual_seed(10)
     nx = 40
     ny = 30
-    nc = 2
+    nc = 3
+    ne = 2
 
     rank = 20
     r = 3
@@ -318,10 +320,16 @@ def test_ac_loraks_vs_matlab():
     nb_patch_side_length = 2 * r + 1
 
     # create k-space
-    k_data = (
-            torch.randn((nc, ny, nx), dtype=torch.complex128) +
-            torch.linspace(1, 20, nc*ny*nx).reshape(nc, ny, nx).to(dtype=torch.complex128)
-    )
+    # k_data = (
+    #         torch.randn((ne, nc, ny, nx), dtype=torch.complex128) +
+    #         torch.linspace(1, 20, ne*nc*ny*nx).reshape(ne, nc, ny, nx).to(dtype=torch.complex128)
+    # )
+    # k_data = torch.reshape(k_data, (-1, ny, nx))
+    sl_phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=3, num_echoes=2)
+    k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=10, acceleration=2)
+    k_data = k_data.permute(3, 2, 1, 0)
+    k_data = k_data.reshape(-1, ny, nx)
+    mask = torch.abs(k_data) > 1e-10
 
     print("\nMatlab subpprocessing")
 
@@ -340,8 +348,8 @@ def test_ac_loraks_vs_matlab():
     )
 
     # 3. Call MATLAB to perform eigenvalue decomposition
-    # matlab_output_path = perform_matlab_computations(matlab_input_path, output_dir)
-    matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_ac_loraks_vs_matlab/matlab_ac_loraks.mat"
+    matlab_output_path = perform_matlab_computations(matlab_input_path, output_dir)
+    # matlab_output_path = "/data/pt_np-jschmidt/code/PyMRItools/test_output/test_ac_loraks_vs_matlab/matlab_ac_loraks.mat"
 
     # 4. Load mat file
     mat = loadmat(matlab_output_path)
