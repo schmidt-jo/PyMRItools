@@ -196,19 +196,6 @@ function out = vect( in )
 out = in(:);
 end
 
-
-fffilt = fft2(ffilt,4*R+1, 4*R+1);
-
-patch = ifft2(sum(bsxfun(@times,permute(reshape(ccfilt,4*R+1,4*R+1,Nc,1,numflt),[1 2 4 3 5]) ...
-    , reshape(fffilt,4*R+1,4*R+1,Nc,1,numflt)),5));
-
-if opt == 'S'       % for S matrix
-    Nic = fft2(circshift(padarray(patch, [N1-1-2*R N2-1-2*R],'post'),[-4*R-rem(N1,2) -4*R-rem(N2,2)]));
-else                % for C matrix
-    Nic = fft2(circshift(padarray(patch, [N1-1-2*R N2-1-2*R], 'post'),[-2*R -2*R]));
-end
-end
-
 %%
 function Mac = search_ACS(data, kMask, R)
 % Mac: Matrix for calibration, constructed from ACS
