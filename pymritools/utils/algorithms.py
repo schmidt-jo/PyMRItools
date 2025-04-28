@@ -56,7 +56,7 @@ def cgd(
             beta = rho / rho1
             p = z + beta * p
         q = func_operator(p)
-        pq = torch.sum(p.conj() * q)
+        pq = torch.abs(torch.sum(p.conj() * q))
         alpha = rho / pq
 
         x = x + alpha * p
