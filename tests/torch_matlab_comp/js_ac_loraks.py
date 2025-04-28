@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import torch
 from torch.nn.functional import pad
 from scipy.io import loadmat, savemat
@@ -9,7 +10,8 @@ from tests.torch_matlab_comp.matlab_utils import run_matlab_script
 from tests.torch_matlab_comp.compare_matrices import check_matrices
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.utils import Phantom
+from pymritools.utils import Phantom, ifft
+from pymritools.utils import cgd
 
 import plotly.graph_objects as go
 import plotly.subplots as psub
@@ -195,6 +197,39 @@ def get_ac_matrix(k_data):
     ac_matrix[:, ~idx] = 0.0
     return ac_matrix
 
+def _m_op_base(x: torch.Tensor, v_c: torch.Tensor, v_s: torch.Tensor, r: int, nx:int, ny: int):
+    loraks_neighborhood_side = 2*r + 1
+    # dims [nx, ny, nce]
+    pad_x = pad(
+        x,
+        (0, loraks_neighborhood_side - 1, 0, loraks_neighborhood_side - 1),
+        mode="constant", value=0.0
+    )
+    fft_x = torch.fft.fft2(pad_x, dim=(-2, -1))
+    # dims [nx + nb - 1, ny + nb - 1, nce]
+    mv_c = torch.sum(v_c * fft_x.unsqueeze(0), dim=1)
+    mv_s = torch.sum(v_s * torch.conj(fft_x).unsqueeze(0), dim=1)
+
+    imv_c = torch.fft.ifft2(mv_c, dim=(-2, -1))[..., :ny, :nx]
+    imv_s = torch.fft.ifft2(mv_s, dim=(-2, -1))[..., :ny, :nx]
+
+    return imv_c - imv_s
+
+
+def get_m_operator_fft(v_s: torch.Tensor, v_c: torch.Tensor, mask: torch.Tensor, r: int, nx: int, ny: int, nc: int):
+    def _m_op(x):
+            tmp = torch.zeros((nc, ny, nx), dtype=v_s.dtype)
+            tmp[~mask] = x
+            m = _m_op_base(tmp, v_c=v_c, v_s=v_s, r=r, nx=nx, ny=ny)
+            return 2 * m[~mask]
+    return _m_op
+
+
+def get_b_vector_fft(k: torch.Tensor, mask: torch.Tensor, v_s: torch.Tensor, v_c: torch.Tensor, r: int):
+    ny, nx = k.shape[-2:]
+    m = _m_op_base(k, v_c=v_c, v_s=v_s, r=r, nx=nx, ny=ny)
+    return - 2 * m[~mask]
+
 
 def plot_matrices(matrices: list | torch.Tensor, name: str, data_names: list | str = ""):
     if isinstance(matrices, torch.Tensor):
@@ -328,12 +363,12 @@ def v_shift(v_pad: torch.Tensor, nx : int, ny: int, nb_patch_side_length: int, m
 def test_ac_loraks_vs_matlab():
     print("\nK Space creation")
     torch.manual_seed(10)
-    nx = 100
-    ny = 80
+    nx = 156
+    ny = 128
     nc = 3
     ne = 2
 
-    rank = 20
+    rank = 50
     r = 3
     # side length for squared patch
     nb_patch_side_length = 2 * r + 1
@@ -348,7 +383,9 @@ def test_ac_loraks_vs_matlab():
     k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=20, acceleration=3)
     k_data = k_data.permute(3, 2, 1, 0)
     k_data = k_data.reshape(-1, ny, nx)
-
+    input_img = ifft(k_data)
+    input_k = k_data.clone()
+    mask = torch.abs(k_data) > 1e-10
     print("\nMatlab subpprocessing")
 
     # 2. Create the output directory
@@ -368,7 +405,7 @@ def test_ac_loraks_vs_matlab():
     # 3. Call MATLAB to perform eigenvalue decomposition
     name_mat_out = "matlab_ac_loraks.mat"   # need this name in the mat file
     output_path = os.path.join(output_dir, name_mat_out)
-    # ensure file not already there -> otherwise we might load an old file
+    # ensure file not already there -> otherwise we might load an old file and dont catch matlab execution failure
     if os.path.exists(output_path):
         os.remove(output_path)
     matlab_output_path = perform_matlab_computations(matlab_input_path, output_dir)
@@ -449,12 +486,19 @@ def test_ac_loraks_vs_matlab():
     check_matrices(m_ac, mat_m_ac, name="AC Matrix")
 
     print("\nEigenvalue decomposition")
-    e_vals, e_vecs = torch.linalg.eigh(
-        m_ac @ m_ac.mH,
-        UPLO="U"        # some signs are reversed compared to matlab if using default L
-    )
-    u, s, _ = torch.linalg.svd(m_ac, full_matrices=False)
-    se_vals = s**2 / m_ac.shape[0]
+    mmh = m_ac @ m_ac.mH
+    # ToDo: Upon similar inputs we get differences in the eigenvalue decomposition.
+    #   Find some information here: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#extremal-values-in-linalg
+    #   And here: https://github.com/pytorch/pytorch/issues/144384
+
+    # we might get away with using numpy to compute eigenvalues, it presumably does different preconditioning
+    np_e_vals, np_e_vecs = np.linalg.eigh(mmh.cpu().numpy(), UPLO="U")
+    np_e_vals = torch.from_numpy(np_e_vals)
+    np_e_vecs = torch.from_numpy(np_e_vecs)
+    np_idx = torch.argsort(torch.abs(np_e_vals), descending=True)
+    np_um = np_e_vecs[:, np_idx]
+
+    e_vals, e_vecs = torch.linalg.eigh(mmh, UPLO="U")
 
     idx = torch.argsort(torch.abs(e_vals), descending=True)
     um = e_vecs[:, idx]
@@ -462,24 +506,34 @@ def test_ac_loraks_vs_matlab():
 
     mat_um = torch.from_numpy(mat["U"]).to(dtype=um.dtype)
     plot_matrices(
-        [um, u, mat_um, mat_um - um],
-        data_names=["torch", "torch svd", "matlab", "difference"],
+        [um, np_um, mat_um, mat_um - um, mat_um - np_um],
+        data_names=["torch", "numpy", "matlab", "difference torch", "difference numpy"],
         name="04-um"
     )
+    check_matrices(torch.abs(np_um), torch.abs(mat_um), name="abs NP Eigenvectors", assertion=False)
+    check_matrices(np_um, mat_um, name="NP Eigenvectors", assertion=False)
     check_matrices(torch.abs(um), torch.abs(mat_um), name="abs Eigenvectors", assertion=False)
     check_matrices(um, mat_um, name="Eigenvectors", assertion=False)
-    check_matrices(u, mat_um, name="Eigenvectors svd", assertion=False)
 
-    # ToDo: Upon similar inputs we get differences in the eigenvalue decomposition.
-    #   Eigenvectors usually are normalized (check again). Can we get away with filtering n last eigenvectors,
+    # ToDo:  Eigenvectors usually are normalized (check again). Can we get away with filtering n last eigenvectors,
     #   corresponding to the lowest eigenvalues as the "leading" vectors will define the space anyway.
     #   This way we might rid the offsets compared to the matlab version.
-    # E.g. we could throw away all vectors corresponding to eigenvalues below a low value threshold
-    # (in the e-15 and below range)
+    #   Tested SVD and result is worse.
+    #   E.g. we could throw away all vectors corresponding to eigenvalues below a low value threshold
+    #   (in the e-15 and below range)
     # ToDo: Is it input value range dependent?
     # e_vals = e_vals[idx]
     # e_v_thresh = 1e-12 * torch.abs(torch.max(e_vals))
     # idx_thresh = torch.where(torch.abs(e_vals) < e_v_thresh)[0][0].item()
+
+    print("\nEigenvalue decomposition testing")
+    # identify spectrum
+    e_vals = torch.linalg.eigvalsh(mmh, UPLO="U")
+    # sort eigenvalues
+    e_vals = torch.sort(torch.abs(e_vals), descending=True).values
+    # find threshold
+    r_th = 1e-11
+    e_th = torch.where(e_vals < r_th * e_vals.max())[0][0]
 
     print("\nBuild Nullspace")
     nmm = um[:, rank:].mH
@@ -492,6 +546,7 @@ def test_ac_loraks_vs_matlab():
         name="05-nmm"
     )
     check_matrices(nmm, mat_nmm, name="Nullspace", assertion=False)
+    # nmm = mat_nmm
 
     print("\nComplexify Nullspace")
     nss_c = complex_subspace_representation(nmm, nb_size=nb_size)
@@ -625,18 +680,45 @@ def test_ac_loraks_vs_matlab():
     )
     check_matrices(m, mat_m, name="M")
 
-    mat_z = torch.from_numpy(mat["z"]).to(dtype=k_data.dtype).permute(2, 0, 1)
-    mat_img = torch.fft.fftshift(
-        torch.fft.ifft2(
-            torch.fft.ifftshift(mat_z, dim=(-2, -1)),
-            dim=(-2, -1)
-        ),
-        dim=(-2, -1)
-    )
+    print("\nReconstruction")
+    m_op = get_m_operator_fft(v_s=vs, v_c=vc, mask=mask, r=r, ny=ny, nx=nx, nc=nc*ne)
+    b = get_b_vector_fft(k=k_data, mask=mask, v_s=vs, v_c=vc, r=r)
+    tmp_b = torch.zeros_like(k_data)
+    tmp_b[~mask] = b
+
+    mat_b = torch.from_numpy(mat["tmp_b"]).to(dtype=b.dtype).permute(2, 0, 1)
     plot_matrices(
-        [mat_img],
-        data_names=["mat reco img"],
-        name="14-img"
+        [tmp_b, mat_b],
+        data_names=["torch", "matlab"],
+        name="14-b"
     )
+    check_matrices(tmp_b, mat_b, name="B", assertion=False)
+
+    recon_k_missing, _, _ = cgd(
+        func_operator=m_op, x=torch.zeros_like(b), b=b, max_num_iter=20, conv_tol=1e-3
+    )
+    # embed data
+    recon_k = k_data
+    recon_k[~mask] = recon_k_missing
+
+    mat_z = torch.from_numpy(mat["z"]).to(dtype=k_data.dtype).permute(2, 0, 1)
+    plot_matrices(
+        [torch.log(torch.abs(input_k)), torch.log(torch.abs(recon_k)), torch.log(torch.abs(mat_z))],
+        data_names=["input us", "torch reco", "mat reco"],
+        name="15-k"
+    )
+    check_matrices(recon_k, mat_z, name="Z", assertion=False)
+
+    print("\nResults reconstruction")
+    mat_img = ifft(mat_z)
+    recon_img = ifft(recon_k)
+    check_matrices(mat_z, mat_img, name="Z", assertion=False)
+
+    plot_matrices(
+        [input_img, recon_img, mat_img, mat_img-recon_img],
+        data_names=["input us img", "torch reco img", "mat reco img", "difference"],
+        name="15-img"
+    )
+
 
 

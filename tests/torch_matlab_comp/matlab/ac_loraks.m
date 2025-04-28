@@ -8,7 +8,7 @@ mask = abs(kData) > 1e-10;
 [N1, N2, Nc] = size(kData);
 % set neighborhood radius
 R = 3;
-rank = 20;
+rank = 50;
 
 % s - matrix
 s_matrix = s_operator(kData, N1, N2, Nc, R);
@@ -96,6 +96,8 @@ M = @(x) 2*subsref(ZD_H(ifft2(squeeze(sum(Nis.*repmat(fft2(ZD(subsasgn(tmp,S,x))
 b = -2*subsref(ZD_H(ifft2(squeeze(sum(Nis.*repmat(fft2(ZD(data(:))),[1 1 1 Nc]),3)))),S) ...
     +2*subsref(ZD_H(ifft2(squeeze(sum(Nis2.*repmat(conj(fft2(ZD(data(:)))),[1 1 1 Nc]),3)))),S);
 
+tmp_b = subsasgn(tmp, S, b);
+
 [z] = pcg(M, b, 1e-3, 20);
 z = A(z);
 z = reshape(z, [N1 N2 Nc]);
@@ -108,7 +110,7 @@ save(output_path, ...
     'vc_pad', 'vc_shift', 'vs_pad', 'vs_shift', ...
     'pad_k', 'fft_k', 'vs_k', 'vc_k', ...
     'i_vs_k', 'i_vc_k', 'm', ...
-    'Nis', 'Nis2', 'z' ...
+    'Nis', 'Nis2', 'z', 'tmp_b'...
     );
 
 % s - operator
