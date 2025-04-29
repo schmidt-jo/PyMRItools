@@ -1,11 +1,16 @@
 import logging
+import pathlib as plib
 import torch
 from torch.nn.functional import pad
 import tqdm
 
+import plotly.graph_objects as go
+import plotly.subplots as psub
+
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices_in_2d_shape, get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import s_operator
 from pymritools.utils.algorithms import cgd
+from pymritools.utils import Phantom, ifft, torch_load
 
 log_module = logging.getLogger(__name__)
 
@@ -46,6 +51,12 @@ class AC_LORAKS:
         if process_slice:
             self._log(f"Processing single slice toggled (usually for testing performance or parameters).")
             k_space_xyzct = k_space_xyzct[:, :, k_space_xyzct.shape[2] // 2, None]
+
+        # pad to even spatial dimensions - make sure the input has even number of dims in which all processing and
+        # fft etc is happening (usually x, y), this method sets a flag used in later removal after reconstruction
+        k_space_xyzct, self.pad_input = self._pad_input_xyzct(k_space_xyzct)
+        k_space_xyzct = k_space_xyzct.to(torch.complex64)
+
         # First lets get the shape
         self.in_shape_xyzct = k_space_xyzct.shape
 
@@ -116,6 +127,29 @@ class AC_LORAKS:
         log_module.error(msg)
         raise AttributeError(msg)
 
+    def _pad_input_xyzct(self, k_space_xyzct: torch.Tensor) -> (torch.Tensor, tuple):
+        # check first two dims and pad if needed
+        # to use torchs pad method we permute two dims to end
+        k_space_zctyx = k_space_xyzct.permute(2, 3, 4, 1, 0)
+        # get shapes
+        ny, nx = k_space_zctyx.shape[-2:]
+        # check if even
+        pad_x = 1 - nx % 2
+        pad_y = 1 - ny % 2
+        # pad
+        k_space_zctyx = pad(
+            k_space_zctyx,
+            (0, pad_x, 0, pad_y)
+        )
+        # permute back and give padding
+        return k_space_zctyx.permute(4, 3, 0, 1, 2), (pad_x, pad_y)
+
+    def _unpad_output_xyzct(self, k_space_xyzct: torch.Tensor) -> torch.Tensor:
+        pad_x, pad_y = self.pad_input
+        nx = k_space_xyzct.shape[0] - pad_x
+        ny = k_space_xyzct.shape[1] - pad_y
+        return k_space_xyzct[:nx, :ny]
+
     def _reshape_input_to_batches(self, k_data_xyzct) -> torch.Tensor:
         # we want to take input data arranged in x-y-z-c-t (like nifti or from raw data)
         # and implement a slice wise computation (batch slices), additionally, we might need to
@@ -160,7 +194,7 @@ class AC_LORAKS:
 
     def _check_channel_batching(self, batch_channel_dim, nc) -> (torch.Tensor, torch.Tensor):
         # check batching
-        if 1 < batch_channel_dim < nc:
+        if 1 <= batch_channel_dim < nc:
             if nc % batch_channel_dim > 1e-9:
                 self._log_error(
                     f"Channel dimension must be divisible by channel batch-size, "
@@ -202,7 +236,8 @@ class AC_LORAKS:
         e_vals, e_vecs = torch.linalg.eigh(mmh, UPLO="U")
         idx = torch.argsort(torch.abs(e_vals), descending=True)
         um = e_vecs[:, idx]
-        return um[:, self.rank:].mH
+        e_vals = e_vals[idx]
+        return um[:, self.rank:].mH, e_vals
 
     def _complex_subspace_representation(self, v: torch.Tensor):
         nb_size = self.indices.shape[0]
@@ -215,7 +250,7 @@ class AC_LORAKS:
         nfilt, filt_size = v.shape
 
         # get indices
-        circular_nb_indices = get_circular_nb_indices(nb_radius=self.loraks_neighborhood_radius)
+        circular_nb_indices = get_circular_nb_indices(nb_radius=self.loraks_neighborhood_radius).to(self.device)
         # find neighborhood size
         nb_size = circular_nb_indices.shape[0]
 
@@ -225,7 +260,7 @@ class AC_LORAKS:
 
         v_patch = torch.zeros(
             (nfilt, nc, self.loraks_neighborhood_side_size, self.loraks_neighborhood_side_size),
-            dtype=v.dtype
+            dtype=v.dtype, device=self.device
         )
         v_patch[:, :, circular_nb_indices[:, 0], circular_nb_indices[:, 1]] = v
 
@@ -249,7 +284,7 @@ class AC_LORAKS:
                 2 * self.loraks_neighborhood_side_size - 1,
                 2 * self.loraks_neighborhood_side_size - 1
             )
-        )
+        ).cpu()
         fffilt = torch.fft.fft2(
             ffilt,
             dim=(-2, -1),
@@ -257,14 +292,14 @@ class AC_LORAKS:
                 2 * self.loraks_neighborhood_side_size - 1,
                 2 * self.loraks_neighborhood_side_size - 1
             )
-        )
+        ).cpu()
 
         # Compute patch via inverse FFT of element-wise multiplication and sum
         patch = torch.fft.ifft2(
             torch.sum(ccfilt.unsqueeze(2) * fffilt.unsqueeze(1), dim=0),
             dim=(-2, -1)
         )
-        return patch
+        return patch.to(v.device)
 
     def _v_pad(self, v_patch: torch.Tensor):
         # assumed dims of v_patch [px, py, nce, nce]
@@ -321,7 +356,7 @@ class AC_LORAKS:
         if self.use_data_consistency:
 
             def _m_op(x):
-                tmp = torch.zeros(self.shape_batch, dtype=v_s.dtype)
+                tmp = torch.zeros(self.shape_batch, dtype=v_s.dtype, device=self.device)
                 tmp[~mask] = x
                 m = self._m_op_base(tmp, v_c=v_c, v_s=v_s)
                 return 2 * m[~mask]
@@ -397,21 +432,26 @@ class AC_LORAKS:
     def recon_batch_ftt(self, k: torch.Tensor, mask: torch.Tensor, v: torch.Tensor):
         # complexify nullspace
         v = self._complex_subspace_representation(v)
+        torch.cuda.empty_cache()
 
         # prep zero phase filter input
         v_patch = self._embed_circular_patch(v)
+        torch.cuda.empty_cache()
 
         # zero phase filter
         vs_filt = self._zero_phase_filter(v_patch.clone(), matrix_type="S")
         vc_filt = self._zero_phase_filter(v_patch.clone(), matrix_type="C")
+        torch.cuda.empty_cache()
 
         # pad and fft shift
         vs_shift = self._v_shift(self._v_pad(vs_filt), matrix_type="S")
         vc_shift = self._v_shift(self._v_pad(vc_filt), matrix_type="C")
+        torch.cuda.empty_cache()
 
         # fft
         vs = torch.fft.fft2(vs_shift, dim=(-2, -1))
         vc = torch.fft.fft2(vc_shift, dim=(-2, -1))
+        torch.cuda.empty_cache()
 
         # get operators
         m_op = self._get_m_operator_fft(v_s=vs, v_c=vc, mask=mask)
@@ -433,6 +473,7 @@ class AC_LORAKS:
     def reconstruct(self):
         # allocate space
         k_recon = torch.zeros_like(self.k_batched)
+        e_vals = torch.zeros((k_recon.shape[0], 2 * self.shape_batch[0] * min(self.indices.shape)))
         # set up progress bar
         bar = tqdm.trange(self.k_batched.shape[0], desc="Reconstruction")
         for idx_b in bar:
@@ -443,7 +484,8 @@ class AC_LORAKS:
             m_ac = self._get_ac_matrix(k_data=k_in, mask=mask)
 
             # eigenvalue decomposition
-            v = self._get_nullspace(m_ac=m_ac)
+            v, vals = self._get_nullspace(m_ac=m_ac)
+            e_vals[idx_b] = vals
 
             if self.fast_compute:
                 m_op, b = self.recon_batch_ftt(k=k_in, mask=mask, v=v)
@@ -460,4 +502,91 @@ class AC_LORAKS:
             recon_k[~mask] = recon_k_missing
 
             k_recon[idx_b] = recon_k
-        return self._reshape_batches_to_input(k_recon)
+        k_recon = self._reshape_batches_to_input(k_recon)
+        return self._unpad_output_xyzct(k_recon), e_vals
+
+
+def main():
+    log_module.info("K Space creation")
+    torch.manual_seed(10)
+    nx = 256
+    ny = 224
+    nc = 4
+    ne = 2
+
+    rank = 100
+    r = 3
+
+    # sl_phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
+    # k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=40, acceleration=3)
+    # k_data = k_data.unsqueeze(2)
+    # path = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/scratches/figures/")
+
+    path = plib.Path(
+        "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/pulseq_mese_megesse/7T/2025-03-17/raw/mese_acc3_vfa/"
+    ).absolute()
+    path_out = path.joinpath("recon")
+    path_fig = path_out.joinpath("figures").absolute()
+    path_fig.mkdir(exist_ok=True, parents=True)
+    #
+    k_data = torch_load(path.joinpath("k_space_rmos.pt"))
+    nx, ny, nz, nc, nt = k_data.shape
+
+    logging.info("Set Device")
+    device = torch.device("cuda")
+
+    in_k = k_data.clone()
+    in_k = torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1))
+    in_img = ifft(in_k, dims=(0, 1))
+
+    # for rank in [75]:
+    logging.info(f"Rank {rank}")
+    ac_loraks = AC_LORAKS(
+        k_space_xyzct=k_data, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
+        device=device, batch_channel_dim=32
+    )
+    k_recon, e_vals = ac_loraks.reconstruct()
+    k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
+
+    out_img = ifft(k_recon, dims=(0, 1))
+
+    num_p = min(out_img.shape[-1], 10)
+    fig = psub.make_subplots(
+        rows=4, cols=num_p
+    )
+    for i, d in enumerate([in_k, k_recon, in_img, out_img]):
+        d = torch.abs(d)
+        if i < 2:
+            d = torch.log(d)
+        for c in range(num_p):
+            fig.add_trace(
+                go.Heatmap(z=d[:, :, c], showscale=False),
+                row=i + 1, col=c + 1
+            )
+    f_name = path.joinpath(f"js_ac_loraks_test_r-{rank}").with_suffix(".html")
+    log_module.info(f"write file: {f_name}")
+    fig.write_html(f_name)
+
+    fig = go.Figure()
+    num_vals = min(10, e_vals.shape[0])
+    for i, v in enumerate(e_vals[torch.randperm(e_vals.shape[0])[:num_vals]]):
+        fig.add_trace(
+            go.Scatter(y=v, showlegend=False),
+        )
+    fig.add_trace(
+        go.Scatter(x=[rank, rank], y=[0, 0.8 * e_vals.max()], mode="lines")
+    )
+
+    f_name = path.joinpath(f"js_ac_loraks_test_vals-{rank}").with_suffix(".html")
+    log_module.info(f"write file: {f_name}")
+    fig.write_html(f_name)
+
+    f_name = path.joinpath(f"ac_loraks_recon_-r{rank}").with_suffix(".pt")
+    log_module.info(f"write file: {f_name}")
+    torch.save(k_recon, f_name)
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    main()
+
