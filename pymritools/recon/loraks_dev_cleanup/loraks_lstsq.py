@@ -485,7 +485,7 @@ class AC_LORAKS:
 
             # eigenvalue decomposition
             v, vals = self._get_nullspace(m_ac=m_ac)
-            e_vals[idx_b] = vals
+            e_vals[idx_b] = vals.cpu()
 
             if self.fast_compute:
                 m_op, b = self.recon_batch_ftt(k=k_in, mask=mask, v=v)
@@ -498,10 +498,11 @@ class AC_LORAKS:
             )
 
             # embed data
-            recon_k = k_in.clone()
-            recon_k[~mask] = recon_k_missing
+            recon_k = self.k_batched[idx_b].clone()
+            recon_k[~mask] = recon_k_missing.cpu()
 
             k_recon[idx_b] = recon_k
+            torch.cuda.empty_cache()
         k_recon = self._reshape_batches_to_input(k_recon)
         return self._unpad_output_xyzct(k_recon), e_vals
 
@@ -543,7 +544,7 @@ def main():
     logging.info(f"Rank {rank}")
     ac_loraks = AC_LORAKS(
         k_space_xyzct=k_data, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
-        device=device, batch_channel_dim=32
+        device=device, batch_channel_dim=16
     )
     k_recon, e_vals = ac_loraks.reconstruct()
     k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
