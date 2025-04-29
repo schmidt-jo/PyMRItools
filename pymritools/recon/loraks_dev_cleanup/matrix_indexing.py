@@ -15,14 +15,20 @@ def get_circular_nb_indices(nb_radius):
 
 
 def get_circular_nb_indices_in_2d_shape(k_space_2d_shape: tuple, nb_radius: int, reversed: bool = False):
-
+    # ensure 2D shape
+    if k_space_2d_shape.__len__() != 2:
+        msg = "method implemented for 2D input only"
+        raise NotImplementedError(msg)
     # want a circular neighborhood radius and convert to linear indices
     neighborhood_indices = get_circular_nb_indices(nb_radius=nb_radius)
 
     # Calculate offsets relative to the center
     offsets = neighborhood_indices - nb_radius
 
-    y, x = torch.meshgrid(torch.arange(k_space_2d_shape[-2]), torch.arange(k_space_2d_shape[-1]))
+    y, x = torch.meshgrid(
+        torch.arange(k_space_2d_shape[-2]), torch.arange(k_space_2d_shape[-1]),
+        indexing="ij"
+    )
 
     yx = torch.concatenate((y.unsqueeze(-1), x.unsqueeze(-1)), dim=-1)
     yx = torch.reshape(yx, (-1, 2))
@@ -35,7 +41,7 @@ def get_circular_nb_indices_in_2d_shape(k_space_2d_shape: tuple, nb_radius: int,
     )
 
     if reversed:
-        yxnb = torch.tensor(k_space_2d_shape[:2]).unsqueeze(0).unsqueeze(1) - yx.unsqueeze(0) + offsets.unsqueeze(1)
+        yxnb = torch.tensor(k_space_2d_shape[:2]).unsqueeze(0).unsqueeze(1) - yx.unsqueeze(0) + offsets.unsqueeze(1) - 1
     else:
         yxnb = yx.unsqueeze(0) + offsets.unsqueeze(1)
 

@@ -27,7 +27,7 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor, indices_rev: torch.
         case torch.float64:
             dtype = torch.complex128
         case _:
-            dtype = torch.complex128
+            dtype = torch.complex64
     k_space = k_space.view(*k_space.shape[:-2], -1)
     # effectively c - matrix in each channel
     s_p = k_space[..., indices].view(-1, *matrix_shape)
