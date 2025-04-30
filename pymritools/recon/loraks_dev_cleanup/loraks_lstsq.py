@@ -544,7 +544,7 @@ def main():
     logging.info(f"Rank {rank}")
     ac_loraks = AC_LORAKS(
         k_space_xyzct=k_data, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
-        device=device, batch_channel_dim=16
+        device=device, batch_channel_dim=8
     )
     k_recon, e_vals = ac_loraks.reconstruct()
     k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
