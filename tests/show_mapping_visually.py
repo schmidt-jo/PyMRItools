@@ -4,8 +4,8 @@ import plotly.io as pio
 import numpy as np
 
 from tests.utils import get_test_result_output_dir
-from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape, get_linear_indices
-from pymritools.recon.loraks_dev.operators import c_operator, c_adjoint_operator, s_operator, s_adjoint_operator
+from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices_in_2d_shape, get_linear_indices
+from pymritools.recon.loraks_dev_cleanup.operators import c_operator, c_adjoint_operator, s_operator, s_adjoint_operator
 from pymritools.utils import Phantom
 
 import plotly.subplots as psub
@@ -121,35 +121,50 @@ def test_k_space_to_c_matrix_and_back():
 
 def test_k_space_to_s_matrix_and_back():
     # set shape
-    img_shape = (256, 256)
-    loraks_nb_side_length = 5  # nb size = side_length**2
-
+    nx = 256
+    ny = 240
     # create a subsampled phantom
-    phantom = Phantom.get_shepp_logan(shape=img_shape)
-    k_space_us = phantom.sub_sample_ac_skip_lines(acceleration=2, ac_lines=30)
-    k_shape = k_space_us.shape
+    phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=4, num_echoes=2)
+    k_space_us = phantom.sub_sample_ac_random_lines(acceleration=2, ac_lines=30)
+    k_space = k_space_us.permute(3, 2, 1, 0)
+    k_space = torch.reshape(k_space, (-1, ny, nx))
+    k_shape = k_space.shape
 
-    # create c-mapping
-    c_indices, c_shape = get_linear_indices(
-        k_space_shape=k_shape,
-        patch_shape=(loraks_nb_side_length, loraks_nb_side_length),
-        sample_directions=(1, 1)
-    )
+    # create s-mapping
+    indices = get_circular_nb_indices_in_2d_shape(
+        k_space_2d_shape=k_shape[-2:], nb_radius=3, reversed=False
+    ).contiguous()
+    indices_rev = get_circular_nb_indices_in_2d_shape(
+        k_space_2d_shape=k_shape[-2:], nb_radius=3, reversed=True
+    ).contiguous()
     # test s mapping
-    s_matrix = s_operator(k_space=k_space_us,
-                          indices=c_indices,
-                          matrix_shape=tuple(2*d for d in c_shape))
+    s_matrix = s_operator(
+        k_space=k_space,
+        indices=indices,
+        indices_rev=indices_rev,
+        matrix_shape=indices.shape
+    )
 
     # Adjoint mapping
-    k_recon_s = s_adjoint_operator(s_matrix=s_matrix, indices=c_indices, k_space_dims=k_shape)
+    k_recon_s = s_adjoint_operator(
+        matrix=s_matrix, indices=indices, indices_rev=indices_rev,
+        k_space_dims=k_shape
+    )
 
     # normalize
+    ones_in = torch.ones_like(k_space)
+    count_matrix = s_adjoint_operator(
+        matrix=s_operator(
+            k_space=ones_in, indices=indices, indices_rev=indices_rev, matrix_shape=indices.shape
+        ),
+        indices=indices, indices_rev=indices_rev, k_space_dims=k_shape
+    )
     # get count matrix from indices, ensure nonzero (if using non-rectangular patches)
-    count_matrix = torch.bincount(c_indices)
+    # count_matrix = torch.bincount(indices.view(-1))
+    # # s matrix uses indices twice, adjust count matrix
+    # count_matrix = 2 * count_matrix.view(k_shape[-2:])[None].expand(k_shape)
     count_matrix[count_matrix == 0] = 1
-    # s matrix uses indices twice, adjust count matrix
-    count_matrix_s = 2 * count_matrix.view(k_shape)
-    k_recon_s /= count_matrix_s
+    k_recon_s /= count_matrix
 
     # test
     # allclose will fail for circular patches because the corners are not equal
@@ -157,22 +172,21 @@ def test_k_space_to_s_matrix_and_back():
 
     fig = psub.make_subplots(cols=3)
     fig.add_trace(
-        go.Heatmap(z=torch.log(torch.abs(k_space_us))),
+        go.Heatmap(z=torch.log(torch.abs(k_space[0]))),
         row=1,
         col=1
     )
     fig.add_trace(
-        go.Heatmap(z=torch.log(torch.abs(k_recon_s))),
+        go.Heatmap(z=torch.log(torch.abs(k_recon_s)[0])),
         row=1,
         col=2
     )
     fig.add_trace(
-        go.Heatmap(z=torch.abs(k_space_us - k_recon_s), showscale=False),
+        go.Heatmap(z=torch.abs(k_space - k_recon_s)[0], showscale=False),
         row=1,
         col=3
     )
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
     output_dir = get_test_result_output_dir("k_space_to_s_matrix_and_back_visualization")
-    pio.write_html(fig, os.path.join(output_dir, "k_space_to_s_matrix_and_back_visualization.html"))
-
+    fig.write_html(os.path.join(output_dir, "k_space_to_s_matrix_and_back_visualization.html"))
