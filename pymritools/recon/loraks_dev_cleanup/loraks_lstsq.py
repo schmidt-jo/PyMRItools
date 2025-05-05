@@ -69,8 +69,10 @@ class AC_LORAKS:
         # if we need to batch, extract channel batch indices based on matching channel correlations,
         # i.e. clustering channels in batches based on maximizing batch correlation,
         # using first echo only to reduce computational load
-        if batching:
+        if batching and self.batch_channel_size > 1:
             self.batch_channel_idx = self._extract_channel_batch_indices(k_data_nxzy_c=k_space_xyzct[..., 0])
+        elif batching and self.batch_channel_size == 1:
+            self.batch_channel_idx = torch.arange(self.in_shape_xyzct[-2])[:, None]
         else:
             self.batch_channel_idx = torch.arange(self.batch_channel_size)[None]
 
@@ -299,7 +301,7 @@ class AC_LORAKS:
                 2 * self.loraks_neighborhood_side_size - 1,
                 2 * self.loraks_neighborhood_side_size - 1
             )
-        ).cpu()
+        )
         fffilt = torch.fft.fft2(
             ffilt,
             dim=(-2, -1),
@@ -307,14 +309,17 @@ class AC_LORAKS:
                 2 * self.loraks_neighborhood_side_size - 1,
                 2 * self.loraks_neighborhood_side_size - 1
             )
-        ).cpu()
+        )
 
         # Compute patch via inverse FFT of element-wise multiplication and sum
-        patch = torch.fft.ifft2(
-            torch.sum(ccfilt.unsqueeze(2) * fffilt.unsqueeze(1), dim=0),
-            dim=(-2, -1)
+        pre_patch = torch.zeros(
+            (ccfilt.shape[1], fffilt.shape[1], *ccfilt.shape[-2:]),
+            dtype=ccfilt.dtype, device=ccfilt.device
         )
-        return patch.to(v.device)
+        for idx_f in range(fffilt.shape[0]):
+            pre_patch += ccfilt[idx_f].unsqueeze(1) * fffilt[idx_f].unsqueeze(0)
+        patch = torch.fft.ifft2(pre_patch, dim=(-2, -1))
+        return patch
 
     def _v_pad(self, v_patch: torch.Tensor):
         # assumed dims of v_patch [px, py, nce, nce]
@@ -451,21 +456,25 @@ class AC_LORAKS:
 
         # prep zero phase filter input
         v_patch = self._embed_circular_patch(v)
+        del v
         torch.cuda.empty_cache()
 
         # zero phase filter
         vs_filt = self._zero_phase_filter(v_patch.clone(), matrix_type="S")
         vc_filt = self._zero_phase_filter(v_patch.clone(), matrix_type="C")
+        del v_patch
         torch.cuda.empty_cache()
 
         # pad and fft shift
         vs_shift = self._v_shift(self._v_pad(vs_filt), matrix_type="S")
         vc_shift = self._v_shift(self._v_pad(vc_filt), matrix_type="C")
+        del vs_filt, vc_filt
         torch.cuda.empty_cache()
 
         # fft
         vs = torch.fft.fft2(vs_shift, dim=(-2, -1))
         vc = torch.fft.fft2(vc_shift, dim=(-2, -1))
+        del vc_shift, vs_shift
         torch.cuda.empty_cache()
 
         # get operators
@@ -501,6 +510,8 @@ class AC_LORAKS:
             # eigenvalue decomposition
             v, vals = self._get_nullspace(m_ac=m_ac)
             e_vals[idx_b] = vals.cpu()
+            del m_ac
+            torch.cuda.empty_cache()
 
             if self.fast_compute:
                 m_op, b = self.recon_batch_ftt(k=k_in, mask=mask, v=v)
@@ -517,6 +528,7 @@ class AC_LORAKS:
             recon_k[~mask] = recon_k_missing.cpu()
 
             k_recon[idx_b] = recon_k
+            del k_in, recon_k_missing
             torch.cuda.empty_cache()
         k_recon = self._reshape_batches_to_input(k_recon)
         return self._unpad_output_xyzct(k_recon), e_vals
@@ -578,7 +590,7 @@ class AC_LORAKS:
 
         for idx_c in tqdm.trange(num_batches - 1):
             # each iteration we cluster the remaining elements
-            kmeans = KMeans(n_clusters=num_batches - idx_c)
+            kmeans = KMeans(n_clusters=num_batches - idx_c, verbose=False)
             # use kmeans clustering to group similar elements
             # perform clustering
             # get cluster labels for each channel, torch_kmeans assumes batch dim, so squeeze and unsqueeze dim 0
@@ -617,8 +629,8 @@ def main():
     log_module.info("K Space creation")
     torch.manual_seed(10)
 
-    rank = 100
-    r = 5
+    rank = 300
+    r = 3
 
     path = plib.Path(
         "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/pulseq_mese_megesse/7T/2025-03-17/processing/us_test/"
@@ -652,9 +664,9 @@ def main():
 
     logging.info(f"Rank {rank}")
 
-    for idx_a, a in enumerate(torch.linspace(2, 5, 6).tolist()):
+    for idx_a, a in enumerate(torch.linspace(3.5, 4, 1).tolist()):
         logging.info(f"Acceleration {a:.2f}")
-        sl = sl_phantom.sub_sample_ac_random_lines(acceleration=a, ac_lines=42).permute(1, 0, 2, 3)
+        sl = sl_phantom.sub_sample_ac_weighted_lines(acceleration=a, ac_lines=42, weighting_factor=0.5).permute(1, 0, 2, 3)
         mask = torch.abs(sl) > 1e-10
         mask = mask.unsqueeze(2)
 
@@ -664,7 +676,7 @@ def main():
 
         ac_loraks = AC_LORAKS(
             k_space_xyzct=in_k, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
-            device=device, batch_channel_dim=8
+            device=device, batch_channel_dim=16
         )
         k_recon, e_vals = ac_loraks.reconstruct()
         k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
@@ -684,7 +696,7 @@ def main():
                     go.Heatmap(z=d[:, :, c], showscale=False),
                     row=i + 1, col=c + 1
                 )
-        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
+        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_ws_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
         log_module.info(f"write file: {f_name}")
         fig.write_html(f_name)
 
@@ -698,14 +710,14 @@ def main():
             go.Scatter(x=[rank, rank], y=[0, 0.8 * e_vals.max()], mode="lines")
         )
 
-        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_vals_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
+        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_ws_vals_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
         log_module.info(f"write file: {f_name}")
         fig.write_html(f_name)
 
         logging.info(f"RSOS")
         names = [
             f"loraks_input_acc-{a:.2f}".replace(".", "p"),
-            f"loraks_output_bcs_acc-{a:.2f}_r-{rank}".replace(".", "p")
+            f"loraks_output_bcs_ws_acc-{a:.2f}_r-{rank}".replace(".", "p")
         ]
         for i, d in enumerate([in_img, out_img]):
             d = torch.reshape(d, (nx, ny, 1, nc, nt))
@@ -715,6 +727,10 @@ def main():
                 path_to_dir=path_out, file_name=names[i]
             )
 
+        nifti_save(
+            out_img.reshape(nx, ny, 1, nc, nt)[..., 0].abs(), img_aff=affine,
+            path_to_dir=path_out, file_name=f"loraks_output_bcs_ws_acc-{a:.2f}_r-{rank}_channels".replace(".", "p")
+        )
         # f_name = path_out.joinpath(f"ac_loraks_bcs_recon_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".pt")
         # log_module.info(f"write file: {f_name}")
         # torch.save(k_recon, f_name)
