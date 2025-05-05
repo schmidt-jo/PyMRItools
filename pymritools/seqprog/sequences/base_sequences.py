@@ -668,7 +668,7 @@ class Sequence2D(abc.ABC):
                 k_remaining = np.arange(0, k_start)
                 # build array with dim [num_slices, num_outer_lines] to sample different random scheme per slice
                 # hardcode weighting
-                weighting_factor = 0.3 if self.params.sampling_pattern.startswith("weighted") else 0.0
+                weighting_factor = 0.5 if self.params.sampling_pattern.startswith("weighted") else 0.0
                 log_module.info(f"\t\t-random sampling of k-space phase encodes, central weighting factor: {weighting_factor}")
                 # random encodes for different echoes - random choice weighted towards center
                 weighting = np.clip(np.power(np.linspace(0, 1, k_start), weighting_factor), 1e-5, 1)
@@ -1484,19 +1484,25 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     if config.visualize:
         logging.info("Plotting")
         # plot start
-        sequence.plot_sequence(t_start_s=0, t_end_s=2*sequence.params.tr*1e-3, sim_grad_moments=True)
+        sequence.plot_sequence(t_start_s=0, t_end_s=0.65*sequence.params.tr*1e-3, sim_grad_moments=True)
+        if sequence.params.resolution_slice_num < 30:
+            n = 2
+        elif sequence.params.resolution_slice_num < 60:
+            n = 1
+        else:
+            n = 0.5
         # plot within ac region
         n_start = int(sequence.params.number_outer_lines // 2) + 4
         sequence.plot_sequence(
             t_start_s=n_start * sequence.params.tr * 1e-3,
-            t_end_s=(n_start + 2) * sequence.params.tr * 1e-3,
+            t_end_s=(n_start + n) * sequence.params.tr * 1e-3,
             sim_grad_moments=True
         )
         # plot close to end
         n_start = int(2 * sequence.params.number_outer_lines // 3) + sequence.params.number_central_lines + 4
         sequence.plot_sequence(
             t_start_s=n_start * sequence.params.tr * 1e-3,
-            t_end_s=(n_start + 2) * sequence.params.tr * 1e-3,
+            t_end_s=(n_start + n) * sequence.params.tr * 1e-3,
             sim_grad_moments=True
         )
         sequence.plot_sampling()
