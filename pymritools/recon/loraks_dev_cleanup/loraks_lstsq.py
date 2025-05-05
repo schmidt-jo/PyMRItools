@@ -1,6 +1,8 @@
 import logging
 import pathlib as plib
 import torch
+import numpy as np
+from torch_kmeans import KMeans
 from torch.nn.functional import pad
 import tqdm
 
@@ -10,7 +12,7 @@ import plotly.subplots as psub
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices_in_2d_shape, get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import s_operator
 from pymritools.utils.algorithms import cgd
-from pymritools.utils import Phantom, ifft, torch_load
+from pymritools.utils import Phantom, ifft, torch_load, root_sum_of_squares, nifti_save
 
 log_module = logging.getLogger(__name__)
 
@@ -61,34 +63,39 @@ class AC_LORAKS:
         self.in_shape_xyzct = k_space_xyzct.shape
 
         # check if we need to batch the channel dimension
-        self.batch_channel_size, self.num_channel_batches = self._check_channel_batching(
+        batching, self.batch_channel_size, self.num_channel_batches = self._check_channel_batching(
             batch_channel_dim=batch_channel_dim, nc=k_space_xyzct.shape[-2]
         )
+        # if we need to batch, extract channel batch indices based on matching channel correlations,
+        # i.e. clustering channels in batches based on maximizing batch correlation,
+        # using first echo only to reduce computational load
+        if batching:
+            self.batch_channel_idx = self._extract_channel_batch_indices(k_data_nxzy_c=k_space_xyzct[..., 0])
+        else:
+            self.batch_channel_idx = torch.arange(self.batch_channel_size)[None]
+
         self.k_batched: torch.Tensor = self._reshape_input_to_batches(k_data_xyzct=k_space_xyzct)
         self.mask_batched: torch.Tensor = torch.abs(self.k_batched) > 1e-10
         # save shape of batch (only [nce, ny, nx])
         self.shape_batch: tuple = self.k_batched.shape[-3:]
 
-        # build operator indices
-        self.indices: torch.Tensor = get_circular_nb_indices_in_2d_shape(
-            k_space_2d_shape=self.shape_batch[-2:], nb_radius=loraks_neighborhood_radius, reversed=False
-        )
-        self.indices_rev: torch.Tensor = get_circular_nb_indices_in_2d_shape(
-            k_space_2d_shape=self.shape_batch[-2:], nb_radius=loraks_neighborhood_radius, reversed=True
-        )
-
-        if not self.loraks_matrix_type == "S":
-            self._log_error("Other matrix types not yet implemented")
-
-        def s_op(k_space: torch.Tensor):
-            return s_operator(
-                k_space=k_space,
-                indices_rev=self.indices_rev,
-                indices=self.indices,
-                matrix_shape=self.indices.shape
+        if self.loraks_matrix_type == "S":
+            # build operator indices
+            self.indices: torch.Tensor = get_circular_nb_indices_in_2d_shape(
+                k_space_2d_shape=self.shape_batch[-2:], nb_radius=loraks_neighborhood_radius, reversed=False
             )
+            self.indices_rev: torch.Tensor = get_circular_nb_indices_in_2d_shape(
+                k_space_2d_shape=self.shape_batch[-2:], nb_radius=loraks_neighborhood_radius, reversed=True
+            )
+            def s_op(k_space: torch.Tensor):
+                return s_operator(
+                    k_space=k_space,
+                    indices_rev=self.indices_rev,
+                    indices=self.indices,
+                    matrix_shape=self.indices.shape
+                )
 
-        self.operator = s_op
+            self.operator = s_op
 
         if self.regularization_lambda < 1e-9:
             # set strict data consistency
@@ -156,17 +163,19 @@ class AC_LORAKS:
         # compress channels or batch them additionally
         # thus in this method we want to end up with batched k-space: [b, nct, ny, nx],
         # where nct is combining echos and (potentially batched) channels.
-        # reverse axis
-        k_data = k_data_xyzct.permute(4, 3, 2, 1, 0)
+        # reverse axis but move channels to front
+        k_data = k_data_xyzct.permute(3, 4, 2, 1, 0)
         # assume we checked the batching of channels already, we do the batching
-        k_data_bc = torch.tensor_split(k_data.unsqueeze(0), self.num_channel_batches, dim=2)
+        # we batch the channel dimensions based on the found batches
+        k_data_bc = k_data[self.batch_channel_idx]
+        # k_data_bc = torch.tensor_split(k_data.unsqueeze(0), self.num_channel_batches, dim=2)
         # we now have a tuple of channel batched k tensors
-        k_data_bc = torch.concatenate(k_data_bc, dim=0)
-        # should be dims [bc, nt, ncb, nz, ny, nx]
-        bc, nt, ncb, nz, ny, nx = k_data_bc.shape
+        # k_data_bc = torch.concatenate(k_data_bc, dim=0)
+        # should be dims [bc, ncb, nt, nz, ny, nx]
+        bc, ncb, nt, nz, ny, nx = k_data_bc.shape
         # we pull the z dim to front
         k_data_bcz = k_data_bc.permute(0, 3, 1, 2, 4, 5)
-        # dims [bc, nz, nt, ncb, ny, nx]
+        # dims [bc, nz, ncb, nt, ny, nx]
         # we reshape echo and batched channels, and batch dimension
         k_data_b = torch.reshape(k_data_bcz, (bc * nz, nt*ncb, ny, nx))
         return k_data_b
@@ -179,18 +188,22 @@ class AC_LORAKS:
             k_data_b,
             (
                 self.num_channel_batches, self.in_shape_xyzct[2],
-                self.in_shape_xyzct[-1], self.batch_channel_size,
+                self.batch_channel_size, self.in_shape_xyzct[-1],
                 self.in_shape_xyzct[1], self.in_shape_xyzct[0])
         )
-        # dims [bc, nz, nt, ncb, ny, nx]
+        # dims [bc, nz, ncb, nt, ny, nx]
         k_data_bc = k_data_bcz.permute(0, 2, 3, 1, 4, 5)
-        # now dims [bc, nt, ncb, nz, ny, nx]
+        # now dims [bc, ncb, nt, nz, ny, nx]
+        # allocate out data and use same permutation
+        k_data_out = torch.zeros(self.in_shape_xyzct, dtype=k_data_bc.dtype).permute(3, 4, 2, 1, 0)
+        # assign
+        k_data_out[self.batch_channel_idx] = k_data_bc
         # concatenate split channel batches
-        k_data = torch.concatenate([k for k in k_data_bc], dim=1)
+        # k_data = torch.concatenate([k for k in k_data_bc], dim=1)
         # now dims [nt, nc, nz, ny, nx]
         # reverse order
-        k_data = k_data.permute(4, 3, 2, 1, 0)
-        return k_data
+        k_data_out = k_data_out.permute(4, 3, 2, 0, 1)
+        return k_data_out
 
     def _check_channel_batching(self, batch_channel_dim, nc) -> (torch.Tensor, torch.Tensor):
         # check batching
@@ -204,10 +217,12 @@ class AC_LORAKS:
             batch_channel_size: int = batch_channel_dim
             num_batches = nc // batch_channel_dim
             self._log(f"Using batched channel dimension (size: {batch_channel_dim} / {nc})")
+            batch = True
         else:
             num_batches = 1
             batch_channel_size: int = nc
-        return batch_channel_size, num_batches
+            batch = False
+        return batch ,batch_channel_size, num_batches
 
     def _get_ac_matrix(self, k_data: torch.Tensor, mask: torch.tensor):
 
@@ -494,7 +509,7 @@ class AC_LORAKS:
 
             # reconstruct
             recon_k_missing, _, _ = cgd(
-                func_operator=m_op, x=torch.zeros_like(b), b=b, max_num_iter=20, conv_tol=1e-3
+                func_operator=m_op, x=torch.zeros_like(b), b=b, max_num_iter=20, conv_tol=1e-3, iter_bar=bar
             )
 
             # embed data
@@ -506,85 +521,203 @@ class AC_LORAKS:
         k_recon = self._reshape_batches_to_input(k_recon)
         return self._unpad_output_xyzct(k_recon), e_vals
 
+    def _select_most_correlated_channels(
+            self, correlation_matrix: torch.Tensor, batch_channels_idx: torch.Tensor) -> torch.Tensor:
+        # If too many, select the batch_size most correlated channels within this cluster
+        # Find all channels in the current batch
+        sub_corr = correlation_matrix[batch_channels_idx][:, batch_channels_idx]
+
+        # Compute mean correlation of channels in current batch
+        batch_mean_correlation = torch.mean(torch.abs(sub_corr), dim=1)
+
+        # Select most correlated channels to pad the batch
+        _, top_indices = torch.topk(batch_mean_correlation, self.batch_channel_size)
+
+        return batch_channels_idx[top_indices]
+
+    def _pad_with_most_correlated_channels(
+            self,
+            correlation_matrix: torch.Tensor, batch_channels_idx: torch.Tensor,
+            available_channels_idx: torch.Tensor) -> torch.Tensor:
+        # build a mask of all remaining channels to choose from,
+        # not take the ones already identified to belong to the current batch
+        remaining_channels = torch.tensor([ac for ac in available_channels_idx if ac not in batch_channels_idx]).to(
+            torch.int)
+
+        # compute mean correlation of remaining channels to current batch
+        batch_mean_correlation = torch.mean(
+            torch.abs(correlation_matrix[remaining_channels][:, batch_channels_idx]),
+            dim=1
+        )
+
+        # select most correlated channels to pad the batch
+        _, additional_indices = torch.topk(batch_mean_correlation, self.batch_channel_size - len(batch_channels_idx))
+
+        # combine current batch with additional channels
+        return torch.cat(
+            [batch_channels_idx, remaining_channels[additional_indices]]
+        )
+
+    def _extract_channel_batch_indices(
+            self, k_data_nxzy_c: torch.Tensor) -> torch.Tensor:
+        nc = k_data_nxzy_c.shape[-1]
+        # ensure flatten for ech channel
+        k_data_nxzy_c = torch.reshape(k_data_nxzy_c, (-1, nc))
+        # compute correlation matrix
+        channel_corr = torch.abs(torch.corrcoef(k_data_nxzy_c.mT))
+
+        # convert to distance matrix, higher correlation is shorter distance
+        distance_matrix = 1 - channel_corr
+
+        # set batch size
+        num_batches = int(np.ceil(nc // self.batch_channel_size))
+
+        # enumerate all channels, build clusters based on available channels
+        available_channels = torch.arange(nc)
+        batches = []
+
+        for idx_c in tqdm.trange(num_batches - 1):
+            # each iteration we cluster the remaining elements
+            kmeans = KMeans(n_clusters=num_batches - idx_c)
+            # use kmeans clustering to group similar elements
+            # perform clustering
+            # get cluster labels for each channel, torch_kmeans assumes batch dim, so squeeze and unsqueeze dim 0
+            labels = torch.squeeze(kmeans.fit_predict(distance_matrix[available_channels][:, available_channels][None]))
+            # Create batches based on cluster assignments
+
+            # Find channels belonging to the first cluster
+            batch_channels = torch.where(labels == labels[0])[0]
+            # find original indices of those channels
+            batch_channels = available_channels[batch_channels]
+
+            # Ensure we have exactly batch_size channels
+            if len(batch_channels) > self.batch_channel_size:
+                batch_channels = self._select_most_correlated_channels(
+                    correlation_matrix=channel_corr, batch_channels_idx=batch_channels,
+                )
+            elif len(batch_channels) < self.batch_channel_size:
+                # If too few, pad with most similar additional channels
+                batch_channels = self._pad_with_most_correlated_channels(
+                    correlation_matrix=channel_corr, batch_channels_idx=batch_channels,
+                    available_channels_idx=available_channels
+                )
+
+            batches.append(batch_channels.tolist())
+            # remove from available channels
+            available_channels = torch.Tensor([int(ac) for ac in available_channels if ac not in batch_channels]).to(
+                torch.int)
+
+        # remaining list is the last batch
+        batches.append(available_channels.tolist())
+        # return as tensor
+        return torch.Tensor(batches).to(torch.int)
+
 
 def main():
     log_module.info("K Space creation")
     torch.manual_seed(10)
-    nx = 256
-    ny = 224
-    nc = 4
-    ne = 2
 
     rank = 100
-    r = 3
-
-    # sl_phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
-    # k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=40, acceleration=3)
-    # k_data = k_data.unsqueeze(2)
-    # path = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/scratches/figures/")
+    r = 5
 
     path = plib.Path(
-        "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/pulseq_mese_megesse/7T/2025-03-17/raw/mese_acc3_vfa/"
+        "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/pulseq_mese_megesse/7T/2025-03-17/processing/us_test/"
     ).absolute()
     path_out = path.joinpath("recon")
     path_fig = path_out.joinpath("figures").absolute()
     path_fig.mkdir(exist_ok=True, parents=True)
     #
-    k_data = torch_load(path.joinpath("k_space_rmos.pt"))
+    k_data = torch_load(path.joinpath("mese_vfa_fs_slice_rmos.pt"))
+    affine = torch_load(
+        "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/pulseq_mese_megesse/7T/2025-03-17/processing/us_test/affine.pt"
+    )
+    k_data = k_data[:, :, k_data.shape[2] // 2, None].clone()
     nx, ny, nz, nc, nt = k_data.shape
+
+    rsos = root_sum_of_squares(input_data=ifft(k_data, dims=(0, 1)), dim_channel=-2)
+    nifti_save(
+        rsos, img_aff=affine,
+        path_to_dir=path_out, file_name="fs_input"
+    )
+
+    # for phantom creation
+    # nx, ny, nc, ne = (256, 240, 4, 2)
+    sl_phantom = Phantom.get_shepp_logan(shape=(ny, nx), num_coils=nc, num_echoes=nt)
+
+    # k_data = k_data.unsqueeze(2)
+    # path = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/scratches/figures/")
 
     logging.info("Set Device")
     device = torch.device("cuda")
 
-    in_k = k_data.clone()
-    in_k = torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1))
-    in_img = ifft(in_k, dims=(0, 1))
-
-    # for rank in [75]:
     logging.info(f"Rank {rank}")
-    ac_loraks = AC_LORAKS(
-        k_space_xyzct=k_data, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
-        device=device, batch_channel_dim=8
-    )
-    k_recon, e_vals = ac_loraks.reconstruct()
-    k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
 
-    out_img = ifft(k_recon, dims=(0, 1))
+    for idx_a, a in enumerate(torch.linspace(2, 5, 6).tolist()):
+        logging.info(f"Acceleration {a:.2f}")
+        sl = sl_phantom.sub_sample_ac_random_lines(acceleration=a, ac_lines=42).permute(1, 0, 2, 3)
+        mask = torch.abs(sl) > 1e-10
+        mask = mask.unsqueeze(2)
 
-    num_p = min(out_img.shape[-1], 10)
-    fig = psub.make_subplots(
-        rows=4, cols=num_p
-    )
-    for i, d in enumerate([in_k, k_recon, in_img, out_img]):
-        d = torch.abs(d)
-        if i < 2:
-            d = torch.log(d)
-        for c in range(num_p):
-            fig.add_trace(
-                go.Heatmap(z=d[:, :, c], showscale=False),
-                row=i + 1, col=c + 1
-            )
-    f_name = path.joinpath(f"js_ac_loraks_test_r-{rank}").with_suffix(".html")
-    log_module.info(f"write file: {f_name}")
-    fig.write_html(f_name)
+        in_k = k_data.clone()
+        in_k[~mask] = 0.0
+        in_img = ifft(torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1)), dims=(0, 1))
 
-    fig = go.Figure()
-    num_vals = min(10, e_vals.shape[0])
-    for i, v in enumerate(e_vals[torch.randperm(e_vals.shape[0])[:num_vals]]):
-        fig.add_trace(
-            go.Scatter(y=v, showlegend=False),
+        ac_loraks = AC_LORAKS(
+            k_space_xyzct=in_k, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
+            device=device, batch_channel_dim=8
         )
-    fig.add_trace(
-        go.Scatter(x=[rank, rank], y=[0, 0.8 * e_vals.max()], mode="lines")
-    )
+        k_recon, e_vals = ac_loraks.reconstruct()
+        k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
 
-    f_name = path.joinpath(f"js_ac_loraks_test_vals-{rank}").with_suffix(".html")
-    log_module.info(f"write file: {f_name}")
-    fig.write_html(f_name)
+        out_img = ifft(k_recon, dims=(0, 1))
 
-    f_name = path.joinpath(f"ac_loraks_recon_-r{rank}").with_suffix(".pt")
-    log_module.info(f"write file: {f_name}")
-    torch.save(k_recon, f_name)
+        num_p = min(out_img.shape[-1], 10)
+        fig = psub.make_subplots(
+            rows=4, cols=num_p
+        )
+        for i, d in enumerate([torch.reshape(torch.squeeze(in_k), (nx, ny, -1)), k_recon, in_img, out_img]):
+            d = torch.abs(d)
+            if i < 2:
+                d = torch.log(d)
+            for c in range(num_p):
+                fig.add_trace(
+                    go.Heatmap(z=d[:, :, c], showscale=False),
+                    row=i + 1, col=c + 1
+                )
+        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
+        log_module.info(f"write file: {f_name}")
+        fig.write_html(f_name)
+
+        fig = go.Figure()
+        num_vals = min(10, e_vals.shape[0])
+        for i, v in enumerate(e_vals[torch.randperm(e_vals.shape[0])[:num_vals]]):
+            fig.add_trace(
+                go.Scatter(y=v, showlegend=False),
+            )
+        fig.add_trace(
+            go.Scatter(x=[rank, rank], y=[0, 0.8 * e_vals.max()], mode="lines")
+        )
+
+        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_vals_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
+        log_module.info(f"write file: {f_name}")
+        fig.write_html(f_name)
+
+        logging.info(f"RSOS")
+        names = [
+            f"loraks_input_acc-{a:.2f}".replace(".", "p"),
+            f"loraks_output_bcs_acc-{a:.2f}_r-{rank}".replace(".", "p")
+        ]
+        for i, d in enumerate([in_img, out_img]):
+            d = torch.reshape(d, (nx, ny, 1, nc, nt))
+            rsos = root_sum_of_squares(d, dim_channel=-2)
+            nifti_save(
+                rsos, img_aff=affine,
+                path_to_dir=path_out, file_name=names[i]
+            )
+
+        # f_name = path_out.joinpath(f"ac_loraks_bcs_recon_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".pt")
+        # log_module.info(f"write file: {f_name}")
+        # torch.save(k_recon, f_name)
 
 
 if __name__ == '__main__':
