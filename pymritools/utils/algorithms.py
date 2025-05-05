@@ -22,7 +22,7 @@ def cgd(
     """
     if iter_bar is not None and not isinstance(iter_bar, range):
         if max_num_iter is not None:
-            iter_dict = collections.OrderedDict([("iter", "_".rjust(max_num_iter, "_"))])
+            iter_dict = collections.OrderedDict([("iter", "_".rjust(max_num_iter, "_")), ("c", "".rjust(22, "."))])
             iter_bar.set_postfix(ordered_dict=iter_dict)
 
     n2b = torch.linalg.norm(b)
@@ -69,7 +69,12 @@ def cgd(
         if normr <= tolb:
             normr_act = torch.linalg.norm(r)
             res_vec[ii] = normr_act
-            log_module.info(f"reached convergence at step {ii + 1}")
+            msg = f"{ii + 1} reached convergence".rjust(22, ".")
+            if iter_bar is not None and not isinstance(iter_bar, range):
+                iter_dict["c"] = msg
+                iter_bar.set_postfix(iter_dict)
+            else:
+                log_module.info(msg)
             break
 
         if normr_act < normrmin:
@@ -79,6 +84,7 @@ def cgd(
             log_module.debug(f"min residual {normrmin:.2f}, at {iimin + 1}")
         if iter_bar is not None and not isinstance(iter_bar, range):
             iter_dict["iter"] = f"{iter_dict['iter'][1:]}I"
+            iter_dict["c"] = str(ii+1).rjust(22, ".")
             iter_bar.set_postfix(iter_dict)
     return xmin, res_vec, {"norm_res_min": normrmin, "iteration": iimin}
 
