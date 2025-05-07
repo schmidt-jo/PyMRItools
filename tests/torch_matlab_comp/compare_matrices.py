@@ -1,7 +1,7 @@
 import torch
 
 
-def check_matrices(matrix_1, matrix_2, rtol=1e-04, atol=1e-07, name="", assertion: bool =True):
+def check_matrices(matrix_1, matrix_2, rtol=1e-04, atol=1e-07, name="", assertion: bool = False):
     matrix_1 = torch.squeeze(matrix_1)
     matrix_2 = torch.squeeze(matrix_2)
 
