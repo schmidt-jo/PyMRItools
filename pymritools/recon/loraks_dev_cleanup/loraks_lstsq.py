@@ -104,7 +104,6 @@ class AC_LORAKS:
             self._log("Using strict data consistency algorithm")
             self.use_data_consistency = True
         else:
-            self._log_error("Using regularization not yet implemented")
             # set regularization version
             self._log(f"Using regularized algorithm (lambda: {self.regularization_lambda:.3f})")
             self.use_data_consistency = False
@@ -389,7 +388,7 @@ class AC_LORAKS:
             def _m_op(x):
                 x = torch.reshape(x, self.shape_batch)
                 m = self._m_op_base(x, v_c=v_c, v_s=v_s)
-                return (aha * x + 2 * self.regularization_lambda * m).flatten()
+                return (aha * x + 2 * self.regularization_lambda * m)
         return _m_op
 
     def _get_m_operator_orig(self, vvh: torch.Tensor, mask: torch.Tensor):
@@ -427,17 +426,7 @@ class AC_LORAKS:
             m = self._m_op_base(k, v_c=v_c, v_s=v_s)
             return - 2 * m[~mask]
         else:
-            # aha = self.sampling_mask_xyt.unsqueeze(-2).to(self.device)
-            aha = mask.to(dtype=k.dtype, device=self.device)
-
-            # x has shape [mx, ny, nc, ne]
-
-            def _m_op(x):
-                x = torch.reshape(x, self.shape_batch)
-                m = self._m_op_base(x, v_c=v_c, v_s=v_s)
-                return (aha * x + 2 * self.regularization_lambda * m).flatten()
-
-        return _m_op
+            return k
 
 
     def _get_b_vector_orig(self, k: torch.Tensor, mask:torch.Tensor, vvh: torch.Tensor):
@@ -519,16 +508,20 @@ class AC_LORAKS:
                 m_op, b = self.recon_batch_orig(k=k_in, mask=mask, v=v)
 
             # reconstruct
-            recon_k_missing, _, _ = cgd(
+            recon_k, _, _ = cgd(
                 func_operator=m_op, x=torch.zeros_like(b), b=b, max_num_iter=20, conv_tol=1e-3, iter_bar=bar
             )
 
-            # embed data
-            recon_k = self.k_batched[idx_b].clone()
-            recon_k[~mask] = recon_k_missing.cpu()
+            if self.use_data_consistency:
+                # embed data
+                tmp = self.k_batched[idx_b].clone()
+                tmp[~mask] = recon_k.cpu()
+                recon_k = tmp
+            else:
+                recon_k = recon_k.cpu()
 
             k_recon[idx_b] = recon_k
-            del k_in, recon_k_missing
+            del k_in, recon_k
             torch.cuda.empty_cache()
         k_recon = self._reshape_batches_to_input(k_recon)
         return self._unpad_output_xyzct(k_recon), e_vals
@@ -629,19 +622,20 @@ def main():
     log_module.info("K Space creation")
     torch.manual_seed(10)
 
-    rank = 300
+    rank = 301
     r = 3
 
     path = plib.Path(
-        "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/pulseq_mese_megesse/7T/2025-03-17/processing/us_test/"
+        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/processing/mese_vfa-a3p5ws/dklc/"
     ).absolute()
-    path_out = path.joinpath("recon")
+    path_out = path.parent.joinpath("recon")
     path_fig = path_out.joinpath("figures").absolute()
     path_fig.mkdir(exist_ok=True, parents=True)
     #
-    k_data = torch_load(path.joinpath("mese_vfa_fs_slice_rmos.pt"))
+    k_data = torch_load(path.joinpath("d_k_space_rmos.pt"))
     affine = torch_load(
-        "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/pulseq_mese_megesse/7T/2025-03-17/processing/us_test/affine.pt"
+        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/"
+        "raw/mese_vfa-a3p5ws/affine.pt"
     )
     k_data = k_data[:, :, k_data.shape[2] // 2, None].clone()
     nx, ny, nz, nc, nt = k_data.shape
@@ -666,17 +660,17 @@ def main():
 
     for idx_a, a in enumerate(torch.linspace(3.5, 4, 1).tolist()):
         logging.info(f"Acceleration {a:.2f}")
-        sl = sl_phantom.sub_sample_ac_weighted_lines(acceleration=a, ac_lines=42, weighting_factor=0.5).permute(1, 0, 2, 3)
-        mask = torch.abs(sl) > 1e-10
-        mask = mask.unsqueeze(2)
+        # sl = sl_phantom.sub_sample_ac_weighted_lines(acceleration=a, ac_lines=42, weighting_factor=0.5).permute(1, 0, 2, 3)
+        # mask = torch.abs(sl) > 1e-10
+        # mask = mask.unsqueeze(2)
 
         in_k = k_data.clone()
-        in_k[~mask] = 0.0
+        # in_k[~mask] = 0.0
         in_img = ifft(torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1)), dims=(0, 1))
 
         ac_loraks = AC_LORAKS(
             k_space_xyzct=in_k, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
-            device=device, batch_channel_dim=16
+            device=device, batch_channel_dim=16, regularization_lambda=0.1
         )
         k_recon, e_vals = ac_loraks.reconstruct()
         k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
@@ -731,9 +725,9 @@ def main():
             out_img.reshape(nx, ny, 1, nc, nt)[..., 0].abs(), img_aff=affine,
             path_to_dir=path_out, file_name=f"loraks_output_bcs_ws_acc-{a:.2f}_r-{rank}_channels".replace(".", "p")
         )
-        # f_name = path_out.joinpath(f"ac_loraks_bcs_recon_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".pt")
-        # log_module.info(f"write file: {f_name}")
-        # torch.save(k_recon, f_name)
+        f_name = path_out.joinpath(f"ac_loraks_bcs_recon_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".pt")
+        log_module.info(f"write file: {f_name}")
+        torch.save(k_recon.reshape(nx, ny, 1, nc, nt), f_name)
 
 
 if __name__ == '__main__':
