@@ -83,3 +83,20 @@ Datasets:
   convolution structure is not as obvious. How would one need to adopt the $L_i$ operator considering in our algorithm
   only the forward pass to the loss function is necessary. It appears as its a sum of the C convolution structure
   and a conjugated filtering method.
+
+# Parameter and Dataflow
+
+* Rank. Either an explicit number or a method that calculates the rank.
+  * Can we combine cuttoff method here?
+  * Jochen says it's only relevant for P Loraks because in AC we only calculate the SVD once.
+  * What about eigh and how to combine with the other methods?
+* patch_size, direction for defining neighborhood
+* operator type, either C or S
+* Loss-function: (1) Data consistency loss and LR Loss with lambda, (2) true data consistency, only LR loss.
+  * Here it is important to not touch the sampled points when using true data consistency
+* Lambda parameter defines weighting or switches to true data consistency
+* Iterations: Number of iterations in the main loop for one batch
+* Tolerance: If the rate of change between candidates. 
+  * This might be hard to implement for autograd.
+  * What are we doing about the learning rate?
+* Device: We want to set it globally, but it might not be possible to compute everything on the GPU even if set. 
