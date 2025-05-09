@@ -72,5 +72,5 @@ seqprog_raw_data_siemens = "pymritools.seqprog.rawdata.rd_read:siemens"
 utils_remove_oversampling = "pymritools.seqprog.rawdata.utils:rmos"
 utils_root_sum_of_squares = "pymritools.seqprog.rawdata.utils:recon_naive_rsos"
 # reconstruction
-recon_ac_loraks = "pymritools.recon.loraks.recon:recon_ac_loraks"
-recon_loraks = "pymritools.recon.loraks.recon:recon_loraks"
+recon_ac_loraks = "pymritools.recon.loraks_dev.recon:recon_ac_loraks"
+#recon_loraks = "pymritools.recon.loraks.recon:recon_loraks"
