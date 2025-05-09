@@ -9,7 +9,7 @@ import tqdm
 from scipy.ndimage import binary_erosion
 
 from pymritools.config.processing import DenoiseSettingsMPPCA
-from pymritools.utils import nifti_load, nifti_save, fft, ifft, root_sum_of_squares
+from pymritools.utils import nifti_load, nifti_save, fft, ifft, root_sum_of_squares, torch_load
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from pymritools.config import setup_program_logging, setup_parser
@@ -20,8 +20,20 @@ log_module = logging.getLogger(__name__)
 
 def load_data(settings: DenoiseSettingsMPPCA):
     # load in data
-    input_data, input_img = nifti_load(settings.in_path)
-    input_data = torch.from_numpy(input_data)
+    path_in = plib.Path(settings.in_path)
+    if ".nii" in path_in.suffixes:
+        input_data, input_img = nifti_load(path_in)
+        input_data = torch.from_numpy(input_data)
+    elif ".pt" in path_in.suffixes:
+        input_data = torch_load(path_in)
+        if settings.in_affine:
+            affine = torch_load(settings.in_affine)
+        else:
+            affine = torch.eye(4)
+        input_img = nib.Nifti1Image(input_data.numpy(), affine.numpy())
+    else:
+        msg = f"Unsupported input file type ({path_in.suffixes})"
+        raise AttributeError(msg)
 
     # setup save path
     path_output = plib.Path(settings.out_path).absolute()
@@ -382,7 +394,7 @@ def denoise(settings: DenoiseSettingsMPPCA):
         mask = None
 
     # compute noise
-    data_noise = input_data - data_denoised
+    data_noise = torch.squeeze(input_data) - data_denoised
 
     save_data(
         data_denoised=data_denoised, data_noise=data_noise, noise_mask=mask, data_p=data_p,
@@ -406,7 +418,7 @@ def save_data(
     # data_denoised *= max_val / torch.max(data_denoised)
 
     nifti_save(data=data_denoised.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data")
-    nifti_save(data=data_noise.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
+    nifti_save(data=data_noise.abs().numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
     # nifti_save(
     #     data=data_noise_sm_var.numpy(), img_aff=nii_img, path_to_dir=path_output,
     #            file_name="noise_data_smoothed_var"
@@ -418,7 +430,7 @@ def save_data(
     # logging.info(f"write file: {file_name.as_posix()}")
     # torch.save(data_denoised, file_name.as_posix())
 
-    if noise_bias_correction is not None:
+    if data_denoised_nbc is not None:
         if noise_mask is not None:
             nifti_save(
                 data=noise_mask.to(torch.int32), img_aff=nii_img, path_to_dir=path_output, file_name="noise_mask"
@@ -437,7 +449,7 @@ def main():
         dict_config_dataclasses={"settings": DenoiseSettingsMPPCA}
     )
     # get settings
-    prog_args.settings.out_path = "/data/pt_np-jschmidt/code/PyMRItools/examples/processing/denoising/results"
+    # prog_args.settings.out_path = "/data/pt_np-jschmidt/code/PyMRItools/examples/processing/denoising/results"
     settings = DenoiseSettingsMPPCA.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 
