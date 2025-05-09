@@ -1,4 +1,7 @@
 import torch
+from typing import Tuple
+
+from pymritools.recon.loraks_dev.ps_loraks import OperatorType
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_linear_indices, get_circular_nb_indices_in_2d_shape
 
 
@@ -79,6 +82,39 @@ def s_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, indices_rev:
     return adj_s_matrix.view(k_space_dims)
 
 
+def calculate_matrix_size(k_space_shape: Tuple,
+                          patch_shape: Tuple,
+                          sample_directions: Tuple,
+                          matrix_type: OperatorType) -> tuple[int, int]:
+    """
+        Calculates the operator matrix size for a given k-space shape, patch shape, sample directions,
+        and matrix type.
+
+        Args:
+        k_space_shape (Tuple): The shape of the k-space which impacts the number of sampling points.
+        patch_shape (Tuple): The patch shape to extract from the k-space.
+        sample_directions (Tuple): Directional sampling patterns for patches.
+        matrix_type (OperatorType): Type of operator matrix
+
+        Returns:
+        tuple[int, int]: A tuple containing two integers representing the dimensions of the
+        operator matrix based on the given inputs and the specified operator type.
+    """
+    k_space_shape = torch.tensor(k_space_shape)
+    patch_shape = torch.tensor(patch_shape)
+    sample_directions = torch.tensor(sample_directions)
+    patch_sizes = torch.where(patch_shape == 0, torch.tensor(1), patch_shape)
+    patch_sizes = torch.where(patch_shape == -1, k_space_shape, patch_sizes)
+
+    sample_steps = torch.where(sample_directions == 0, torch.tensor(1), k_space_shape - patch_sizes + 1)
+    if matrix_type == OperatorType.C:
+        return torch.prod(patch_sizes).item(),  torch.prod(sample_steps).item()
+    elif matrix_type == OperatorType.S:
+        return 2 * torch.prod(patch_sizes).item(), 2 * torch.prod(sample_steps).item()
+    else:
+        raise ValueError(f"Unknown matrix type: {matrix_type}")
+
+
 class Operator:
     def __init__(self, k_space_shape: tuple, patch_shape: tuple, sample_directions: tuple, device: torch.device):
         self.k_space_shape = k_space_shape
@@ -101,6 +137,10 @@ class Operator:
     def adjoint_operator(self, matrix: torch.Tensor):
         raise NotImplementedError("To be implemented by subclass")
 
+    @property
+    def matrix_size(self) -> tuple[int, int]:
+        return NotImplementedError("To be implemented by subclass")
+
 
 class C(Operator):
     def __init__(self, k_space_shape: tuple, patch_shape: tuple, sample_directions: tuple, device: torch.device):
@@ -111,6 +151,12 @@ class C(Operator):
 
     def adjoint_operator(self, matrix: torch.Tensor):
         return c_adjoint_operator(c_matrix=matrix, indices=self.indices, k_space_dims=self.k_space_shape)
+
+    def matrix_size(self) -> tuple[int, int]:
+        return calculate_matrix_size(
+            k_space_shape=self.k_space_shape, patch_shape=self.patch_shape,
+            sample_directions=self.sample_directions, matrix_type=OperatorType.C
+        )
 
 
 class S(Operator):
@@ -131,3 +177,9 @@ class S(Operator):
 
     def adjoint_operator(self, matrix: torch.Tensor):
         return s_adjoint_operator(matrix=matrix, indices=self.indices, indices_rev=self.indices_rev)
+
+    def matrix_size(self) -> tuple[int, int]:
+        return calculate_matrix_size(
+            k_space_shape=self.k_space_shape, patch_shape=self.patch_shape,
+            sample_directions=self.sample_directions, matrix_type=OperatorType.S
+        )
