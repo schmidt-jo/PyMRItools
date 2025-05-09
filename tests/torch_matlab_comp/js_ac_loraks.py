@@ -197,6 +197,7 @@ def get_ac_matrix(k_data):
     ac_matrix[:, ~idx] = 0.0
     return ac_matrix
 
+
 def _m_op_base(x: torch.Tensor, v_c: torch.Tensor, v_s: torch.Tensor, r: int, nx:int, ny: int):
     loraks_neighborhood_side = 2*r + 1
     # dims [nx, ny, nce]
@@ -374,15 +375,13 @@ def test_ac_loraks_vs_matlab():
     nb_patch_side_length = 2 * r + 1
 
     # create k-space
-    # k_data = (
-    #         torch.randn((ne, nc, ny, nx), dtype=torch.complex128) +
-    #         torch.linspace(1, 20, ne*nc*ny*nx).reshape(ne, nc, ny, nx).to(dtype=torch.complex128)
-    # )
-    # k_data = torch.reshape(k_data, (-1, ny, nx))
-    sl_phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=3, num_echoes=2)
-    k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=20, acceleration=3)
+    # sl_phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=3, num_echoes=2)
+    # k_data = sl_phantom.sub_sample_ac_random_lines(ac_lines=20, acceleration=3)
+    k_data = torch.load("/data/pt_np-jschmidt/data/12_tiago_repro/data/test_722_MSE_vFA_LORAKS/processed/k_space.pt")
+    nx, ny, nz, nc, ne = k_data.shape
+    k_data = k_data[:, :, 1, 0].unsqueeze(-2)
     k_data = k_data.permute(3, 2, 1, 0)
-    k_data = k_data.reshape(-1, ny, nx)
+    k_data = k_data.reshape(-1, ny, nx).contiguous()
     input_img = ifft(k_data)
     input_k = k_data.clone()
     mask = torch.abs(k_data) > 1e-10
@@ -525,15 +524,15 @@ def test_ac_loraks_vs_matlab():
     # e_vals = e_vals[idx]
     # e_v_thresh = 1e-12 * torch.abs(torch.max(e_vals))
     # idx_thresh = torch.where(torch.abs(e_vals) < e_v_thresh)[0][0].item()
-
-    print("\nEigenvalue decomposition testing")
-    # identify spectrum
-    e_vals = torch.linalg.eigvalsh(mmh, UPLO="U")
-    # sort eigenvalues
-    e_vals = torch.sort(torch.abs(e_vals), descending=True).values
-    # find threshold
-    r_th = 1e-11
-    e_th = torch.where(e_vals < r_th * e_vals.max())[0][0]
+    #
+    # print("\nEigenvalue decomposition testing")
+    # # identify spectrum
+    # e_vals = torch.linalg.eigvalsh(mmh, UPLO="U")
+    # # sort eigenvalues
+    # e_vals = torch.sort(torch.abs(e_vals), descending=True).values
+    # # find threshold
+    # r_th = 1e-11
+    # e_th = torch.where(e_vals < r_th * e_vals.max())[0][0]
 
     print("\nBuild Nullspace")
     nmm = um[:, rank:].mH
