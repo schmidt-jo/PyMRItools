@@ -8,6 +8,7 @@ from enum import Enum, auto
 from pymritools.recon.loraks_dev.ps_loraks import OperatorType
 from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
+from pymritools.recon.loraks_dev_cleanup.operators import S, C
 
 log_module = logging.getLogger(__name__)
 
@@ -147,7 +148,6 @@ def v_shift(v_pad: torch.Tensor, batch_shape: tuple, nb_size: int, operator_type
             )
         )
 
-
 class SolverType(Enum):
     LEASTSQUARES = auto()
     AUTOGRAD = auto()
@@ -174,6 +174,30 @@ class AcLoraks(LoraksBase):
         self.solver_type = options.solver_type
         self.rank = options.rank
         self.tol = 1e-5
+
+        if self.loraks_matrix_type == OperatorType.S:
+            self.op = S
+        else:
+            self.op = C
+
+        if self.regularization_lambda < 1e-9:
+            # set strict data consistency
+            self._log("Using strict data consistency algorithm")
+        else:
+            # set regularization version
+            self._log(f"Using regularized algorithm (lambda: {self.regularization_lambda:.3f})")
+
+        if self.fast_compute:
+            # set fft algorithm
+            self._log("Using fast computation via FFTs")
+        else:
+            self._log_error("Using slow compute not yet implemented")
+            self._log("Using operator based (slower) algorithm")
+
+        # in the end we need an M operator and a b vector to solve Mf = b least squares via cgd
+        # self.count_matrix = self._get_count_matrix()
+        torch.cuda.empty_cache()
+
 
     # steps needed in AC LORAKS
     # 1) deduce AC region within Loraks Matrix
