@@ -13,6 +13,8 @@ from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_
 from pymritools.recon.loraks_dev_cleanup.operators import s_operator
 from pymritools.utils.algorithms import cgd
 from pymritools.utils import Phantom, ifft, torch_load, root_sum_of_squares, nifti_save
+from pymritools.config.recon import PyLoraksConfig
+from pymritools.config import setup_program_logging, setup_parser
 
 log_module = logging.getLogger(__name__)
 
@@ -27,10 +29,9 @@ class AC_LORAKS:
             loraks_neighborhood_radius: int = 3,
             loraks_matrix_type: str = "S",
             fast_compute: bool = True,
-            batch_channel_dim: int = -1,
+            batch_channel_size: int = -1,
             max_num_iter: int = 20,
             conv_tol: float = 1e-3,
-            process_slice: bool = False,
             device: torch.device = torch.get_default_device()):
 
         log_module.info("Initialize LORAKS reconstruction algortihm")
@@ -50,9 +51,6 @@ class AC_LORAKS:
                 "Found less than 5 dimensional tensors, "
                 "shape tensor e.g. unsqueeze all singular dimensions to fit x-y-z-c-t shape."
             )
-        if process_slice:
-            self._log(f"Processing single slice toggled (usually for testing performance or parameters).")
-            k_space_xyzct = k_space_xyzct[:, :, k_space_xyzct.shape[2] // 2, None]
 
         # pad to even spatial dimensions - make sure the input has even number of dims in which all processing and
         # fft etc is happening (usually x, y), this method sets a flag used in later removal after reconstruction
@@ -64,7 +62,7 @@ class AC_LORAKS:
 
         # check if we need to batch the channel dimension
         batching, self.batch_channel_size, self.num_channel_batches = self._check_channel_batching(
-            batch_channel_dim=batch_channel_dim, nc=k_space_xyzct.shape[-2]
+            batch_channel_dim=batch_channel_size, nc=k_space_xyzct.shape[-2]
         )
         # if we need to batch, extract channel batch indices based on matching channel correlations,
         # i.e. clustering channels in batches based on maximizing batch correlation,
@@ -618,65 +616,69 @@ class AC_LORAKS:
         return torch.Tensor(batches).to(torch.int)
 
 
-def main():
-    log_module.info("K Space creation")
-    torch.manual_seed(10)
+def recon(settings: PyLoraksConfig):
+    # setup
+    log_module.info(f"Set output path: {settings.out_path}")
+    path_out = plib.Path(settings.out_path).absolute()
 
-    rank = 301
-    r = 3
+    path_figs = path_out.joinpath("figs/")
+    if settings.visualize:
+        log_module.info(f"Set figure path for visualizations: {path_figs}")
+        path_figs.mkdir(parents=True, exist_ok=True)
 
-    path = plib.Path(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/processing/mese_vfa-a3p5ws/dklc/"
-    ).absolute()
-    path_out = path.parent.joinpath("recon")
-    path_fig = path_out.joinpath("figures").absolute()
-    path_fig.mkdir(exist_ok=True, parents=True)
-    #
-    k_data = torch_load(path.joinpath("d_k_space_rmos.pt"))
-    affine = torch_load(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/"
-        "raw/mese_vfa-a3p5ws/affine.pt"
+    # set up device
+    if settings.use_gpu and torch.cuda.is_available():
+        log_module.info(f"configuring gpu::  cuda:{settings.gpu_device}")
+        device = torch.device(f"cuda:{settings.gpu_device}")
+    else:
+        device = torch.device("cpu")
+    torch.manual_seed(0)
+
+    # load data
+    k_space, sampling_mask, affine = load_data(settings=settings)
+    log_module.info(f"input data shape {k_space.shape}")
+    nx, ny, nz, nc, ne = k_space.shape
+
+    log_module.info(f"___ Loraks Reconstruction ___")
+    log_module.info(f"Radius - {settings.radius}; ")
+    log_module.info(
+        f"Rank - {settings.rank}; Lambda - {settings.reg_lambda}; Matrix Type - {settings.matrix_type}; "
     )
-    k_data = k_data[:, :, k_data.shape[2] // 2, None].clone()
-    nx, ny, nz, nc, nt = k_data.shape
+    # set up name
+    loraks_name = f"ac_loraks_k_space_recon_r-{settings.radius}_rank-{settings.reg_lambda}"
+    if settings.reg_lambda > 1e-6:
+        loraks_name = f"{loraks_name}_lambda-{settings.reg_lambda:.3f}"
+    else:
+        loraks_name = f"{loraks_name}_true-dc"
+    loraks_name = loraks_name.replace(".", "p")
 
-    rsos = root_sum_of_squares(input_data=ifft(k_data, dims=(0, 1)), dim_channel=-2)
+    # save fft of input for reference
+    rsos = root_sum_of_squares(input_data=ifft(k_space, dims=(0, 1)), dim_channel=-2)
     nifti_save(
         rsos, img_aff=affine,
-        path_to_dir=path_out, file_name="fs_input"
+        path_to_dir=path_out, file_name=f"{loraks_name}_input"
     )
 
-    # for phantom creation
-    # nx, ny, nc, ne = (256, 240, 4, 2)
-    sl_phantom = Phantom.get_shepp_logan(shape=(ny, nx), num_coils=nc, num_echoes=nt)
+    # save input for plotting
+    in_k = k_space.clone()
+    # in_k[~mask] = 0.0
+    in_img = ifft(torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1)), dims=(0, 1))
 
-    # k_data = k_data.unsqueeze(2)
-    # path = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/scratches/figures/")
+    # create loraks algorithm
+    ac_loraks = AC_LORAKS(
+        k_space_xyzct=in_k, rank=settings.rank, loraks_neighborhood_radius=settings.radius,
+        device=device, batch_channel_size=settings.batch_size, regularization_lambda=settings.reg_lambda,
+        loraks_matrix_type=settings.matrix_type, max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol
+    )
+    # reconstruct
+    k_recon, e_vals = ac_loraks.reconstruct()
+    k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
 
-    logging.info("Set Device")
-    device = torch.device("cuda")
+    # create image data
+    out_img = ifft(k_recon, dims=(0, 1))
 
-    logging.info(f"Rank {rank}")
-
-    for idx_a, a in enumerate(torch.linspace(3.5, 4, 1).tolist()):
-        logging.info(f"Acceleration {a:.2f}")
-        # sl = sl_phantom.sub_sample_ac_weighted_lines(acceleration=a, ac_lines=42, weighting_factor=0.5).permute(1, 0, 2, 3)
-        # mask = torch.abs(sl) > 1e-10
-        # mask = mask.unsqueeze(2)
-
-        in_k = k_data.clone()
-        # in_k[~mask] = 0.0
-        in_img = ifft(torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1)), dims=(0, 1))
-
-        ac_loraks = AC_LORAKS(
-            k_space_xyzct=in_k, rank=rank, loraks_neighborhood_radius=r, process_slice=False,
-            device=device, batch_channel_dim=16, regularization_lambda=0.1
-        )
-        k_recon, e_vals = ac_loraks.reconstruct()
-        k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
-
-        out_img = ifft(k_recon, dims=(0, 1))
-
+    # plot
+    if settings.visualize:
         num_p = min(out_img.shape[-1], 10)
         fig = psub.make_subplots(
             rows=4, cols=num_p
@@ -690,7 +692,7 @@ def main():
                     go.Heatmap(z=d[:, :, c], showscale=False),
                     row=i + 1, col=c + 1
                 )
-        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_ws_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
+        f_name = path_figs.joinpath(loraks_name).with_suffix(".html")
         log_module.info(f"write file: {f_name}")
         fig.write_html(f_name)
 
@@ -701,36 +703,84 @@ def main():
                 go.Scatter(y=v, showlegend=False),
             )
         fig.add_trace(
-            go.Scatter(x=[rank, rank], y=[0, 0.8 * e_vals.max()], mode="lines")
+            go.Scatter(x=[settings.rank, settings.rank], y=[0, 0.8 * e_vals.max()], mode="lines")
         )
 
-        f_name = path_fig.joinpath(f"js_ac_loraks_test_bcs_ws_vals_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".html")
+        f_name = path_figs.joinpath(f"{loraks_name}_eigenvalues").with_suffix(
+            ".html")
         log_module.info(f"write file: {f_name}")
         fig.write_html(f_name)
 
-        logging.info(f"RSOS")
-        names = [
-            f"loraks_input_acc-{a:.2f}".replace(".", "p"),
-            f"loraks_output_bcs_ws_acc-{a:.2f}_r-{rank}".replace(".", "p")
-        ]
-        for i, d in enumerate([in_img, out_img]):
-            d = torch.reshape(d, (nx, ny, 1, nc, nt))
-            rsos = root_sum_of_squares(d, dim_channel=-2)
-            nifti_save(
-                rsos, img_aff=affine,
-                path_to_dir=path_out, file_name=names[i]
-            )
+    logging.info(f"RSOS")
+    d = torch.reshape(out_img, (nx, ny, nz, nc, ne))
+    rsos = root_sum_of_squares(d, dim_channel=-2)
+    nifti_save(
+        rsos, img_aff=affine,
+        path_to_dir=path_out, file_name=f"{loraks_name}_rsos"
+    )
 
-        nifti_save(
-            out_img.reshape(nx, ny, 1, nc, nt)[..., 0].abs(), img_aff=affine,
-            path_to_dir=path_out, file_name=f"loraks_output_bcs_ws_acc-{a:.2f}_r-{rank}_channels".replace(".", "p")
-        )
-        f_name = path_out.joinpath(f"ac_loraks_bcs_recon_acc-{a:.2f}_r-{rank}".replace(".", "p")).with_suffix(".pt")
-        log_module.info(f"write file: {f_name}")
-        torch.save(k_recon.reshape(nx, ny, 1, nc, nt), f_name)
+    f_name = path_out.joinpath(loraks_name).with_suffix(".pt")
+    log_module.info(f"write file: {f_name}")
+    torch.save(k_recon.reshape(nx, ny, nz, nc, ne), f_name)
 
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    main()
+def recon_ac_loraks():
+    # setup  logging
+    setup_program_logging(name="AC Loraks", level=logging.INFO)
+    # setup parser
+    parser, args = setup_parser(prog_name="AC Loraks", dict_config_dataclasses={"settings": PyLoraksConfig})
+    # get cli args
+    settings = PyLoraksConfig.from_cli(args=args.settings, parser=parser)
+    settings.display()
+    if settings.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        log_module.debug(f"set debug logging level")
 
+    try:
+        recon(settings=settings)
+    except Exception as e:
+        logging.exception(e)
+        parser.print_help()
+
+
+def load_data(settings: PyLoraksConfig):
+    log_module.debug("Load data")
+    k_space = torch_load(settings.in_k_space)
+    if not plib.Path(settings.in_affine).is_file():
+        log_module.warning("No affine file given using identity matrix!")
+        affine = torch.eye(4)
+    else:
+        affine = torch_load(settings.in_affine)
+    # if settings.in_sampling_mask:
+    #     sampling_pattern = torch_load(settings.in_sampling_mask)
+    # else:
+    sampling_pattern = (torch.abs(k_space) > 1e-9)[:, :, 0, 0]
+
+    log_module.debug(f"Check single slice toggle set")
+    if settings.process_slice:
+        mid_slice = int(k_space.shape[2] / 2)
+        log_module.info(f"single slice processing: pick slice {mid_slice + 1}")
+        k_space = k_space[:, :, mid_slice, None]
+
+    # log_module.debug(f"Check sampling pattern shape")
+    # # if sampling_pattern.shape.__len__() < 3:
+    # #     # sampling pattern supposed to be x, y, t
+    # #     sampling_pattern = sampling_pattern[:, :, None]
+    # get shape
+    while k_space.shape.__len__() < 5:
+        # probably when processing single slice or debugging
+        k_space = k_space.unsqueeze(-1)
+
+    return k_space, sampling_pattern, affine
+
+
+def log_mem(point: str, device: torch.device):
+    if not device.type == "cpu":
+        logging.debug(f"Memory log: {point}")
+
+        logging.debug(f"\t\t-{torch.cuda.get_device_name(device)}")
+        logging.debug(f"\t\tAllocated: {round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1):.1f}, GB")
+        logging.debug(f"\t\tCached: {round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1):.1f}, GB")
+
+        mem = torch.cuda.mem_get_info(device)
+        logging.debug(f"\t\tAvailable: {mem[0] / 1024 ** 3:.1f} GB / {mem[1] / 1024 ** 3:.1f} GB")
