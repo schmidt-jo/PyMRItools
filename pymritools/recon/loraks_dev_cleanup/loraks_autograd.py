@@ -3,48 +3,16 @@ import logging
 import torch
 import tqdm
 from typing import Callable, Tuple, Optional, Union
-from enum import Enum, auto
 import psutil
 
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.recon.loraks_dev.operators import c_operator, s_operator
+from pymritools.recon.loraks_dev_cleanup.loraks import LowRankAlgorithmType, SVThresholdMethod, OperatorType
 
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
 
 logger = logging.getLogger(__name__)
-
-
-class LowRankAlgorithmType(Enum):
-    TORCH_LOWRANK_SVD = auto()
-    RANDOM_SVD = auto()
-    SOR_SVD = auto()
-
-
-class MeasurementType(Enum):
-    AC_DATA = auto()
-    CALIBRATIONLESS = auto()
-
-
-class RegularizationType(Enum):
-    DATACONSISTENCY = auto()
-    REGULARIZED = auto()
-
-
-class ComputationType(Enum):
-    FFT = auto()
-    REGULAR = auto()
-
-
-class OperatorType(Enum):
-    C = auto()
-    S = auto()
-
-
-class SVThresholdMethod(Enum):
-    HARD_CUTOFF = auto()
-    RELU_SHIFT = auto()
-    RELU_SHIFT_AUTOMATIC = auto()
 
 
 def get_lowrank_algorithm_function(algorithm: LowRankAlgorithmType, args: Tuple):
