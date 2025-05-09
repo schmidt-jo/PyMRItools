@@ -3,7 +3,6 @@ import pathlib as plib
 import logging
 
 import torch
-import nibabel as nib
 from pymritools.config.database import DB
 from pymritools.config.emc import EmcFitSettings
 from pymritools.utils import nifti_save, nifti_load, normalize_data, torch_load
@@ -36,6 +35,7 @@ def setup_input(settings: EmcFitSettings):
     if ".nii" in path_in.suffixes:
         input_data, input_img = nifti_load(settings.input_data)
         input_data = torch.from_numpy(input_data)
+        aff = torch.from_numpy(input_img.affine)
     elif ".pt" in path_in.suffixes:
         input_data = torch_load(settings.input_data)
         path_affine = plib.Path(settings.input_affine)
@@ -43,7 +43,6 @@ def setup_input(settings: EmcFitSettings):
             aff = torch.eye(4)
         else:
             aff = torch_load(path_affine)
-        input_img = nib.Nifti1Image(input_data.numpy(), aff.numpy())
     else:
         err = f"File suffix '{path_in.suffixes}' is not supported. Chose .nii or .pt files"
         raise AttributeError(err)
@@ -60,7 +59,7 @@ def setup_input(settings: EmcFitSettings):
     input_data = torch.reshape(input_data, (-1, data_shape[-1]))
     # check for masked voxels, dont need to process 0 voxels
     mask_nii_nonzero = torch.sum(torch.abs(input_data), dim=-1) > 1e-6
-    return input_data, input_img, data_shape, mask_nii_nonzero, rho_s, name
+    return input_data, aff, data_shape, mask_nii_nonzero, rho_s, name
 
 
 def setup_db(settings: EmcFitSettings, return_complex: bool = False):
