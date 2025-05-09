@@ -1,4 +1,5 @@
 import torch
+from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_linear_indices, get_circular_nb_indices_in_2d_shape
 
 
 def c_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):
@@ -76,3 +77,57 @@ def s_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, indices_rev:
     adj_s_matrix = adj_s_matrix.index_add(1, indices_rev.view(-1), s_m.view(s_m.shape[0], -1))
 
     return adj_s_matrix.view(k_space_dims)
+
+
+class Operator:
+    def __init__(self, k_space_shape: tuple, patch_shape: tuple, sample_directions: tuple, device: torch.device):
+        self.k_space_shape = k_space_shape
+        self.patch_shape = patch_shape
+        self.sample_directions = sample_directions
+        self.device = device
+        self.indices, self.matrix_shape = get_linear_indices(
+            k_space_shape=k_space_shape, patch_shape=patch_shape, sample_directions=sample_directions
+        )
+
+    @property
+    def count_matrix(self):
+        in_ones = torch.ones(self.k_space_shape, dtype=torch.complex64, device=self.device)
+        matrix = self.operator(in_ones)
+        return self.adjoint_operator(matrix).to(torch.int)
+
+    def operator(self, k_space: torch.Tensor):
+        raise NotImplementedError("To be implemented by subclass")
+
+    def adjoint_operator(self, matrix: torch.Tensor):
+        raise NotImplementedError("To be implemented by subclass")
+
+
+class C(Operator):
+    def __init__(self, k_space_shape: tuple, patch_shape: tuple, sample_directions: tuple, device: torch.device):
+        super().__init__(k_space_shape, patch_shape, sample_directions, device)
+
+    def operator(self, k_space: torch.Tensor):
+        return c_operator(k_space=k_space, indices=self.indices, matrix_shape=self.matrix_shape)
+
+    def adjoint_operator(self, matrix: torch.Tensor):
+        return c_adjoint_operator(c_matrix=matrix, indices=self.indices, k_space_dims=self.k_space_shape)
+
+
+class S(Operator):
+    def __init__(self, k_space_shape: tuple, patch_shape: tuple, sample_directions: tuple, device: torch.device):
+        super().__init__(k_space_shape, patch_shape, sample_directions, device)
+        self.indices = get_circular_nb_indices_in_2d_shape(
+            k_space_2d_shape=k_space_shape[:2], nb_radius=max(patch_shape) // 2,
+            reversed=False
+        ).to(device)
+        self.indices_rev = get_circular_nb_indices_in_2d_shape(
+            k_space_2d_shape=k_space_shape[:2], nb_radius=max(patch_shape) // 2,
+            reversed=True
+        ).to(self.indices.device)
+
+    def operator(self, k_space: torch.Tensor):
+        return s_operator(k_space=k_space, indices=self.indices, indices_rev=self.indices_rev,
+                          matrix_shape=self.matrix_shape)
+
+    def adjoint_operator(self, matrix: torch.Tensor):
+        return s_adjoint_operator(matrix=matrix, indices=self.indices, indices_rev=self.indices_rev)
