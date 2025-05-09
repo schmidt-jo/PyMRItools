@@ -2,6 +2,22 @@ import torch
 
 
 def get_circular_nb_indices(nb_radius):
+    """
+    Calculate indices for a circular neighborhood within a given radius.
+
+    The function generates a grid of indices corresponding to the vertical
+    and horizontal distances from the center. Using these indices, it determines
+    the points that lie within the specified circular radius by applying a mask
+    based on the Euclidean distance.
+
+    :param nb_radius: Radius of the circular neighborhood. The returned indices
+        correspond to points that are at most this distance from the center.
+    :type nb_radius: int
+    :return: A tensor of indices representing points within the circular
+        neighborhood. Each index is a set of relative coordinates (x, y) from the
+        center.
+    :rtype: torch.Tensor
+    """
     # want a circular neighborhood, i.e. find all indices within a radius
     nb_x, nb_y = torch.meshgrid(
         torch.arange(-nb_radius, nb_radius + 1),
@@ -15,10 +31,21 @@ def get_circular_nb_indices(nb_radius):
 
 
 def get_circular_nb_indices_in_2d_shape(k_space_2d_shape: tuple, nb_radius: int, reversed: bool = False):
-    # ensure 2D shape
-    if k_space_2d_shape.__len__() != 2:
-        msg = "method implemented for 2D input only"
-        raise NotImplementedError(msg)
+    """
+    Calculates circular neighborhood indices in a 2D shape and converts them to linear indices.
+
+    This function generates circular neighborhood indices for a given radius and translates them
+    into linear indices relative to the provided 2D shape dimensions. Depending on the `reversed`
+    flag, the neighborhood indices can be adjusted relative to the center or flipped accordingly.
+
+    :param k_space_2d_shape: The 2D shape of the space, as a tuple, where the first value represents
+        the number of rows and the second value represents the number of columns.
+    :param nb_radius: The radius of the circular neighborhood within the 2D shape.
+    :param reversed: A boolean flag indicating whether the neighborhood indices should be adjusted
+        relative to the reversed center. Defaults to False.
+    :return: A tensor containing the linear indices of the circular neighborhood within the 2D shape.
+    :rtype: torch.Tensor
+    """
     # want a circular neighborhood radius and convert to linear indices
     neighborhood_indices = get_circular_nb_indices(nb_radius=nb_radius)
 

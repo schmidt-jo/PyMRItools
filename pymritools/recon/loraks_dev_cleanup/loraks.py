@@ -29,6 +29,7 @@ For each "flavor" we have different computation options.
 
 The algorithm is using torch autograd to perform direct optimization of the Minimization equations.
 """
+import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
@@ -78,13 +79,19 @@ class SVThresholdMethod(Enum):
 
 @dataclass
 class LoraksOptions:
-    rank: SVThresholdMethod = SVThresholdMethod.HARD_CUTOFF
-    regularization_lambda: float = 0.5
+    # rank: SVThresholdMethod = SVThresholdMethod.HARD_CUTOFF
+    rank: int = 150
+    # TODO: i think rank needs to be a number, as the AC LORAKS version does deduce the nullspace,
+    #  but does not do thresholding
+    regularization_lambda: float = 0.1
     loraks_neighborhood_radius: int = 3
     loraks_matrix_type: OperatorType = OperatorType.C
     fast_compute: ComputationType = ComputationType.REGULAR
     max_num_iter: int = 20
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+# TODO: include indices, matrix shapes and eg. count matrices in the respective operators and make them classes?
 
 
 class Loraks:
