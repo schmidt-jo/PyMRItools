@@ -1,3 +1,34 @@
+"""
+LORAKS algorithm for reconstruction of MRI data.
+
+The end user interface is set up here,
+We then have 2 LORAKS "flavors: AC-LORAKS and P-LORAKS.
+AC is an option for data where an autocalibration region is available and
+can be used to speed up computations and reduce memory consumption
+Both are based on the Low rank modelling of k-space described originally by Haldar et al.
+https://pubmed.ncbi.nlm.nih.gov/24595341/;
+
+AC LORAKS: https://ieeexplore.ieee.org/document/7164018/
+P-LORAKS: https://pubmed.ncbi.nlm.nih.gov/25952136/
+
+This repository was driven by implementing GPU acceleration and feasible Joint-LORAKS reconstruction:
+https://onlinelibrary.wiley.com/doi/10.1002/mrm.27076
+
+For each "flavor" we have different computation options.
+1) The Loraks matrix Type used (C or S)
+2) Data consistency handling (true data consistency or regularizing / balancing loss terms)
+3) Rank parameter
+4) Neighborhood size parameter
+
+# ToDo: Do we actually just hide some options for using the interface to remove complexity?
+    e.g. the leastsqrs option only needs to be available if it really gives a performance difference
+     (less memory consumption or quicker) otherwise it might just be for us testing.
+     Also "fast" vs "regular" compute might not need to be an option.
+     If fast is working, why would one want to use slow? It might make a difference as Barbara has shown
+     for some reconstructions but it might not be our task to cover all of those cases.
+
+The algorithm is using torch autograd to perform direct optimization of the Minimization equations.
+"""
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
@@ -77,6 +108,7 @@ class Loraks:
         if recon is None:
             raise RuntimeError("This should never happen. Please report this issue to the developers.")
         return recon.configure(options)
+
 
 class LoraksBase:
     """
