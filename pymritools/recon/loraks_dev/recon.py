@@ -645,7 +645,7 @@ def recon(settings: PyLoraksConfig):
         f"Rank - {settings.rank}; Lambda - {settings.reg_lambda}; Matrix Type - {settings.matrix_type}; "
     )
     # set up name
-    loraks_name = f"ac_loraks_k_space_recon_r-{settings.radius}_rank-{settings.reg_lambda}"
+    loraks_name = f"ac_loraks_k_space_recon_r-{settings.radius}_rank-{settings.rank}"
     if settings.reg_lambda > 1e-6:
         loraks_name = f"{loraks_name}_lambda-{settings.reg_lambda:.3f}"
     else:
