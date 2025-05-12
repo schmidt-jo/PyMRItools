@@ -8,7 +8,8 @@ import psutil
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.recon.loraks_dev.operators import c_operator, s_operator
-from pymritools.recon.loraks_dev_cleanup.loraks import LowRankAlgorithmType, SVThresholdMethod, OperatorType
+from pymritools.recon.loraks_dev_cleanup.loraks import LowRankAlgorithmType, SVThresholdMethod, OperatorType, LoraksBase
+from pymritools.recon.loraks_dev_cleanup.operators import calculate_matrix_size
 
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
 
@@ -89,42 +90,9 @@ def create_loss_function(
     # return torch.compile(loss_func, fullgraph=True)
     return loss_func
 
-def calculate_matrix_size(k_space_shape: Tuple,
-                          patch_shape: Tuple,
-                          sample_directions: Tuple,
-                          matrix_type: OperatorType) -> tuple[int, int]:
-    """
-        Calculates the operator matrix size for a given k-space shape, patch shape, sample directions,
-        and matrix type.
-
-        Args:
-        k_space_shape (Tuple): The shape of the k-space which impacts the number of sampling points.
-        patch_shape (Tuple): The patch shape to extract from the k-space.
-        sample_directions (Tuple): Directional sampling patterns for patches.
-        matrix_type (OperatorType): Type of operator matrix
-
-        Returns:
-        tuple[int, int]: A tuple containing two integers representing the dimensions of the
-        operator matrix based on the given inputs and the specified operator type.
-    """
-    k_space_shape = torch.tensor(k_space_shape)
-    patch_shape = torch.tensor(patch_shape)
-    sample_directions = torch.tensor(sample_directions)
-    patch_sizes = torch.where(patch_shape == 0, torch.tensor(1), patch_shape)
-    patch_sizes = torch.where(patch_shape == -1, k_space_shape, patch_sizes)
-
-    sample_steps = torch.where(sample_directions == 0, torch.tensor(1), k_space_shape - patch_sizes + 1)
-    if matrix_type == OperatorType.C:
-        return torch.prod(patch_sizes).item(),  torch.prod(sample_steps).item()
-    elif matrix_type == OperatorType.S:
-        return 2 * torch.prod(patch_sizes).item(), 2 * torch.prod(sample_steps).item()
-    else:
-        raise ValueError(f"Unknown matrix type: {matrix_type}")
-
-
-
-class Loraks:
-    def __init__(self, lambda_factor: float = 0.3, max_num_iter: int = 50):
+class PLoraks(LoraksBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.dirty_config = True
         self.dirty_indices = True
 
@@ -136,8 +104,8 @@ class Loraks:
         self.operator_type: Optional[OperatorType] = None
         self.sv_cutoff_method: Optional[SVThresholdMethod] = None
         self.sv_cutoff_args: Optional[Tuple] = None
-        self.lambda_factor: Optional[float] = lambda_factor
-        self.max_num_iter = max_num_iter
+        self.lambda_factor: Optional[float] = 0.3
+        self.max_num_iter: int = 50
         self.learning_rate_func: Callable = lambda _: 1e-3
         self.device: Optional[torch.device] = torch.get_default_device()
 
@@ -145,7 +113,7 @@ class Loraks:
         self.indices: Optional[torch.Tensor] = None
         self.matrix_operator_shape: Optional[Tuple] = None
 
-    def with_patch_shape(self, patch_shape: Tuple) -> "Loraks":
+    def with_patch_shape(self, patch_shape: Tuple) -> "PLoraks":
         if self.patch_shape != patch_shape:
             logger.info(f"Patch shape changed from {self.patch_shape} to {patch_shape}")
             self.dirty_config = True
@@ -155,7 +123,7 @@ class Loraks:
             logger.info(f"Patch shape unchanged: {self.patch_shape}")
         return self
 
-    def with_sample_directions(self, sample_directions: Tuple) -> "Loraks":
+    def with_sample_directions(self, sample_directions: Tuple) -> "PLoraks":
         if self.sample_directions != sample_directions:
             logger.info(f"Sample directions changed from {self.sample_directions} to {sample_directions}")
             self.dirty_config = True
@@ -165,7 +133,7 @@ class Loraks:
             logger.info(f"Sample directions unchanged: {self.sample_directions}")
         return self
 
-    def with_torch_lowrank_algorithm(self, q: int, niter: int) -> "Loraks":
+    def with_torch_lowrank_algorithm(self, q: int, niter: int) -> "PLoraks":
         if self.svd_algorithm != LowRankAlgorithmType.TORCH_LOWRANK_SVD or self.svd_algorithm_args != (q, niter):
             logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.TORCH_LOWRANK_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
@@ -177,7 +145,7 @@ class Loraks:
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
-    def with_sor_svd_algorithm(self, q: int, niter: int) -> "Loraks":
+    def with_sor_svd_algorithm(self, q: int, niter: int) -> "PLoraks":
         if self.svd_algorithm != LowRankAlgorithmType.SOR_SVD or self.svd_algorithm_args != (q, niter):
             logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.SOR_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
@@ -189,7 +157,7 @@ class Loraks:
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
-    def with_rand_svd_algorithm(self, q: int, niter: int) -> "Loraks":
+    def with_rand_svd_algorithm(self, q: int, niter: int) -> "PLoraks":
         if self.svd_algorithm != LowRankAlgorithmType.RANDOM_SVD or self.svd_algorithm_args != (q, niter):
             logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.RANDOM_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
@@ -201,7 +169,7 @@ class Loraks:
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
-    def with_c_matrix(self) -> "Loraks":
+    def with_c_matrix(self) -> "PLoraks":
         if self.operator_type != OperatorType.C:
             logger.info(f"Matrix type changed from {self.operator_type} to {OperatorType.C}")
             self.dirty_config = True
@@ -210,7 +178,7 @@ class Loraks:
             logger.info(f"Matrix type unchanged: {self.operator_type}")
         return self
 
-    def with_s_matrix(self) -> "Loraks":
+    def with_s_matrix(self) -> "PLoraks":
         if self.operator_type != OperatorType.S:
             logger.info(f"Matrix type changed from {self.operator_type} to {OperatorType.S}")
             self.dirty_config = True
@@ -219,7 +187,7 @@ class Loraks:
             logger.info(f"Matrix type unchanged: {self.operator_type}")
         return self
 
-    def with_sv_hard_cutoff(self, q: int, rank: int) -> "Loraks":
+    def with_sv_hard_cutoff(self, q: int, rank: int) -> "PLoraks":
         if self.sv_cutoff_method != SVThresholdMethod.HARD_CUTOFF or self.sv_cutoff_args != (q, rank):
             logger.info(
                 f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.HARD_CUTOFF}")
@@ -232,7 +200,7 @@ class Loraks:
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
         return self
 
-    def with_sv_soft_cutoff(self, tau: float) -> "Loraks":
+    def with_sv_soft_cutoff(self, tau: float) -> "PLoraks":
         if self.sv_cutoff_method != SVThresholdMethod.RELU_SHIFT or self.sv_cutoff_args != (tau,):
             logger.info(
                 f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.RELU_SHIFT}")
@@ -246,7 +214,7 @@ class Loraks:
         return self
 
 
-    def with_sv_auto_soft_cutoff(self) -> "Loraks":
+    def with_sv_auto_soft_cutoff(self) -> "PLoraks":
         if self.sv_cutoff_method != SVThresholdMethod.RELU_SHIFT_AUTOMATIC:
             logger.info(
                 f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.RELU_SHIFT}")
@@ -258,17 +226,17 @@ class Loraks:
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
         return self
 
-    def with_constant_learning_rate(self, learning_rate: float) -> "Loraks":
+    def with_constant_learning_rate(self, learning_rate: float) -> "PLoraks":
         self.learning_rate_func = lambda _: learning_rate
         return self
 
-    def with_linear_learning_rate(self, min_learning_rate: float, max_learning_rate: float) -> "Loraks":
+    def with_linear_learning_rate(self, min_learning_rate: float, max_learning_rate: float) -> "PLoraks":
         self.learning_rate_func = lambda i: (
                 min_learning_rate + (max_learning_rate - min_learning_rate) * (1.0 - i / self.max_num_iter)
         )
         return self
 
-    def with_device(self, device: Union[torch.device, str]) -> "Loraks":
+    def with_device(self, device: Union[torch.device, str]) -> "PLoraks":
         if isinstance(device, str):
             device = torch.device(device)
         if not isinstance(device, torch.device):
@@ -326,19 +294,19 @@ class Loraks:
     def _prepare(self):
         """
         Sets up the necessary configuration for the reconstruction.
-        This method can only be called from within the reconstruct method when we have already set the shape of the
-        k-space.
+        This method should only be called from within the reconstruct_batch method when we have already set the shape
+        of the k-space.
         """
         if not self.dirty_config:
             logger.info("No configuration changes detected. Skipping preparation.")
             return
 
-        if not isinstance(self.k_space_shape, tuple) or len(self.k_space_shape) < 3:
-            raise ValueError("k_space_shape must be a tuple of at least 3 dimensions (batch, nx, ny, ...)")
+        if not isinstance(self.k_space_shape, tuple) or len(self.k_space_shape) < 2:
+            raise ValueError("k_space_shape must be a tuple of at least 2 dimensions (nz, ny, nx ...)")
 
         if self.patch_shape is None:
             logger.info("No patch shape specified. Using default.")
-            self.with_patch_shape((5, 5, *[-1 for _ in range(len(self.k_space_shape) - 3)]))
+            self.with_patch_shape((*[-1 for _ in range(len(self.k_space_shape) - 2)], 5, 5))
         elif len(self.patch_shape) != len(self.k_space_shape) - 1:
             raise ValueError("patch_shape must have the same length as the number of spatial dimensions")
 
@@ -367,7 +335,7 @@ class Loraks:
             # We just assume we use one of the rand, sor or lowrank methods and use q-2
             self.with_sv_hard_cutoff(self.svd_algorithm_args[0] - 2)
 
-    def reconstruct(self, k_space: torch.Tensor, sampling_mask: torch.Tensor):
+    def reconstruct_batch(self, k_space: torch.Tensor) -> torch.Tensor:
         if k_space.shape != self.k_space_shape:
             self.dirty_config = True
             self.k_space_shape = k_space.shape
