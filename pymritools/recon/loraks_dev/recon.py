@@ -22,8 +22,7 @@ log_module = logging.getLogger(__name__)
 class AC_LORAKS:
     def __init__(
             self,
-            k_space_xyzct: torch.Tensor,
-            rank: int,
+            rank: int = 150,
             regularization_lambda: float = 0.0,
             # loraks_neighborhood_side_size: int = 5,
             loraks_neighborhood_radius: int = 3,
@@ -33,6 +32,9 @@ class AC_LORAKS:
             max_num_iter: int = 20,
             conv_tol: float = 1e-3,
             device: torch.device = torch.get_default_device()):
+
+        # TODO: This should be extracted in reconstruct() and everything else needs to be setup just then
+        k_space_xyzct: torch.Tensor = torch.zeros(1, 1, 1, 1, 1)
 
         log_module.info("Initialize LORAKS reconstruction algortihm")
         self.rank: int = rank
