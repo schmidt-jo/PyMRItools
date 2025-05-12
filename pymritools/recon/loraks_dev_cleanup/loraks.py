@@ -35,7 +35,12 @@ from enum import Enum, auto
 from typing import Optional
 
 import torch
+import tqdm
 
+from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
+from pymritools.recon.loraks_dev_cleanup.loraks_lstsq import AcLoraks
+
+logger = logging.getLogger("Loraks")
 
 class LoraksImplementation(Enum):
     P_LORAKS = auto()
@@ -96,8 +101,7 @@ class LoraksOptions:
 
 class Loraks:
     @staticmethod
-    def create(implementation: Optional[LoraksImplementation] = None, options: LoraksOptions = LoraksOptions(),
-               **kwargs):
+    def create(implementation: Optional[LoraksImplementation] = None, options: LoraksOptions = LoraksOptions()):
         """Factory method to instantiate the appropriate LORAKS implementation"""
 
         recon = None
@@ -105,16 +109,17 @@ class Loraks:
             case None:
                 # Choose the implementation based on option characteristics
                 if options.fast_compute == ComputationType.REGULAR:
-                    recon = PSLoraks()
+                    recon = PLoraks()
                 else:
-                    recon = LSTSQLoraks(**kwargs)
+                    recon = AcLoraks(**kwargs)
             case LoraksImplementation.P_LORAKS:
-                recon = PSLoraks(**kwargs)
+                recon = PLoraks(**kwargs)
             case LoraksImplementation.AC_LORAKS:
-                recon = LSTSQLoraks(**kwargs)
+                recon = AcLoraks(**kwargs)
         if recon is None:
             raise RuntimeError("This should never happen. Please report this issue to the developers.")
-        return recon.configure(options)
+        recon.configure(options)
+        return recon
 
 
 class LoraksBase:
@@ -125,15 +130,105 @@ class LoraksBase:
     Additionally, each implementation can stay separate
     """
 
-    def __init__(self, **kwargs):
-        self.config = {}
-        self.configure(**kwargs)
-
-    def configure(self, **kwargs):
+    # Steps needed in any implementation
+    # init / configure
+    # 1) set options -> AC/P, (fast / slow), S/C, Rank, NB Size, Lambda, optimizing stuff (tol, max numiter, optimizer?)
+    # computations
+    # 2) Prepare k-space -> unified input, controlled output shapes / batching
+    # TODO: Combination method(s) ? channel batching, channel compression, channel & echo combinations?
+    # TODO: We also need to prepare the operators here, including set up indices etc.
+    # 3) Preparation (different for P vs AC) including extract mask
+    # 4) create loss func
+    # 5) iteration
+    # 6) reverse shape / batch preparation
+    
+    # __ public
+    def configure(self, options: LoraksOptions):
         """Configure the solver with the given parameters"""
-        self.config.update(kwargs)
-        return self
-
-    def reconstruct(self, k_space, sampling_mask=None):
-        """Reconstruct k-space data"""
         raise NotImplementedError("Subclasses must implement this method")
+
+    def reconstruct_batch(self, batch: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError("Subclasses must implement this method")
+
+    def reconstruct(self, k_space):
+        """Reconstruct k-space data"""
+        # prepare / batch k-space
+        k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
+        # allocate output
+        k_space_recon = torch.zeros_like(k_space_prepared)
+        for i, batch in tqdm.tqdm(enumerate(k_space_prepared)):
+            # put on device - device management, thus _reconstruct_batch to be a device agnostic function?
+            # batch = batch.to(self.device)
+            k_space_recon[i] = self.reconstruct_batch(batch)
+            # memory management?
+            
+        return self._unprep_batches_to_k_space(k_space_recon, input_shape, combined_shape)
+
+    # __ private
+    def _prepare_batch(self, batch):
+        raise NotImplementedError("Subclasses must implement this method")
+
+    def _prep_k_space_to_batches(self, k_space: torch.Tensor) -> (torch.Tensor, tuple, tuple):
+        """
+        Prepare the input k-space tensor into batches for separate computations, adjusting for memory requirements.
+
+        The input tensor must have the shape [nx, ny, nz, ne, nt]. The output tensor will be reshaped into
+        batches with a fixed output dimensionality of [b, -1], where b is the batch size.
+
+        :param k_space: Input k-space tensor of shape [nx, ny, nz, ne, nt].
+        :raises ValueError: If the input tensor does not match the expected shape.
+        :return: Output tensor divided into batches, reshaped to [b, -1].
+        """
+        # Validate input shape
+        if k_space.dim() > 5:
+            raise ValueError("Input tensor must have 5 dimensions: [nx, ny, nz, ne, nt].")
+        while k_space.dim() < 5:
+            warning = (f"Input tensor has less than 5 dimensions ({k_space.shape})."
+                       f" We unfold last dimension, might create unwanted behaviour.")
+            logger.warning(warning)
+            k_space = k_space.unsqueeze(-1)
+        # TODO: we can include the padding here as well
+        input_shape = k_space.shape
+
+        # decide on matrix sizes, maybe from memory computations? first create matrices from channels and or contrasts.
+        # thus we have spatial dimensions and some combination of channels and contrasts -> [bce, nxyz, nce]
+        # ToDo: device combination strategy based on memory computations (those might differ per algorithm used),
+        #  should this be an abstract method again?
+        k_combined = NotImplemented
+        # we flatten everything per batch as we work with linear indices
+        b, nxyz, nce = k_combined.shape
+        combined_shape = (b, nxyz, nce)
+
+        k_batched = k_combined.reshape(b, -1)
+
+        return k_batched, input_shape, combined_shape
+
+    def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple, combined_shape: tuple) -> torch.Tensor:
+        """
+        This method needs to reverse the above batching
+        :param k_batches:
+        :return:
+        """
+        # unflatten the shape dim (need some shapes here...)
+        # need some information about channel batching (we might take this from above method as well?)
+        k_combined = k_batches.reshape(combined_shape)
+        # unfold individual dimensions - might need to process some channel / echo combinations
+        k_space = k_combined.reshape(input_shape)
+        # TODO: we need the unpadding here
+
+        return k_space
+
+
+if __name__ == '__main__':
+    opts = LoraksOptions(
+        rank=50,
+        regularization_lambda=0.1,
+        loraks_neighborhood_radius=3,
+        loraks_matrix_type=OperatorType.C,
+        fast_compute=ComputationType.REGULAR,
+        max_num_iter=20,
+        device=torch.device('cuda')
+    )
+    concrete_recon = Loraks.create(implementation=LoraksImplementation.AC_LORAKS, options=opts)
+    
+
