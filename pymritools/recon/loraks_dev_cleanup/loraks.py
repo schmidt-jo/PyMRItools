@@ -55,6 +55,9 @@ class RANK(Serializable):
     method: SVMethodType
     value: Optional[float | int] = None
 
+    def set_value(self, value: int):
+        self.value = value
+
 
 class LoraksImplementation(Enum):
     P_LORAKS = auto()
@@ -90,7 +93,7 @@ class OperatorType(Enum):
 class LoraksOptions(Serializable):
     # rank: SVThresholdMethod = SVThresholdMethod.HARD_CUTOFF
     rank: RANK = RANK(method=SVMethodType.HARD_CUTOFF, value=50)
-    regularization_lambda: float = 0.1
+    regularization_lambda: float = 0.0
     loraks_neighborhood_radius: int = 3
     loraks_matrix_type: OperatorType = OperatorType.C
     max_num_iter: int = 20
@@ -125,10 +128,9 @@ class LoraksBase(ABC):
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
-    def reconstruct_batch(self, batch: torch.Tensor) -> torch.Tensor:
+    def _reconstruct_batch(self, batch: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement this method")
 
-    @abstractmethod
     def reconstruct(self, k_space):
         """Reconstruct k-space data"""
         # prepare / batch k-space

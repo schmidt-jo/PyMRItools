@@ -4,10 +4,10 @@ from enum import Enum, auto
 
 import torch
 from torch.nn.functional import pad
-
+from dataclasses import dataclass
 from typing import Tuple, Callable
 
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType, RANK
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import S, C
 from pymritools.utils.algorithms import cgd
@@ -27,7 +27,7 @@ class ComputationType(Enum):
 
 def get_ac_matrix_s(k_data: torch.Tensor, s: S):
     # we extract the neighborhood size
-    nb_size = s.matrix_size[0] * k_data.shape[0]
+    nb_size = s.matrix_size()[0] * k_data.shape[0]
     mask = torch.abs(k_data) > 1e-10
 
     ac_matrix = s.operator(k_data)
@@ -350,27 +350,29 @@ def solve_autograd_batch(
         return k.detach().cpu()
 
 
+@dataclass
 class AcLoraksOptions(LoraksOptions):
-    def __init__(self):
-        super().__init__()
-        self.computation_type: ComputationType = ComputationType.REGULAR
-        self.solver_type: SolverType = SolverType.LEASTSQUARES
+    computation_type: ComputationType = ComputationType.FFT
+    solver_type: SolverType = SolverType.LEASTSQUARES
 
 
 class AcLoraks(LoraksBase):
+    def _prepare_batch(self, batch):
+        pass
+
     def __init__(self):
         super().__init__()
 
-    def configure(self, options: AcLoraksOptions):
+    def configure(self, options: AcLoraksOptions = AcLoraksOptions()):
         self.options = options
         self.device = options.device
         self.regularization_lambda = options.regularization_lambda
         self.loraks_neighborhood_radius = options.loraks_neighborhood_radius
         self.loraks_matrix_type = options.loraks_matrix_type
         self.max_num_iter = options.max_num_iter
-        self.fast_compute = options.fast_compute
+        self.computation_type = options.computation_type
         self.solver_type = options.solver_type
-        self.rank = options.rank
+        self.rank = options.rank.value
         self.tol = 1e-5
 
         if self.loraks_matrix_type == OperatorType.S:
@@ -385,7 +387,7 @@ class AcLoraks(LoraksBase):
             # set regularization version
             self._log(f"Using regularized algorithm (lambda: {self.regularization_lambda:.3f})")
 
-        if self.fast_compute:
+        if self.computation_type == ComputationType.FFT:
             # set fft algorithm
             self._log("Using fast computation via FFTs")
         else:
@@ -463,7 +465,7 @@ class AcLoraks(LoraksBase):
             max_num_iter=self.max_num_iter, learning_rate_function=lambda x: 1e-3
         )
 
-    def reconstruct_batch(self, batch):
+    def _reconstruct_batch(self, batch):
         # steps needed in AC LORAKS per batch
         # 1) deduce AC region within Loraks Matrix
         m_ac = self._get_ac_matrix(
