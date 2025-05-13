@@ -62,44 +62,6 @@ class LoraksBase(ABC):
         pass
 
 
-class AcLoraks(LoraksBase):
-    def configure(self, options: AcLoraksOptions) -> None:
-        """
-        Configure AC Loraks with AC-specific options
-
-        Accepts AcLoraksOptions which inherits from LoraksOptions
-        """
-        # Handle base options
-        self.fast_compute = options.fast_compute
-
-        # Handle AC-specific options
-        self.ac_specific_param1 = options.ac_specific_param1
-        self.ac_specific_param2 = options.ac_specific_param2
-
-    def reconstruct(self, *args: Any, **kwargs: Any) -> Any:
-        # AC Loraks specific reconstruction
-        pass
-
-
-class PLoraks(LoraksBase):
-    def configure(self, options: PLoraksOptions) -> None:
-        """
-        Configure P Loraks with P-specific options
-
-        Accepts PLoraksOptions which inherits from LoraksOptions
-        """
-        # Handle base options
-        self.fast_compute = options.fast_compute
-
-        # Handle P-specific options
-        self.p_specific_param1 = options.p_specific_param1
-        self.p_specific_param2 = options.p_specific_param2
-
-    def reconstruct(self, *args: Any, **kwargs: Any) -> Any:
-        # P Loraks specific reconstruction
-        pass
-
-
 class Loraks:
     @staticmethod
     def create(
