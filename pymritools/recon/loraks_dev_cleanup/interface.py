@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Any
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksImplementation, LoraksOptions
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksImplementation, LoraksOptions, LoraksBase
 from pymritools.recon.loraks_dev_cleanup.ac_loraks import AcLoraks
 from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
 
@@ -28,38 +28,6 @@ from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
 #             raise RuntimeError("This should never happen. Please report this issue to the developers.")
 #         recon.configure(options)
 #         return recon
-
-
-class AcLoraksOptions(LoraksOptions):
-    def __init__(self):
-        super().__init__()
-        # Additional options specific to AC Loraks
-        self.ac_specific_param1: Optional[float] = None
-        self.ac_specific_param2: bool = False
-
-
-class PLoraksOptions(LoraksOptions):
-    def __init__(self):
-        super().__init__()
-        # Additional options specific to P Loraks
-        self.p_specific_param1: Optional[int] = None
-        self.p_specific_param2: str = "default"
-
-
-class LoraksBase(ABC):
-    @abstractmethod
-    def configure(self, options: LoraksOptions) -> None:
-        """
-        Configure the Loraks implementation with given options
-
-        Can accept the base options or implementation-specific options
-        """
-        pass
-
-    @abstractmethod
-    def reconstruct(self, *args: Any, **kwargs: Any) -> Any:
-        """Perform reconstruction"""
-        pass
 
 
 class Loraks:
