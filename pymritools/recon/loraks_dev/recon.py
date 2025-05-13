@@ -12,7 +12,7 @@ import plotly.subplots as psub
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices_in_2d_shape, get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import s_operator
 from pymritools.utils.algorithms import cgd
-from pymritools.utils import Phantom, ifft, torch_load, root_sum_of_squares, nifti_save
+from pymritools.utils import Phantom, fft_to_img, ifft_to_k, torch_load, root_sum_of_squares, nifti_save
 from pymritools.config.recon import PyLoraksConfig
 from pymritools.config import setup_program_logging, setup_parser
 
@@ -22,6 +22,7 @@ log_module = logging.getLogger(__name__)
 class AC_LORAKS:
     def __init__(
             self,
+            k_space_xyzct: torch.Tensor,
             rank: int = 150,
             regularization_lambda: float = 0.0,
             # loraks_neighborhood_side_size: int = 5,
@@ -34,7 +35,6 @@ class AC_LORAKS:
             device: torch.device = torch.get_default_device()):
 
         # TODO: This should be extracted in reconstruct() and everything else needs to be setup just then
-        k_space_xyzct: torch.Tensor = torch.zeros(1, 1, 1, 1, 1)
 
         log_module.info("Initialize LORAKS reconstruction algortihm")
         self.rank: int = rank
@@ -428,7 +428,6 @@ class AC_LORAKS:
         else:
             return k
 
-
     def _get_b_vector_orig(self, k: torch.Tensor, mask:torch.Tensor, vvh: torch.Tensor):
         if self.use_data_consistency:
             return self.s_adjoint_operator(
@@ -655,20 +654,26 @@ def recon(settings: PyLoraksConfig):
     loraks_name = loraks_name.replace(".", "p")
 
     # save fft of input for reference
-    rsos = root_sum_of_squares(input_data=ifft(k_space, dims=(0, 1)), dim_channel=-2)
+    rsos = root_sum_of_squares(input_data=fft_to_img(k_space, dims=(0, 1)), dim_channel=-2)
     nifti_save(
         rsos, img_aff=affine,
-        path_to_dir=path_out, file_name=f"{loraks_name}_input"
+        path_to_dir=path_out, file_name=f"{loraks_name}_input_rsos"
+    )
+    # put out coils
+    nifti_save(
+        fft_to_img(k_space[:, :, nz // 2], dims=(0, 1)).abs(), img_aff=affine,
+        path_to_dir=path_out, file_name=f"{loraks_name}_input_coils"
     )
 
     # save input for plotting
     in_k = k_space.clone()
     # in_k[~mask] = 0.0
-    in_img = ifft(torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1)), dims=(0, 1))
+    in_img = fft_to_img(torch.reshape(in_k[:, :, nz // 2], (nx, ny, -1)), dims=(0, 1))
 
     # create loraks algorithm
     ac_loraks = AC_LORAKS(
-        k_space_xyzct=in_k, rank=settings.rank, loraks_neighborhood_radius=settings.radius,
+        k_space_xyzct=k_space,
+        rank=settings.rank, loraks_neighborhood_radius=settings.radius,
         device=device, batch_channel_size=settings.batch_size, regularization_lambda=settings.reg_lambda,
         loraks_matrix_type=settings.matrix_type, max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol
     )
@@ -677,8 +682,12 @@ def recon(settings: PyLoraksConfig):
     k_recon = torch.reshape(torch.squeeze(k_recon), (nx, ny, -1))
 
     # create image data
-    out_img = ifft(k_recon, dims=(0, 1))
-
+    out_img = fft_to_img(k_recon, dims=(0, 1))
+    # put out coils
+    nifti_save(
+        out_img[:, :, nz // 2].abs(), img_aff=affine,
+        path_to_dir=path_out, file_name=f"{loraks_name}_output_coils"
+    )
     # plot
     if settings.visualize:
         num_p = min(out_img.shape[-1], 10)
