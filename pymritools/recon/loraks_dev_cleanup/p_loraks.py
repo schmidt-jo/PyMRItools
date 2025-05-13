@@ -4,16 +4,29 @@ import torch
 import tqdm
 from typing import Callable, Tuple, Optional, Union
 import psutil
+from enum import Enum, auto
 
-
-from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.recon.loraks_dev.operators import c_operator, s_operator
-from pymritools.recon.loraks_dev_cleanup.loraks import LowRankAlgorithmType, SVThresholdMethod, OperatorType, LoraksBase
-from pymritools.recon.loraks_dev_cleanup.operators import calculate_matrix_size
-
+from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_linear_indices
+from pymritools.recon.loraks_dev_cleanup.operators import c_operator, s_operator, calculate_matrix_size
+from pymritools.recon.loraks_dev_cleanup.loraks import OperatorType, LoraksBase
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
 
 logger = logging.getLogger(__name__)
+
+
+class SVThresholdMethod(Enum):
+    HARD_CUTOFF = 150.0
+    RELU_SHIFT = 0.9
+    RELU_SHIFT_AUTOMATIC = None
+
+    def __init__(self, value: Optional[float]):
+        self.threshold = value
+
+
+class LowRankAlgorithmType(Enum):
+    TORCH_LOWRANK_SVD = auto()
+    RANDOM_SVD = auto()
+    SOR_SVD = auto()
 
 
 def get_lowrank_algorithm_function(algorithm: LowRankAlgorithmType, args: Tuple):
@@ -351,6 +364,7 @@ class PLoraks(LoraksBase):
         batch_size = self.k_space_shape[0]
         k_input = k_space.contiguous()
         k_out = torch.empty_like(k_input)
+        sampling_mask = torch.abs(k_input) > 1e-10
 
         for b in range(batch_size):
             progress_bar = tqdm.trange(self.max_num_iter, desc="Optimization")

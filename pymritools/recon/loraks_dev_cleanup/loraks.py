@@ -31,26 +31,19 @@ The algorithm is using torch autograd to perform direct optimization of the Mini
 """
 import logging
 from dataclasses import dataclass
-from enum import Enum, auto
-from typing import Optional
 
 import torch
 import tqdm
 
-from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
-from pymritools.recon.loraks_dev_cleanup.loraks_lstsq import AcLoraks
-
 logger = logging.getLogger("Loraks")
+
+from enum import Enum, auto
+from typing import Optional
+
 
 class LoraksImplementation(Enum):
     P_LORAKS = auto()
     AC_LORAKS = auto()
-
-
-class LowRankAlgorithmType(Enum):
-    TORCH_LOWRANK_SVD = auto()
-    RANDOM_SVD = auto()
-    SOR_SVD = auto()
 
 
 class MeasurementType(Enum):
@@ -73,15 +66,6 @@ class OperatorType(Enum):
     S = auto()
 
 
-class SVThresholdMethod(Enum):
-    HARD_CUTOFF = 150.0
-    RELU_SHIFT = 0.9
-    RELU_SHIFT_AUTOMATIC = None
-
-    def __init__(self, value: Optional[float]):
-        self.threshold = value
-
-
 @dataclass
 class LoraksOptions:
     # rank: SVThresholdMethod = SVThresholdMethod.HARD_CUTOFF
@@ -97,31 +81,6 @@ class LoraksOptions:
 
 
 # TODO: include indices, matrix shapes and eg. count matrices in the respective operators and make them classes?
-
-
-class Loraks:
-    @staticmethod
-    def create(implementation: Optional[LoraksImplementation] = None, options: LoraksOptions = LoraksOptions()):
-        """Factory method to instantiate the appropriate LORAKS implementation"""
-
-        recon = None
-        match implementation:
-            case None:
-                # Choose the implementation based on option characteristics
-                if options.fast_compute == ComputationType.REGULAR:
-                    recon = PLoraks()
-                else:
-                    recon = AcLoraks(**kwargs)
-            case LoraksImplementation.P_LORAKS:
-                recon = PLoraks(**kwargs)
-            case LoraksImplementation.AC_LORAKS:
-                recon = AcLoraks(**kwargs)
-        if recon is None:
-            raise RuntimeError("This should never happen. Please report this issue to the developers.")
-        recon.configure(options)
-        return recon
-
-
 class LoraksBase:
     """
     Base class for all LORAKS implementations.
