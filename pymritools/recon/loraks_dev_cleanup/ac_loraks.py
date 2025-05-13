@@ -1,15 +1,16 @@
 import logging
+import tqdm
+from enum import Enum, auto
 
 import torch
 from torch.nn.functional import pad
 
 from typing import Tuple, Callable
-from enum import Enum, auto
 
-from pymritools.recon.loraks_dev.ps_loraks import OperatorType
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
-from pymritools.recon.loraks_dev_cleanup.operators import S, C, Operator
+from pymritools.recon.loraks_dev_cleanup.operators import S, C
+from pymritools.utils.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
 
@@ -256,57 +257,92 @@ def get_b_vector(k: torch.Tensor, mask:torch.Tensor, vvh: torch.Tensor,
         return operator_adjoint(operator(k) @ vvh)[~mask]
 
 
-def create_loss_function(
-        operator: Callable[[torch.Tensor, torch.Tensor, Tuple], torch.Tensor],
-        rank: int, lambda_factor: float, solver: SolverType):
-    match solver:
-        case SolverType.LEASTSQUARES:
-            def loss_func(
-                    k_sampled_points: torch.Tensor,
-                    mask: torch.Tensor,
-                    shape_batch: Tuple,
-                    vs: torch.Tensor,
-                    vc: torch.Tensor,
-                    nb_size: int,
-                    device: torch.device = "cpu"):
-                m = get_m_operator_fft(
-                    v_s=vs, v_c=vc, mask=mask, nb_size=nb_size,
-                    lambda_factor=lambda_factor, shape_batch=shape_batch
-                )
-                b = get_b_vector_fft(
-                    k=k_sampled_points, mask=mask, v_s=vs, v_c=vc,
-                    lambda_factor=lambda_factor, nb_size=nb_size, shape_batch=shape_batch
-                )
+def embedd_data(k_sampled_points: torch.Tensor, k_candidate: torch.Tensor,
+                mask_sampled_points: torch.Tensor, lambda_factor: float):
+    if lambda_factor > 0.0:
+        return k_candidate
+    else:
+        tmp = k_sampled_points.clone()
+        tmp[~mask_sampled_points] = k_candidate
+        return tmp
 
 
+def solve_cgd_batch(
+        k_sampled_points: torch.Tensor,
+        lambda_factor: float,
+        mask: torch.Tensor,
+        shape_batch: Tuple,
+        vs: torch.Tensor,
+        vc: torch.Tensor,
+        nb_size: int,
+        device: torch.device = "cpu"):
+        m = get_m_operator_fft(
+            v_s=vs, v_c=vc, mask=mask, nb_size=nb_size,
+            lambda_factor=lambda_factor, shape_batch=shape_batch
+        )
+        b = get_b_vector_fft(
+            k=k_sampled_points, mask=mask, v_s=vs, v_c=vc,
+            lambda_factor=lambda_factor, nb_size=nb_size, shape_batch=shape_batch
+        )
+        k_opt = cgd(func_operator=m, x=torch.zeros_like(b), b=b)
+        return k_opt.cpu()
 
 
-    def loss_func(k_space_candidate: torch.Tensor,
-                  indices: torch.Tensor,
-                  matrix_shape: Tuple,
-                  k_sampled_points: torch.Tensor,
-                  sampling_mask: torch.Tensor,
-                  lam_s: float,
-                  device: torch.device = "cpu"):
-        # lambda <= 0.0 means true data consistency
-        if lam_s > 0.0:
-            k_data = k_space_candidate
-        else:
-            k_data = k_sampled_points.clone()
-            k_data[~sampling_mask] = k_space_candidate
-        matrix = operator(k_data, indices, matrix_shape)
-        u, s, vh = svd_func(matrix)
-        s_r = threshold_func(s)
-        matrix_recon_loraks = torch.matmul(u * s_r.to(u.dtype), vh)
-        loss_1 = torch.linalg.norm(matrix - matrix_recon_loraks, ord="fro")
-        if lam_s > 0.0:
-            loss_2 = torch.linalg.norm(k_space_candidate * sampling_mask - k_sampled_points)
-            return loss_2 + lam_s * loss_1, loss_1, loss_2
-        else:
-            return loss_1, loss_1, 0.0
+def solve_autograd_batch(
+        k_sampled_points: torch.Tensor,
+        lambda_factor: float,
+        mask: torch.Tensor,
+        shape_batch: Tuple,
+        vs: torch.Tensor,
+        vc: torch.Tensor,
+        nb_size: int,
+        device: torch.device = "cpu",
+        max_num_iter: int = 200,
+        learning_rate_function: Callable = lambda x: 1e-3):
+        log_module.info("Init autograd solver")
+        k_init = torch.randn_like(k_sampled_points) * 1e-5
+        k_data_consistency = k_sampled_points[mask]
+        k_init[mask] = k_data_consistency
+        k = k_init.clone().to(device).requires_grad_()
+        k_data_consistency = k_data_consistency.to(device)
 
-    # return torch.compile(loss_func, fullgraph=True)
-    return loss_func
+        progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
+
+        # iterations
+        for i in progress_bar:
+            # embed data based on lambda factor
+            k_data = embedd_data(
+                k_sampled_points=k_sampled_points, mask_sampled_points=mask,
+                k_candidate=k, lambda_factor=lambda_factor
+            )
+            # solve || mv || in fourier space
+            mv = m_op_base(
+                x=k_data, v_c=vc, v_s=vs, nb_size=nb_size, shape_batch=shape_batch
+            )
+            loss_lr = torch.linalg.norm(mv, ord="fro")
+            if lambda_factor > 0.0:
+                loss_dc = torch.linalg.norm(k_data - k_data_consistency)
+                loss = loss_dc + lambda_factor * loss_lr
+            else:
+                loss_dc = 0.0
+                loss = loss_lr
+
+            loss.backward()
+
+            # Use the optimal learning_rate to update parameters
+            with torch.no_grad():
+                k -= learning_rate_function(i) * k.grad
+            k.grad.zero_()
+
+            progress_bar.postfix = (
+                f"LR: {learning_rate_function(i):.6f} -- "
+                f"LowRank Loss: {1e3 * loss_lr.item():.2f} -- "
+                f"Data Loss: {1e3 * loss_dc.item():.2f} -- "
+                f"Total Loss: {1e3 * loss.item():.2f}"
+            )
+
+        # k is our converged best guess candidate, need to unwrap / reshape
+        return k.detach().cpu()
 
 
 class AcLoraksOptions(LoraksOptions):
@@ -408,22 +444,21 @@ class AcLoraks(LoraksBase):
     def _solve_cgd(self, k_sampled_points: torch.Tensor, vs: torch.Tensor, vc: torch.Tensor):
         # choose M and b operator based on true data consistency
         # solve cgd
+        return solve_cgd_batch(
+            k_sampled_points=k_sampled_points, lambda_factor=self.regularization_lambda,
+            mask=torch.abs(k_sampled_points) > 1e-10, shape_batch=k_sampled_points.shape,
+            vs=vs, vc=vc, nb_size=self.loraks_neighborhood_radius, device=self.device
+        )
 
     def _solve_autograd(self, k_sampled_points: torch.Tensor, vs: torch.Tensor, vc: torch.Tensor):
-        # build candidate
-        log_module.info("Init optimization")
-        mask = k_sampled_points.abs() > 1e-10
-        k_init = torch.randn_like(k_sampled_points) * 1e-5
+        return solve_autograd_batch(
+            k_sampled_points=k_sampled_points, lambda_factor=self.regularization_lambda,
+            mask=torch.abs(k_sampled_points) > 1e-10, shape_batch=k_sampled_points.shape,
+            vs=vs, vc=vc, nb_size=self.loraks_neighborhood_radius, device=self.device,
+            max_num_iter=self.max_num_iter, learning_rate_function=lambda x: 1e-3
+        )
 
-        #
-
-        k_data_consistency = k_sampled_points[mask]
-        k_init[mask] = k_data_consistency
-        k = k_init.clone().to(device).requires_grad_()
-        k_data_consistency = k_data_consistency.to(device)
-
-
-    def _reconstruct_batch(self, batch):
+    def reconstruct_batch(self, batch):
         # steps needed in AC LORAKS per batch
         # 1) deduce AC region within Loraks Matrix
         m_ac = self._get_ac_matrix(
@@ -445,13 +480,18 @@ class AcLoraks(LoraksBase):
         vs = self._get_v_fft(v_cplx_embed=v_patch, batch_shape=batch.shape, operator_type=OperatorType.S)
         vc = self._get_v_fft(v_cplx_embed=v_patch, batch_shape=batch.shape, operator_type=OperatorType.C)
 
-        # choose either to solve via M and b using cgd
+        if self.solver_type == SolverType.LEASTSQUARES:
+            # choose either to solve via M and b using cgd
+            k = self._solve_cgd(k_sampled_points=batch, vs=vs, vc=vc)
+        else:
+            # or by solving k directly using autograd
+            k = self._solve_autograd(k_sampled_points=batch, vs=vs, vc=vc)
 
-        # or by solving k directly using autograd
-
-        # 5) done
-
-
-        raise NotImplementedError("Not yet implemented")
+        # if true data consisctency is true embed the data
+        k = embedd_data(
+            k_sampled_points=batch, mask_sampled_points=torch.abs(batch) > 1e-10,
+            lambda_factor=self.regularization_lambda, k_candidate=k
+        )
+        return k
 
 
