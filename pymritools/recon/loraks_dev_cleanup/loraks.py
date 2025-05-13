@@ -30,15 +30,30 @@ For each "flavor" we have different computation options.
 The algorithm is using torch autograd to perform direct optimization of the Minimization equations.
 """
 import logging
+from abc import ABC, abstractclassmethod, abstractmethod
 from dataclasses import dataclass
 
 import torch
 import tqdm
 
-logger = logging.getLogger("Loraks")
-
 from enum import Enum, auto
 from typing import Optional
+
+from simple_parsing.helpers import Serializable
+
+logger = logging.getLogger("Loraks")
+
+
+class SVMethodType(Enum):
+    HARD_CUTOFF = auto()
+    RELU_SHIFT = auto()
+    RELU_SHIFT_AUTOMATIC = auto()
+
+
+@dataclass
+class RANK(Serializable):
+    method: SVMethodType
+    value: Optional[float | int] = None
 
 
 class LoraksImplementation(Enum):
@@ -56,10 +71,15 @@ class RegularizationType(Enum):
     REGULARIZED = auto()
 
 
-class ComputationType(Enum):
-    FFT = auto()
-    REGULAR = auto()
+class OperatorType(Enum):
+    C = auto()
+    S = auto()
 
+
+class LowRankAlgorithmType(Enum):
+    TORCH_LOWRANK_SVD = auto()
+    RANDOM_SVD = auto()
+    SOR_SVD = auto()
 
 class OperatorType(Enum):
     C = auto()
@@ -67,21 +87,18 @@ class OperatorType(Enum):
 
 
 @dataclass
-class LoraksOptions:
+class LoraksOptions(Serializable):
     # rank: SVThresholdMethod = SVThresholdMethod.HARD_CUTOFF
-    rank: int = 150
-    # TODO: i think rank needs to be a number, as the AC LORAKS version does deduce the nullspace,
-    #  but does not do thresholding
+    rank: RANK = RANK(method=SVMethodType.HARD_CUTOFF, value=50)
     regularization_lambda: float = 0.1
     loraks_neighborhood_radius: int = 3
     loraks_matrix_type: OperatorType = OperatorType.C
-    fast_compute: ComputationType = ComputationType.REGULAR
     max_num_iter: int = 20
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 # TODO: include indices, matrix shapes and eg. count matrices in the respective operators and make them classes?
-class LoraksBase:
+class LoraksBase(ABC):
     """
     Base class for all LORAKS implementations.
     Both P- and AC-Loraks will need to implement this interface.
@@ -102,13 +119,16 @@ class LoraksBase:
     # 6) reverse shape / batch preparation
     
     # __ public
+    @abstractmethod
     def configure(self, options: LoraksOptions):
         """Configure the solver with the given parameters"""
         raise NotImplementedError("Subclasses must implement this method")
 
+    @abstractmethod
     def reconstruct_batch(self, batch: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement this method")
 
+    @abstractmethod
     def reconstruct(self, k_space):
         """Reconstruct k-space data"""
         # prepare / batch k-space
@@ -124,6 +144,7 @@ class LoraksBase:
         return self._unprep_batches_to_k_space(k_space_recon, input_shape, combined_shape)
 
     # __ private
+    @abstractmethod
     def _prepare_batch(self, batch):
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -174,20 +195,4 @@ class LoraksBase:
         # unfold individual dimensions - might need to process some channel / echo combinations
         k_space = k_combined.reshape(input_shape)
         # TODO: we need the unpadding here
-
         return k_space
-
-
-if __name__ == '__main__':
-    opts = LoraksOptions(
-        rank=50,
-        regularization_lambda=0.1,
-        loraks_neighborhood_radius=3,
-        loraks_matrix_type=OperatorType.C,
-        fast_compute=ComputationType.REGULAR,
-        max_num_iter=20,
-        device=torch.device('cuda')
-    )
-    concrete_recon = Loraks.create(implementation=LoraksImplementation.AC_LORAKS, options=opts)
-    
-

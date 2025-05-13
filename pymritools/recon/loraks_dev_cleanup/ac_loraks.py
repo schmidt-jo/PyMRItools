@@ -20,6 +20,11 @@ class SolverType(Enum):
     AUTOGRAD = auto()
 
 
+class ComputationType(Enum):
+    FFT = auto()
+    REGULAR = auto()
+
+
 def get_ac_matrix_s(k_data: torch.Tensor, s: S):
     # we extract the neighborhood size
     nb_size = s.matrix_size[0] * k_data.shape[0]
@@ -348,7 +353,7 @@ def solve_autograd_batch(
 class AcLoraksOptions(LoraksOptions):
     def __init__(self):
         super().__init__()
-        self.fast_compute: bool = True
+        self.computation_type: ComputationType = ComputationType.REGULAR
         self.solver_type: SolverType = SolverType.LEASTSQUARES
 
 

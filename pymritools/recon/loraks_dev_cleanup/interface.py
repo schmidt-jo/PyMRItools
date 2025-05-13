@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Any
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksImplementation, ComputationType
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksImplementation, LoraksOptions
 from pymritools.recon.loraks_dev_cleanup.ac_loraks import AcLoraks
 from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
 
@@ -28,12 +28,6 @@ from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
 #             raise RuntimeError("This should never happen. Please report this issue to the developers.")
 #         recon.configure(options)
 #         return recon
-
-
-class LoraksOptions:
-    def __init__(self):
-        # Base options common to all Loraks implementations
-        self.fast_compute: ComputationType = ComputationType.REGULAR
 
 
 class AcLoraksOptions(LoraksOptions):
@@ -116,8 +110,6 @@ class Loraks:
         if implementation is None:
             implementation = (
                 LoraksImplementation.P_LORAKS
-                if options.fast_compute == ComputationType.REGULAR
-                else LoraksImplementation.AC_LORAKS
             )
 
         implementation_map = {
@@ -129,9 +121,3 @@ class Loraks:
         recon.configure(options)
         return recon
 
-# Use P-specific options
-p_options = PLoraksOptions()
-p_loraks = Loraks.create(
-    implementation=LoraksImplementation.P_LORAKS,
-    options=p_options
-)
