@@ -10,7 +10,7 @@ from tests.torch_matlab_comp.matlab_utils import run_matlab_script
 from tests.torch_matlab_comp.compare_matrices import check_matrices
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.utils import Phantom, ifft
+from pymritools.utils import Phantom, ifft_to_k
 from pymritools.utils import cgd
 
 import plotly.graph_objects as go
@@ -382,7 +382,7 @@ def test_ac_loraks_vs_matlab():
     k_data = k_data[:, :, 1, 0].unsqueeze(-2)
     k_data = k_data.permute(3, 2, 1, 0)
     k_data = k_data.reshape(-1, ny, nx).contiguous()
-    input_img = ifft(k_data)
+    input_img = ifft_to_k(k_data)
     input_k = k_data.clone()
     mask = torch.abs(k_data) > 1e-10
     print("\nMatlab subpprocessing")
@@ -709,8 +709,8 @@ def test_ac_loraks_vs_matlab():
     check_matrices(recon_k, mat_z, name="Z", assertion=False)
 
     print("\nResults reconstruction")
-    mat_img = ifft(mat_z)
-    recon_img = ifft(recon_k)
+    mat_img = ifft_to_k(mat_z)
+    recon_img = ifft_to_k(recon_k)
     check_matrices(mat_z, mat_img, name="Z", assertion=False)
 
     plot_matrices(

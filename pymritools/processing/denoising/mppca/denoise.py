@@ -9,7 +9,7 @@ import tqdm
 from scipy.ndimage import binary_erosion
 
 from pymritools.config.processing import DenoiseSettingsMPPCA
-from pymritools.utils import nifti_load, nifti_save, fft, ifft, root_sum_of_squares, torch_load
+from pymritools.utils import nifti_load, nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from pymritools.config import setup_program_logging, setup_parser
@@ -58,7 +58,7 @@ def load_data(settings: DenoiseSettingsMPPCA):
         # if input is k-space data we convert to img space
         # loop over dim slices, batch dim channels
         logging.info(f"fft to image space")
-        input_data = ifft(input_data, dims=(0, 1))
+        input_data = ifft_to_k(input_data, dims=(0, 1))
 
     return input_data, input_img
 

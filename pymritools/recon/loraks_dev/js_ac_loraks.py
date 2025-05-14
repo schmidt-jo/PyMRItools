@@ -10,7 +10,7 @@ import plotly.subplots as psub
 
 from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
 from pymritools.recon.loraks_dev.operators import c_operator, s_operator
-from pymritools.utils import Phantom, fft, ifft, root_sum_of_squares, torch_load, nifti_save
+from pymritools.utils import Phantom, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load, nifti_save
 from pymritools.utils.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
@@ -54,15 +54,15 @@ def fourier_mv(k, v, ps):
     v_padded[pad_l:pad_l + ps, pad_d:pad_d + ps, :, :] = v_reshaped
 
     # Perform Fourier transform on padded `k` and `v`
-    k_fft = torch.conj(ifft(k_padded, dims=(0, 1)))  # FFT of k: [nx+2*ps, ny+2*ps, nc]
-    v_fft = ifft(torch.conj(v_padded), dims=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
+    k_fft = torch.conj(ifft_to_k(k_padded, dims=(0, 1)))  # FFT of k: [nx+2*ps, ny+2*ps, nc]
+    v_fft = ifft_to_k(torch.conj(v_padded), dims=(0, 1))  # FFT of v: [nc, nx+2*ps, ny+2*ps, l]
 
     # Combine original and conjugated filters
     # Summation in Fourier space before inverse transformation, summation of coils
     result_fft = (k_fft[..., None] * v_fft).sum(dim=-2)
     # Inverse Fourier transform back to spatial domain
     # ToDo check (Parsevals theorem) if we could take the norm before FFT back (should be equivalent) and save one FFT step
-    result_spatial = fft(result_fft, dims=(0, 1))  # Shape: [nx+2*ps, ny+2*ps, l]
+    result_spatial = fft_to_img(result_fft, dims=(0, 1))  # Shape: [nx+2*ps, ny+2*ps, l]
 
     # Extract valid convolution region by cropping out the padded sections
     edge = int(ps * 1.5)
@@ -580,7 +580,7 @@ def recon_tiago():
     img_fft = torch.zeros((*k_shape[:3], k_shape[-1]))
     log_module.info("FFT & RSOS")
     for idx_z in tqdm.trange(k_shape[2]):
-        tmp = ifft(k_space[:, :, idx_z].clone(), dims=(0, 1))
+        tmp = ifft_to_k(k_space[:, :, idx_z].clone(), dims=(0, 1))
         img_fft[:, :, idx_z] = root_sum_of_squares(tmp, dim_channel=-2)
 
     nifti_save(img_fft, img_aff=torch.eye(4), path_to_dir=path_out, file_name="naive_fft_img")
@@ -602,7 +602,7 @@ def recon_tiago():
             conv_tol=2e-3
         )
 
-        img_recon_slice = ifft(k_recon_slice, dims=(0, 1))
+        img_recon_slice = ifft_to_k(k_recon_slice, dims=(0, 1))
         img_recon_slice_rsos = root_sum_of_squares(img_recon_slice, dim_channel=-2)
 
         nifti_save(img_recon_slice_rsos, img_aff=torch.eye(4), path_to_dir=path_out, file_name=f"recon_img_ac_cb{batch_size}_r{r}")
@@ -651,7 +651,7 @@ def main_pbp():
     logging.info(f"Setup data")
     k_us = k.clone()
     mask = torch.abs(k_us) > 1e-9
-    img_us = torch.abs(fft(k_us, axes=(0, 1)))
+    img_us = torch.abs(fft_to_img(k_us, axes=(0, 1)))
 
     r = 100
     k_recon, losses, eig_vals = recon_data_consistency(
@@ -659,7 +659,7 @@ def main_pbp():
         lr_low=1e-2, lr_high=1e2, reduced_num_nullspace_vec=4000, sampled_reduced_nullspace_vec=2000,
         conv_tol=1e-6, loraks_neighborhood_size=5, matrix_type="S", device=device
     )
-    img_recon = torch.abs(fft(k_recon, axes=(0, 1)))
+    img_recon = torch.abs(fft_to_img(k_recon, axes=(0, 1)))
 
     fig = psub.make_subplots(
         rows=3, cols=4

@@ -5,7 +5,7 @@ import torch
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.processing import DenoiseSettingsMPK
-from pymritools.utils import torch_load, torch_save, nifti_save, fft, ifft, root_sum_of_squares
+from pymritools.utils import torch_load, torch_save, nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares
 from pymritools.processing.denoising.mppca_k_filter.functions import matched_filter_noise_removal
 
 
@@ -78,7 +78,7 @@ def denoise(settings: DenoiseSettingsMPK):
     # save
     if settings.visualize:
         # do quick naive fft rsos recon
-        img = ifft(filtered_k, dims=(0, 1))
+        img = ifft_to_k(filtered_k, dims=(0, 1))
         img = root_sum_of_squares(img, dim_channel=-2)
         nifti_save(img, img_aff=affine, path_to_dir=settings.out_path, file_name=f"filt_mpk_{p_name}_naive_rsos_recon")
 

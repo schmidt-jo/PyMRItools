@@ -3,7 +3,7 @@ import os.path
 import torch
 
 from pymritools.recon.loraks_dev.ps_loraks import Loraks, LowRankAlgorithmType
-from pymritools.utils import Phantom, fft
+from pymritools.utils import Phantom, fft_to_img
 from tests.utils import get_test_result_output_dir
 
 import plotly.subplots as psub
@@ -28,13 +28,13 @@ def run_ps_loraks():
     k_shape = (256, 256)
     jupiter = Phantom.get_shepp_logan(k_shape)
     jupiter_k = jupiter.get_2d_k_space().to(dtype=torch.complex64)
-    jupiter_img_recon = fft(jupiter_k)
+    jupiter_img_recon = fft_to_img(jupiter_k)
     jupiter_k_subsampled = jupiter.sub_sample_ac_random_lines(acceleration, 20).to(dtype=torch.complex64)
-    jupiter_img_subsampled = fft(jupiter_k_subsampled)
+    jupiter_img_subsampled = fft_to_img(jupiter_k_subsampled)
     mask = torch.abs(jupiter_k_subsampled) > 10e-7
 
     jupiter_k_loraks_recon = loraks.reconstruct(jupiter_k_subsampled[None], mask[None])
-    jupiter_img_loraks_recon = fft(jupiter_k_loraks_recon[0])
+    jupiter_img_loraks_recon = fft_to_img(jupiter_k_loraks_recon[0])
     output_dir = get_test_result_output_dir("ps_loraks_quality")
 
     fig = psub.make_subplots(

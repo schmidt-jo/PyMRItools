@@ -5,7 +5,7 @@ import plotly.subplots as psub
 import plotly.graph_objects as go
 from numpy.ma.core import shape
 
-from pymritools.utils import fft, root_sum_of_squares, Phantom
+from pymritools.utils import fft_to_img, root_sum_of_squares, Phantom
 from pymritools.recon.loraks.algorithms import ac_loraks
 from tests.utils import get_test_result_output_dir
 
@@ -22,7 +22,7 @@ def compare_sampling_patterns():
     phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
 
     sl_gt = phantom.get_2d_k_space()
-    img_gt = torch.abs(fft(sl_gt, axes=(0, 1)))
+    img_gt = torch.abs(fft_to_img(sl_gt, axes=(0, 1)))
     # img_gt = root_sum_of_squares(img_gt, dim_channel=-2)
 
     modes = ["grappa", "skip", "random", "weighted"]
@@ -80,7 +80,7 @@ def compare_sampling_patterns():
         )
         set_axis(fig, 1, mi+2)
 
-        img = torch.abs(fft(sl, axes=(0, 1)))
+        img = torch.abs(fft_to_img(sl, axes=(0, 1)))
         # img = root_sum_of_squares(img, dim_channel=-2)
         fig.add_trace(
             go.Heatmap(z=img[:, :, 0, 0], showscale=False, colorscale="gray", zmin=0, zmax=zmax_img),
@@ -95,7 +95,7 @@ def compare_sampling_patterns():
                 max_num_iter=15, visualize=False, path_visuals="", device=torch.device("cuda")
             )
         )
-        img_recon = torch.abs(fft(recon, axes=(0, 1)))
+        img_recon = torch.abs(fft_to_img(recon, axes=(0, 1)))
         # img_recon = root_sum_of_squares(img_recon, dim_channel=-2)
         fig.add_trace(
             go.Heatmap(z=img_recon[:, :, 0, 0], showscale=False, colorscale="gray", zmin=0, zmax=zmax_img),

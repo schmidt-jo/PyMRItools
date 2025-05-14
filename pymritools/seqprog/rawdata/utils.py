@@ -4,7 +4,7 @@ import pathlib as plib
 
 import torch
 
-from pymritools.utils import fft, torch_load, torch_save, root_sum_of_squares, nifti_save, ifft
+from pymritools.utils import fft_to_img, torch_load, torch_save, root_sum_of_squares, nifti_save, ifft_to_k
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.seqprog.rawdata import RMOS, RSOS
 
@@ -21,7 +21,7 @@ def remove_oversampling(data: np.ndarray | torch.Tensor, data_in_k_space: bool =
 
     if data_in_k_space:
         # need to transform to image space
-        data = ifft(input_data=data, dims=(read_dir,))
+        data = ifft_to_k(input_data=data, dims=(read_dir,))
 
     # data in freq domain, do removal
     lower_idx = int((os_factor - 1) / (2 * os_factor) * nx)
@@ -34,7 +34,7 @@ def remove_oversampling(data: np.ndarray | torch.Tensor, data_in_k_space: bool =
     data = move_func(data, 0, read_dir)
     if data_in_k_space:
         # data was in k domain originally, hence we move back
-        data = fft(input_data=data, dims=(read_dir,))
+        data = fft_to_img(input_data=data, dims=(read_dir,))
     return data
 
 
@@ -91,7 +91,7 @@ def recon_naive_rsos():
             aff = torch.eye(4)
         if settings.data_in_kspace:
             log_module.info(f"FFT data to image space")
-            data = ifft(input_data=data, dims=settings.dim_img)
+            data = ifft_to_k(input_data=data, dims=settings.dim_img)
         log_module.info(f"RSOS along channel dim specified: {settings.dim_c}")
         data = root_sum_of_squares(
             input_data=data, dim_channel=settings.dim_c

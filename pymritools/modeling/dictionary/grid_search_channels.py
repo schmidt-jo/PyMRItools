@@ -10,7 +10,7 @@ from pymritools.modeling.dictionary.setup import setup_db, setup_b1, setup_path,
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.emc import EmcFitSettings
 from pymritools.config.database import DB
-from pymritools.utils import nifti_save, fft, ifft, root_sum_of_squares, torch_load, nifti_load
+from pymritools.utils import nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load, nifti_load
 
 log_module = logging.getLogger(__name__)
 
@@ -25,11 +25,11 @@ def smooth_map(data: torch.Tensor, kernel_size: int = 5):
     while kernel.shape.__len__() < data.shape.__len__():
         kernel = kernel.unsqueeze(-1)
     # fft
-    data_fft = fft(data, dims=(0, 1))
+    data_fft = fft_to_img(data, dims=(0, 1))
     # convolve
     data_fft *= kernel
     # fft back
-    result = ifft(data_fft, dims=(0, 1))
+    result = ifft_to_k(data_fft, dims=(0, 1))
     if not torch.is_complex(data):
         result = torch.abs(result)
         result = torch.clamp(result, min=data.min(), max=data.max())
@@ -570,7 +570,7 @@ def fit_mese():
     t1_vals, t2_vals, b1_vals, b0_vals = db.get_t1_t2_b1_b0_values()
 
     # fft reconned k-space
-    data = fft(data, dims=(0, 1))
+    data = fft_to_img(data, dims=(0, 1))
     # normalize data
     data_rsos = root_sum_of_squares(input_data=data, dim_channel=-2)
     data_norm_rsos = torch.linalg.norm(data_rsos, dim=-1, keepdim=True)

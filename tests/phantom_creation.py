@@ -4,7 +4,7 @@ import torch
 import plotly.graph_objects as go
 import plotly.subplots as psub
 
-from pymritools.utils import Phantom, fft, root_sum_of_squares
+from pymritools.utils import Phantom, fft_to_img, root_sum_of_squares
 from .utils import get_test_result_output_dir
 
 
@@ -29,10 +29,10 @@ def test_jupiter_phantom():
         for i, s in enumerate(sub_samplings):
             k = s(acceleration=acceleration, ac_lines=ac_lines)
             k_s.append(k)
-            imgs.append(fft(k, img_to_k=False, axes=(0, 1)))
+            imgs.append(fft_to_img(k, img_to_k=False, axes=(0, 1)))
 
         k_s.append(jupiter.sub_sample_random(acceleration=acceleration, ac_central_radius=20))
-        imgs.append(fft(k_s[-1], img_to_k=False, axes=(0, 1)))
+        imgs.append(fft_to_img(k_s[-1], img_to_k=False, axes=(0, 1)))
 
         fig = psub.make_subplots(
             rows=2, cols=len(imgs),
@@ -81,10 +81,10 @@ def test_shepp_logan_phantom():
     for i, s in enumerate(sub_samplings):
         k = s(acceleration=acceleration, ac_lines=ac_lines)
         k_s.append(k)
-        imgs.append(fft(k, img_to_k=False, axes=(0, 1)))
+        imgs.append(fft_to_img(k, img_to_k=False, axes=(0, 1)))
 
     k_s.append(shepp_logan.sub_sample_random(acceleration=acceleration, ac_central_radius=20))
-    imgs.append(fft(k_s[-1], img_to_k=False, axes=(0, 1)))
+    imgs.append(fft_to_img(k_s[-1], img_to_k=False, axes=(0, 1)))
 
 
     fig = psub.make_subplots(

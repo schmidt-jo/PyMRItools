@@ -46,7 +46,7 @@ def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.
     return norm_data, torch.squeeze(norm_factor)
 
 
-def fft(
+def fft_to_img(
         input_data: np.ndarray | torch.Tensor,
         dims: tuple | int = (-1, -2)):
     if isinstance(dims, int):
@@ -75,7 +75,8 @@ def fft(
             axes=dims
         )
 
-def ifft(
+
+def ifft_to_k(
         input_data: np.ndarray | torch.Tensor,
         dims: tuple | int = (-1, -2)):
     if isinstance(dims, int):
