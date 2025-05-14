@@ -154,25 +154,15 @@ class LoraksBase(ABC):
 
         return self._unprep_batches_to_k_space(k_space_recon, input_shape, combined_shape)
 
-    @final
-    def _prep_k_space_to_batches(self, k_space: torch.Tensor) -> (torch.Tensor, tuple, tuple):
+    @abstractmethod
+    def _prep_k_space_to_batches(self, k_space: torch.Tensor):
         """
         Prepare the input k-space tensor into batches for separate computations, adjusting for memory requirements.
 
-        The input tensor must have the shape [nt, ne, nz, ny, nx].
-        The output tensor will be reshaped into
-        batches with a fixed output dimensionality of [b, -1], where b is the batch size.
-
-        :param k_space: Input k-space tensor of shape [nt, ne, nz, ny, nx].
-        :raises ValueError: If the input tensor does not match the expected shape.
-        :return: Output tensor divided into batches, reshaped to [b, -1].
         """
-        # how to compute the channel batching?
+        raise NotImplementedError
 
-        k_batched, input_shape, combined_shape = prepare_k_space_to_batches(k_space=k_space, batch_size_channels=-1)
-        return k_batched, input_shape, combined_shape
-
-    @final
+    @abstractmethod
     def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple,
                                    combined_shape: tuple) -> torch.Tensor:
         """
@@ -180,8 +170,7 @@ class LoraksBase(ABC):
         :param k_batches:
         :return:
         """
-        k_space = unprepare_batches_to_k_space()
-        return k_space
+        raise NotImplementedError
 
 
 class Loraks:
