@@ -4,7 +4,8 @@ import torch
 
 from performance_experiments.utils import create_phantom_data, get_output_dir
 from pymritools.recon.loraks_dev_cleanup.utils import (
-    prepare_k_space_to_batches, unprepare_batches_to_k_space, check_channel_batch_size_and_batch_channels
+    prepare_k_space_to_batches, unprepare_batches_to_k_space, check_channel_batch_size_and_batch_channels,
+    pad_input, unpad_output
 )
 
 log_module = logging.getLogger(__name__)
@@ -26,7 +27,11 @@ def prepare_and_unprepare_k_space():
         k_space_rpsct=phantom, batch_channel_indices=batch_channel_indices
     )
     log_module.info(f"prepared batched data shape: {k_batched.shape}")
+    # pad the input
+    k_batched, padding = pad_input(k_batched)
+
     # do the reverse
+    k_batched = unpad_output(k_batched, padding=padding)
     k_output = unprepare_batches_to_k_space(
         k_batched=k_batched, batch_channel_indices=batch_channel_indices, original_shape=input_shape
     )
