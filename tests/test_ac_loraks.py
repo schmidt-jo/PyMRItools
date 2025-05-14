@@ -14,8 +14,8 @@ import plotly.subplots as psub
 import plotly.graph_objects as go
 
 from pymritools.utils import Phantom
-from pymritools.utils import fft, root_sum_of_squares, nifti_save
-from pymritools.recon.loraks.algorithms import ac_loraks, ac_lorals_exact_data_consistency
+from pymritools.utils import fft_to_img, root_sum_of_squares
+from pymritools.recon.loraks.algorithms import ac_loraks
 
 from tests.utils import get_test_result_output_dir
 
@@ -70,7 +70,7 @@ def test_ac_loraks():
     )
     # torch.cuda.memory._dump_snapshot(os.path.join(output_dir, "memory_snapshot.pickle"))
 
-    recon_img = fft(recon_k, axes=(0, 1))
+    recon_img = fft_to_img(recon_k, axes=(0, 1))
     recon_img = torch.squeeze(root_sum_of_squares(recon_img, dim_channel=-2))
 
     # write to file

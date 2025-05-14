@@ -92,3 +92,4 @@ cython_debug/
 /archive/
 /resources/
 /pymritools/optimization/
+/pex_output/

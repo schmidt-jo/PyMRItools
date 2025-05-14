@@ -7,9 +7,10 @@ from torch.nn.functional import pad
 from dataclasses import dataclass
 from typing import Tuple, Callable
 
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import S, C
+from pymritools.recon.loraks_dev_cleanup.utils import prepare_k_space_to_batches, unprepare_batches_to_k_space
 from pymritools.utils.algorithms import cgd
 
 log_module = logging.getLogger(__name__)
@@ -350,6 +351,7 @@ def solve_autograd_batch(
 
 @dataclass
 class AcLoraksOptions(LoraksOptions):
+    loraks_type: LoraksImplementation = LoraksImplementation.AC_LORAKS
     computation_type: ComputationType = ComputationType.FFT
     solver_type: SolverType = SolverType.LEASTSQUARES
     loraks_neighborhood_radius: int = 3
@@ -405,9 +407,40 @@ class AcLoraks(LoraksBase):
         # self.count_matrix = self._get_count_matrix()
         torch.cuda.empty_cache()
 
+    def _prep_k_space_to_batches(self, k_space: torch.Tensor):
+        """
+
+        The input tensor must have the shape [nt, ne, nz, ny, nx].
+        The output tensor will be reshaped into
+        batches with a fixed output dimensionality of [b, -1], where b is the batch size.
+
+        :param k_space: Input k-space tensor of shape [nt, ne, nz, ny, nx].
+        :raises ValueError: If the input tensor does not match the expected shape.
+        :return: Output tensor divided into batches, reshaped to [b, -1].
+        """
 
     def _prepare_batch(self, batch):
-        pass
+        # 1) deduce AC region within Loraks Matrix
+        m_ac = self._get_ac_matrix(
+            batch=batch,
+        )
+        # 2) extract nullspace based on rank
+        v, _ = get_nullspace(m_ac, rank=self.rank)
+        # 3) compute filtered nullspace kernel to reduce memory demands -> v
+        # complexify nullspace
+        v = self._complex_subspace_representation(v)
+        torch.cuda.empty_cache()
+
+        # prep zero phase filter input
+        v_patch = self._embed_circular_patch(v)
+        del v
+        torch.cuda.empty_cache()
+
+        # fft
+        vs = self._get_v_fft(v_cplx_embed=v_patch, batch_shape=batch.shape, operator_type=OperatorType.S)
+        vc = self._get_v_fft(v_cplx_embed=v_patch, batch_shape=batch.shape, operator_type=OperatorType.C)
+
+        return vc, vs
 
     def _get_ac_matrix(self, batch: torch.Tensor):
         if self.loraks_matrix_type == OperatorType.S:
@@ -444,10 +477,8 @@ class AcLoraks(LoraksBase):
         # fft
         return torch.fft.fft2(v_shift, dim=(-2, -1))
 
-
     def _zero_phase_filter(self, v):
         return zero_phase_filter(v, self.loraks_neighborhood_radius, self.loraks_matrix_type)
-
 
     @staticmethod
     def _log(msg):
@@ -479,25 +510,7 @@ class AcLoraks(LoraksBase):
 
     def reconstruct_batch(self, batch):
         # steps needed in AC LORAKS per batch
-        # 1) deduce AC region within Loraks Matrix
-        m_ac = self._get_ac_matrix(
-            batch=batch,
-        )
-        # 2) extract nullspace based on rank
-        v, _ = get_nullspace(m_ac, rank=self.rank)
-        # 3) compute filtered nullspace kernel to reduce memory demands -> v
-        # complexify nullspace
-        v = self._complex_subspace_representation(v)
-        torch.cuda.empty_cache()
-
-        # prep zero phase filter input
-        v_patch = self._embed_circular_patch(v)
-        del v
-        torch.cuda.empty_cache()
-
-        # fft
-        vs = self._get_v_fft(v_cplx_embed=v_patch, batch_shape=batch.shape, operator_type=OperatorType.S)
-        vc = self._get_v_fft(v_cplx_embed=v_patch, batch_shape=batch.shape, operator_type=OperatorType.C)
+        vc, vs = self._prepare_batch(batch=batch)
 
         if self.solver_type == SolverType.LEASTSQUARES:
             # choose either to solve via M and b using cgd
