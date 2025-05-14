@@ -42,6 +42,7 @@ def get_lowrank_algorithm_function(algorithm: LowRankAlgorithmType, args: Tuple)
             return lambda matrix: randomized_svd(matrix=matrix, q=q, power_projections=niter)
         case LowRankAlgorithmType.SOR_SVD:
             return lambda matrix: subspace_orbit_randomized_svd(matrix=matrix, q=q, power_projections=niter)
+    raise ValueError("Unknown lowrank algorithm")
 
 def get_sv_threshold_function(rank_reduction_method: RankReduction, args: Optional[Tuple], device: torch.device = "cpu"):
     match rank_reduction_method.method:
@@ -112,12 +113,12 @@ class PLoraks(LoraksBase):
         self.patch_shape: Optional[Tuple] = None
         self.sample_directions: Optional[Tuple] = None
         self.k_space_shape: Optional[Tuple] = None
-        self.svd_algorithm: Optional[LowRankAlgorithmType] = None
+        self.lowrank_algorithm: Optional[LowRankAlgorithmType] = None
         self.svd_algorithm_args: Optional[Tuple] = None
         self.operator_type: Optional[OperatorType] = None
         self.sv_cutoff_method: Optional[RankReduction] = None
         self.sv_cutoff_args: Optional[Tuple] = None
-        self.lambda_factor: Optional[float] = 0.3
+        self.regularization_lambda: Optional[float] = 0.3
         self.max_num_iter: int = 50
         self.learning_rate_func: Callable = lambda _: 1e-3
         self.device: Optional[torch.device] = torch.get_default_device()
@@ -147,38 +148,38 @@ class PLoraks(LoraksBase):
         return self
 
     def with_torch_lowrank_algorithm(self, q: int, niter: int) -> "PLoraks":
-        if self.svd_algorithm != LowRankAlgorithmType.TORCH_LOWRANK_SVD or self.svd_algorithm_args != (q, niter):
-            logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.TORCH_LOWRANK_SVD}")
+        if self.lowrank_algorithm != LowRankAlgorithmType.TORCH_LOWRANK_SVD or self.svd_algorithm_args != (q, niter):
+            logger.info(f"SVD algorithm changed from {self.lowrank_algorithm} to {LowRankAlgorithmType.TORCH_LOWRANK_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
             self.dirty_config = True
-            self.svd_algorithm = LowRankAlgorithmType.TORCH_LOWRANK_SVD
+            self.lowrank_algorithm = LowRankAlgorithmType.TORCH_LOWRANK_SVD
             self.svd_algorithm_args = (q, niter)
         else:
-            logger.info(f"SVD algorithm unchanged: {self.svd_algorithm}")
+            logger.info(f"SVD algorithm unchanged: {self.lowrank_algorithm}")
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
     def with_sor_svd_algorithm(self, q: int, niter: int) -> "PLoraks":
-        if self.svd_algorithm != LowRankAlgorithmType.SOR_SVD or self.svd_algorithm_args != (q, niter):
-            logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.SOR_SVD}")
+        if self.lowrank_algorithm != LowRankAlgorithmType.SOR_SVD or self.svd_algorithm_args != (q, niter):
+            logger.info(f"SVD algorithm changed from {self.lowrank_algorithm} to {LowRankAlgorithmType.SOR_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
             self.dirty_config = True
-            self.svd_algorithm = LowRankAlgorithmType.SOR_SVD
+            self.lowrank_algorithm = LowRankAlgorithmType.SOR_SVD
             self.svd_algorithm_args = (q, niter)
         else:
-            logger.info(f"SVD algorithm unchanged: {self.svd_algorithm}")
+            logger.info(f"SVD algorithm unchanged: {self.lowrank_algorithm}")
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
     def with_rand_svd_algorithm(self, q: int, niter: int) -> "PLoraks":
-        if self.svd_algorithm != LowRankAlgorithmType.RANDOM_SVD or self.svd_algorithm_args != (q, niter):
-            logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.RANDOM_SVD}")
+        if self.lowrank_algorithm != LowRankAlgorithmType.RANDOM_SVD or self.svd_algorithm_args != (q, niter):
+            logger.info(f"SVD algorithm changed from {self.lowrank_algorithm} to {LowRankAlgorithmType.RANDOM_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
             self.dirty_config = True
-            self.svd_algorithm = LowRankAlgorithmType.RANDOM_SVD
+            self.lowrank_algorithm = LowRankAlgorithmType.RANDOM_SVD
             self.svd_algorithm_args = (q, niter)
         else:
-            logger.info(f"SVD algorithm unchanged: {self.svd_algorithm}")
+            logger.info(f"SVD algorithm unchanged: {self.lowrank_algorithm}")
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
@@ -333,7 +334,7 @@ class PLoraks(LoraksBase):
             logger.info("No operator type specified. Using default.")
             self.with_c_matrix()
 
-        if self.svd_algorithm is None:
+        if self.lowrank_algorithm is None:
             logger.info("No SVD algorithm specified. Using default.")
             # God, I hope this makes sense. For calculating the size of q, we calculate the
             # size of the c/s-matrix and take a portion of it.
@@ -353,30 +354,29 @@ class PLoraks(LoraksBase):
     def configure(self, options: PLoraksOptions):
         logger.info("Call to the configure() method of PLoraks")
 
+        # We loop through all fields for one reason only: To get an error if we forget to handle an available option
         for field_info in fields(options):
             name = field_info.name
-            value = getattr(options, name)
             match name:
                 case "loraks_type":
-                    if value is not LoraksImplementation.P_LORAKS:
+                    if options.loraks_type is not LoraksImplementation.P_LORAKS:
                         raise ValueError(f"Wrong configuration type for PLoraks: {options.loraks_type}")
                 case "loraks_matrix_type":
-                    if value is OperatorType.C:
-                        self.with_c_matrix()
-                    else:
-                        self.with_s_matrix()
+                    self.operator_type = options.loraks_matrix_type
                 case "rank":
-                    continue
+                    self.lowrank_algorithm = options.rank
                 case "regularization_lambda":
-                    continue
+                    self.regularization_lambda = options.regularization_lambda
                 case "max_num_iter":
-                    continue
+                    self.max_num_iter = int(options.max_num_iter)
                 case "device":
-                    continue
+                    self.device = options.device
                 case "lowrank_algorithm":
-                    continue
+                    self.lowrank_algorithm = options.lowrank_algorithm
                 case _:
                     raise ValueError(f"Unknown PLoraks option value: {name}")
+            self.dirty_config = True
+            self.dirty_indices = True
 
     def _initialize(self, k_space: torch.Tensor):
         logger.info("Call to the _initialize() method of PLoraks")
@@ -395,7 +395,7 @@ class PLoraks(LoraksBase):
         self._initialize_matrix_indices()
 
         operator_func = c_operator if self.operator_type == OperatorType.C else s_operator
-        svd_func = get_lowrank_algorithm_function(self.svd_algorithm, self.svd_algorithm_args)
+        svd_func = get_lowrank_algorithm_function(self.lowrank_algorithm, self.svd_algorithm_args)
         sv_threshold_func = get_sv_threshold_function(self.sv_cutoff_method, self.sv_cutoff_args, self.device)
         loss_func = create_loss_function(operator_func, svd_func, sv_threshold_func)
 
@@ -418,7 +418,7 @@ class PLoraks(LoraksBase):
                     self.matrix_operator_shape,
                     k_sampled_points,
                     sampling_mask_batch,
-                    self.lambda_factor)
+                    self.regularization_lambda)
                 loss.backward()
 
                 # Use the optimal learning_rate to update parameters
