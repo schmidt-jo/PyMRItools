@@ -38,7 +38,7 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor, indices_rev: torch.
 
     # effectively c - matrix in each channel
     s_p = k_space[..., indices].view(-1, *matrix_shape)
-    #  but with mirrored indexing around k-space center
+    #  but with mirrored indexing around the k-space center
     s_m = k_space[..., indices_rev].view(-1, *matrix_shape)
 
     # calculate the quadrants
@@ -58,7 +58,7 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor, indices_rev: torch.
 
 
 def s_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, indices_rev: torch.Tensor, k_space_dims: tuple):
-    # the input matrix is dims [2 * nb * nc * ne,  2 * nxy]
+    # the input matrix dimensions are [2 * nb * nc * ne,  2 * nxy]
     # want to extract the channels and echoes first
     s = torch.reshape(matrix, (k_space_dims[0], indices.shape[0] * 2, -1))
     # get the quadrants
@@ -139,7 +139,7 @@ class Operator:
 
     @property
     def matrix_size(self) -> tuple[int, int]:
-        return NotImplementedError("To be implemented by subclass")
+        raise NotImplementedError("To be implemented by subclass")
 
 
 class C(Operator):
@@ -176,7 +176,8 @@ class S(Operator):
                           matrix_shape=self.matrix_shape)
 
     def adjoint_operator(self, matrix: torch.Tensor):
-        return s_adjoint_operator(matrix=matrix, indices=self.indices, indices_rev=self.indices_rev)
+        return s_adjoint_operator(matrix=matrix, indices=self.indices, indices_rev=self.indices_rev,
+                                  k_space_dims=self.k_space_shape)
 
     def matrix_size(self) -> tuple[int, int]:
         return calculate_matrix_size(
