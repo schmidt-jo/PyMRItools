@@ -28,13 +28,21 @@ class ComputationType(Enum):
 
 def get_ac_matrix_s(k_data: torch.Tensor, s: S):
     # we extract the neighborhood size
-    nb_size = s.matrix_size()[0] * k_data.shape[0]
+    nb_size = s.matrix_shape[0] * k_data.shape[0]
     mask = torch.abs(k_data) > 1e-10
 
     ac_matrix = s.operator(k_data)
 
-    mask_p = torch.reshape(mask.view(*k_data.shape[:-2], -1)[:, s.indices], (-1, s.indices.shape[-1]))
-    mask_f = torch.reshape(mask.view(*k_data.shape[:-2], -1)[:, s.indices_rev], (-1, s.indices.shape[-1]))
+    mask_p = torch.reshape(
+        mask.view(*k_data.shape[:-2], -1)[..., s.indices],
+        (-1, *s.matrix_shape)
+    ).mT
+    mask_p = torch.reshape(mask_p, (-1, mask_p.shape[-1]))
+    mask_f = torch.reshape(
+        mask.view(*k_data.shape[:-2], -1)[..., s.indices.reshape(s.matrix_shape).flip(dims=(0,))],
+        (-1, *s.matrix_shape)
+    ).mT
+    mask_f = torch.reshape(mask_p, (-1, mask_f.shape[-1]))
 
     idx = (torch.sum(mask_p, dim=0) == nb_size) & (torch.sum(mask_f, dim=0) == nb_size)
     idx = torch.concatenate([idx, idx], dim=0)
@@ -67,7 +75,7 @@ def get_count_matrix(shape_batch: Tuple, indices: torch.Tensor,
     return count_matrix
 
 
-def get_nullspace(m_ac: torch. Tensor, rank: int = 150):
+def get_nullspace(m_ac: torch.Tensor, rank: int = 150):
     mmh = m_ac @ m_ac.mH
     e_vals, e_vecs = torch.linalg.eigh(mmh, UPLO="U")
     idx = torch.argsort(torch.abs(e_vals), descending=True)
@@ -101,6 +109,12 @@ def embed_circular_patch(v: torch.Tensor, nb_radius: int):
     )
     v_patch[:, :, circular_nb_indices[:, 0], circular_nb_indices[:, 1]] = v
 
+    return v_patch
+
+
+def embed_square_patch(v: torch.Tensor, nb_side: int):
+    nfilt, filt_size = v.shape
+    v_patch = torch.reshape(v, (nfilt, -1, nb_side, nb_side))
     return v_patch
 
 
@@ -156,6 +170,7 @@ def calc_v_pad(v_patch: torch.Tensor, batch_shape: Tuple, nb_size: int):
         mode='constant', value=0.0
     )
 
+
 def calc_v_shift(v_pad: torch.Tensor, batch_shape: Tuple, nb_size: int, operator_type: OperatorType = OperatorType.S):
     if operator_type == OperatorType.S:
         return torch.roll(
@@ -176,6 +191,7 @@ def calc_v_shift(v_pad: torch.Tensor, batch_shape: Tuple, nb_size: int, operator
             )
         )
 
+
 def m_op_base(x: torch.Tensor, v_c: torch.Tensor, v_s: torch.Tensor, nb_size: int, shape_batch: Tuple):
     # dims [nx, ny, nce]
     pad_x = pad(
@@ -192,6 +208,7 @@ def m_op_base(x: torch.Tensor, v_c: torch.Tensor, v_s: torch.Tensor, nb_size: in
     imv_s = torch.fft.ifft2(mv_s, dim=(-2, -1))[..., :shape_batch[-2], :shape_batch[-1]]
 
     return imv_c - imv_s
+
 
 def get_m_operator_fft(
         v_s: torch.Tensor, v_c: torch.Tensor, mask: torch.Tensor, nb_size: int,
@@ -212,7 +229,7 @@ def get_m_operator_fft(
         def _m_op(x):
             tmp = torch.zeros(shape_batch, dtype=v_s.dtype, device=device)
             tmp[~mask] = x
-            m = m_op_base(tmp, v_c=v_c, v_s=v_s)
+            m = m_op_base(tmp, v_c=v_c, v_s=v_s, nb_size=nb_size, shape_batch=shape_batch)
             return 2 * m[~mask]
 
     return _m_op
@@ -245,6 +262,7 @@ def get_m_operator(
 
     return _m_op
 
+
 def get_b_vector_fft(k: torch.Tensor, mask: torch.Tensor, v_s: torch.Tensor, v_c: torch.Tensor,
                      lambda_factor: float, nb_size: int, shape_batch: Tuple):
     if lambda_factor > 0.0:
@@ -254,7 +272,7 @@ def get_b_vector_fft(k: torch.Tensor, mask: torch.Tensor, v_s: torch.Tensor, v_c
         return - 2 * m[~mask]
 
 
-def get_b_vector(k: torch.Tensor, mask:torch.Tensor, vvh: torch.Tensor,
+def get_b_vector(k: torch.Tensor, mask: torch.Tensor, vvh: torch.Tensor,
                  operator: callable, operator_adjoint: callable,
                  lambda_factor: float):
     if lambda_factor > 0.0:
@@ -262,8 +280,9 @@ def get_b_vector(k: torch.Tensor, mask:torch.Tensor, vvh: torch.Tensor,
     else:
         return operator_adjoint(operator(k) @ vvh)[~mask]
 
-def embedd_data(k_sampled_points: torch.Tensor, k_candidate: torch.Tensor,
-                mask_sampled_points: torch.Tensor, lambda_factor: float):
+
+def embed_data(k_sampled_points: torch.Tensor, k_candidate: torch.Tensor,
+               mask_sampled_points: torch.Tensor, lambda_factor: float):
     if lambda_factor > 0.0:
         return k_candidate
     else:
@@ -280,17 +299,20 @@ def solve_cgd_batch(
         vs: torch.Tensor,
         vc: torch.Tensor,
         nb_size: int,
+        max_num_iter: int,
+        conv_tol: float,
         device: torch.device = "cpu"):
-        m = get_m_operator_fft(
-            v_s=vs, v_c=vc, mask=mask, nb_size=nb_size,
-            lambda_factor=lambda_factor, shape_batch=shape_batch
-        )
-        b = get_b_vector_fft(
-            k=k_sampled_points, mask=mask, v_s=vs, v_c=vc,
-            lambda_factor=lambda_factor, nb_size=nb_size, shape_batch=shape_batch
-        )
-        k_opt = cgd(func_operator=m, x=torch.zeros_like(b), b=b)
-        return k_opt.cpu()
+    m = get_m_operator_fft(
+        v_s=vs, v_c=vc, mask=mask, nb_size=nb_size,
+        lambda_factor=lambda_factor, shape_batch=shape_batch,
+        device=device
+    )
+    b = get_b_vector_fft(
+        k=k_sampled_points, mask=mask, v_s=vs, v_c=vc,
+        lambda_factor=lambda_factor, nb_size=nb_size, shape_batch=shape_batch
+    )
+    k_opt, _, _ = cgd(func_operator=m, x=torch.zeros_like(b), b=b, max_num_iter=max_num_iter, conv_tol=conv_tol)
+    return k_opt
 
 
 def solve_autograd_batch(
@@ -304,49 +326,50 @@ def solve_autograd_batch(
         device: torch.device = "cpu",
         max_num_iter: int = 200,
         learning_rate_function: Callable = lambda x: 1e-3):
-        log_module.info("Init autograd solver")
-        k_init = torch.randn_like(k_sampled_points) * 1e-5
-        k_data_consistency = k_sampled_points[mask]
-        k_init[mask] = k_data_consistency
-        k = k_init.clone().to(device).requires_grad_()
-        k_data_consistency = k_data_consistency.to(device)
+    k_init = torch.randn_like(k_sampled_points) * 1e-5
+    k_data_consistency = k_sampled_points[mask]
+    k_init[mask] = k_data_consistency
+    if not lambda_factor > 0.0:
+        k_init = k_init[~mask]
+    k = k_init.clone().to(device).requires_grad_()
+    k_data_consistency = k_data_consistency.to(device)
 
-        progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
+    progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
 
-        # iterations
-        for i in progress_bar:
-            # embed data based on lambda factor
-            k_data = embedd_data(
-                k_sampled_points=k_sampled_points, mask_sampled_points=mask,
-                k_candidate=k, lambda_factor=lambda_factor
-            )
-            # solve || mv || in fourier space
-            mv = m_op_base(
-                x=k_data, v_c=vc, v_s=vs, nb_size=nb_size, shape_batch=shape_batch
-            )
-            loss_lr = torch.linalg.norm(mv, ord="fro")
-            if lambda_factor > 0.0:
-                loss_dc = torch.linalg.norm(k_data - k_data_consistency)
-                loss = loss_dc + lambda_factor * loss_lr
-            else:
-                loss_dc = 0.0
-                loss = loss_lr
+    # iterations
+    for i in progress_bar:
+        # embed data based on lambda factor
+        k_data = embed_data(
+            k_sampled_points=k_sampled_points, mask_sampled_points=mask,
+            k_candidate=k, lambda_factor=lambda_factor
+        )
+        # solve || mv || in fourier space
+        mv = m_op_base(
+            x=k_data, v_c=vc, v_s=vs, nb_size=nb_size, shape_batch=shape_batch
+        )
+        loss_lr = torch.linalg.norm(mv)
+        if lambda_factor > 0.0:
+            loss_dc = torch.linalg.norm(k_data - k_data_consistency)
+            loss = loss_dc + lambda_factor * loss_lr
+        else:
+            loss_dc = 0.0
+            loss = loss_lr
 
-            loss.backward()
-            # Use the optimal learning_rate to update parameters
-            with torch.no_grad():
-                k -= learning_rate_function(i) * k.grad
-            k.grad.zero_()
+        loss.backward()
+        # Use the optimal learning_rate to update parameters
+        with torch.no_grad():
+            k -= learning_rate_function(i) * k.grad
+        k.grad.zero_()
 
-            progress_bar.postfix = (
-                f"LR: {learning_rate_function(i):.6f} -- "
-                f"LowRank Loss: {1e3 * loss_lr.item():.2f} -- "
-                f"Data Loss: {1e3 * loss_dc.item():.2f} -- "
-                f"Total Loss: {1e3 * loss.item():.2f}"
-            )
+        progress_bar.postfix = (
+            f"LR: {learning_rate_function(i):.6f} -- "
+            f"LowRank Loss: {1e3 * float(loss_lr):.2f} -- "
+            f"Data Loss: {1e3 * float(loss_dc):.2f} -- "
+            f"Total Loss: {1e3 * float(loss):.2f}"
+        )
 
-        # k is our converged best guess candidate, need to unwrap / reshape
-        return k.detach().cpu()
+    # k is our converged best guess candidate, need to unwrap / reshape
+    return k.detach()
 
 
 @dataclass
@@ -354,7 +377,6 @@ class AcLoraksOptions(LoraksOptions):
     loraks_type: LoraksImplementation = LoraksImplementation.AC_LORAKS
     computation_type: ComputationType = ComputationType.FFT
     solver_type: SolverType = SolverType.LEASTSQUARES
-    loraks_neighborhood_radius: int = 3
 
 
 class AcLoraks(LoraksBase):
@@ -367,16 +389,17 @@ class AcLoraks(LoraksBase):
         self.computation_type = None
         self.max_num_iter = None
         self.loraks_matrix_type = None
-        self.loraks_neighborhood_radius = None
+        self.loraks_neighborhood_size = None
         self.regularization_lambda = None
         self.device = None
         self.options = None
+        self.init_op = False
 
     def configure(self, options: AcLoraksOptions = AcLoraksOptions()):
         self.options = options
         self.device = options.device
         self.regularization_lambda = options.regularization_lambda
-        self.loraks_neighborhood_radius = options.loraks_neighborhood_radius
+        self.loraks_neighborhood_size = options.loraks_neighborhood_size
         self.loraks_matrix_type = options.loraks_matrix_type
         self.max_num_iter = options.max_num_iter
         self.computation_type = options.computation_type
@@ -418,6 +441,11 @@ class AcLoraks(LoraksBase):
         :raises ValueError: If the input tensor does not match the expected shape.
         :return: Output tensor divided into batches, reshaped to [b, -1].
         """
+        pass
+
+    def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple,
+                                   combined_shape: tuple) -> torch.Tensor:
+        pass
 
     def _prepare_batch(self, batch):
         # 1) deduce AC region within Loraks Matrix
@@ -432,7 +460,7 @@ class AcLoraks(LoraksBase):
         torch.cuda.empty_cache()
 
         # prep zero phase filter input
-        v_patch = self._embed_circular_patch(v)
+        v_patch = self._embed_patch(v)
         del v
         torch.cuda.empty_cache()
 
@@ -443,6 +471,12 @@ class AcLoraks(LoraksBase):
         return vc, vs
 
     def _get_ac_matrix(self, batch: torch.Tensor):
+        if not self.init_op:
+            shape = batch.shape[-2:]
+            self.op = self.op(
+                k_space_shape=shape, nb_side_length=self.loraks_neighborhood_size, device=self.device
+            )
+            self.init_op = True
         if self.loraks_matrix_type == OperatorType.S:
             return get_ac_matrix_s(
                 k_data=batch, s=self.op
@@ -453,23 +487,24 @@ class AcLoraks(LoraksBase):
             )
 
     def _complex_subspace_representation(self, v):
-        return complex_subspace_representation(v, matrix_nb_size=self.loraks_neighborhood_radius)
+        return complex_subspace_representation(v, matrix_nb_size=self.loraks_neighborhood_size ** 2)
 
-    def _embed_circular_patch(self, v):
-        return embed_circular_patch(v, nb_radius=self.loraks_neighborhood_radius)
+    def _embed_patch(self, v):
+        # return embed_circular_patch(v, nb_radius=self.loraks_neighborhood_radius)
+        return embed_square_patch(v, nb_side=self.loraks_neighborhood_size)
 
     def _get_v_fft(self, v_cplx_embed: torch.Tensor, batch_shape: Tuple, operator_type: OperatorType):
         # zero phase filter
         v_filt = zero_phase_filter(
-            v_cplx_embed.clone(), nb_size=self.loraks_neighborhood_radius, operator_type=operator_type
+            v_cplx_embed.clone(), nb_size=self.loraks_neighborhood_size, operator_type=operator_type
         )
         del v_cplx_embed
         torch.cuda.empty_cache()
 
         # pad and fft shift
         v_shift = calc_v_shift(
-            calc_v_pad(v_filt, batch_shape=batch_shape, nb_size=self.loraks_neighborhood_radius),
-            batch_shape=batch_shape, nb_size=self.loraks_neighborhood_radius, operator_type=operator_type
+            calc_v_pad(v_filt, batch_shape=batch_shape, nb_size=self.loraks_neighborhood_size),
+            batch_shape=batch_shape, nb_size=self.loraks_neighborhood_size, operator_type=operator_type
         )
         del v_filt
         torch.cuda.empty_cache()
@@ -478,7 +513,7 @@ class AcLoraks(LoraksBase):
         return torch.fft.fft2(v_shift, dim=(-2, -1))
 
     def _zero_phase_filter(self, v):
-        return zero_phase_filter(v, self.loraks_neighborhood_radius, self.loraks_matrix_type)
+        return zero_phase_filter(v, self.loraks_neighborhood_size, self.loraks_matrix_type)
 
     @staticmethod
     def _log(msg):
@@ -497,18 +532,20 @@ class AcLoraks(LoraksBase):
         return solve_cgd_batch(
             k_sampled_points=k_sampled_points, lambda_factor=self.regularization_lambda,
             mask=torch.abs(k_sampled_points) > 1e-10, shape_batch=k_sampled_points.shape,
-            vs=vs, vc=vc, nb_size=self.loraks_neighborhood_radius, device=self.device
+            vs=vs, vc=vc, nb_size=self.loraks_neighborhood_size, device=self.device,
+            max_num_iter=self.max_num_iter, conv_tol=self.tol
         )
 
     def _solve_autograd(self, k_sampled_points: torch.Tensor, vs: torch.Tensor, vc: torch.Tensor):
         return solve_autograd_batch(
             k_sampled_points=k_sampled_points, lambda_factor=self.regularization_lambda,
             mask=torch.abs(k_sampled_points) > 1e-10, shape_batch=k_sampled_points.shape,
-            vs=vs, vc=vc, nb_size=self.loraks_neighborhood_radius, device=self.device,
+            vs=vs, vc=vc, nb_size=self.loraks_neighborhood_size, device=self.device,
             max_num_iter=self.max_num_iter, learning_rate_function=lambda x: 1e-3
         )
 
     def reconstruct_batch(self, batch):
+        batch = batch.to(device=self.device, dtype=torch.complex64)
         # steps needed in AC LORAKS per batch
         vc, vs = self._prepare_batch(batch=batch)
 
@@ -520,10 +557,8 @@ class AcLoraks(LoraksBase):
             k = self._solve_autograd(k_sampled_points=batch, vs=vs, vc=vc)
 
         # if true data consisctency is true embed the data
-        k = embedd_data(
+        k = embed_data(
             k_sampled_points=batch, mask_sampled_points=torch.abs(batch) > 1e-10,
             lambda_factor=self.regularization_lambda, k_candidate=k
         )
-        return k
-
-
+        return k.cpu()
