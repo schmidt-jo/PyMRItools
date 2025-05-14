@@ -34,8 +34,6 @@ class AC_LORAKS:
             conv_tol: float = 1e-3,
             device: torch.device = torch.get_default_device()):
 
-        # TODO: This should be extracted in reconstruct() and everything else needs to be setup just then
-
         log_module.info("Initialize LORAKS reconstruction algortihm")
         self.rank: int = rank
         self.regularization_lambda: float = regularization_lambda
@@ -481,7 +479,6 @@ class AC_LORAKS:
 
         return m_op, b
 
-
     def reconstruct(self):
         # allocate space
         k_recon = torch.zeros_like(self.k_batched)
@@ -685,7 +682,7 @@ def recon(settings: PyLoraksConfig):
     out_img = fft_to_img(k_recon, dims=(0, 1))
     # put out coils
     nifti_save(
-        out_img[:, :, nz // 2].abs(), img_aff=affine,
+        torch.reshape(out_img, (nx, ny, nz, nc, ne))[:, :, nz // 2].abs(), img_aff=affine,
         path_to_dir=path_out, file_name=f"{loraks_name}_output_coils"
     )
     # plot
