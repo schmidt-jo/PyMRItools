@@ -30,74 +30,73 @@ For each "flavor" we have different computation options.
 The algorithm is using torch autograd to perform direct optimization of the Minimization equations.
 """
 import logging
-from abc import ABC, abstractclassmethod, abstractmethod
-from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 
 import torch
 import tqdm
 
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, final, TypeVar
 
 from simple_parsing.helpers import Serializable
 
 logger = logging.getLogger("Loraks")
 
 
-class SVMethodType(Enum):
+class LoraksImplementation(Enum):
+    """
+    Specifies which Loraks algorithm to use.
+    """
+    P_LORAKS = auto()
+    AC_LORAKS = auto()
+
+
+@dataclass
+class RankReductionMethod(Enum):
+    """
+    Specifies the method used for cutting of ranks to calculate a low-rank representation.
+    """
     HARD_CUTOFF = auto()
     RELU_SHIFT = auto()
     RELU_SHIFT_AUTOMATIC = auto()
 
 
 @dataclass
-class RANK(Serializable):
-    method: SVMethodType
+class RankReduction(Serializable):
+    """
+    Specifies the method and value used for cutting of ranks to calculate a low-rank representation.
+    """
+    method: RankReductionMethod
     value: Optional[float | int] = None
 
     def set_value(self, value: int):
         self.value = value
 
 
-class LoraksImplementation(Enum):
-    P_LORAKS = auto()
-    AC_LORAKS = auto()
-
-
-class MeasurementType(Enum):
-    AC_DATA = auto()
-    CALIBRATIONLESS = auto()
-
-
-class RegularizationType(Enum):
-    DATACONSISTENCY = auto()
-    REGULARIZED = auto()
-
-
 class OperatorType(Enum):
-    C = auto()
-    S = auto()
-
-
-class LowRankAlgorithmType(Enum):
-    TORCH_LOWRANK_SVD = auto()
-    RANDOM_SVD = auto()
-    SOR_SVD = auto()
-
-class OperatorType(Enum):
+    """
+    Specifies the type of neighborhood matrix to use.
+    """
     C = auto()
     S = auto()
 
 
 @dataclass
 class LoraksOptions(Serializable):
-    # rank: SVThresholdMethod = SVThresholdMethod.HARD_CUTOFF
-    rank: RANK = RANK(method=SVMethodType.HARD_CUTOFF, value=50)
-    regularization_lambda: float = 0.0
-    loraks_neighborhood_radius: int = 3
+    """
+    Base options available in each Loraks algorithm.
+    Do not use this class directly but instead its subclasses for the particular algorithm.
+    """
+    loraks_type: LoraksImplementation = LoraksImplementation.P_LORAKS
     loraks_matrix_type: OperatorType = OperatorType.C
+    rank: RankReduction = field(default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
+    regularization_lambda: float = 0.1
     max_num_iter: int = 20
-    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+
+# We need this type definition for type hinting to later have a method that can take subclasses LoraksOptions
+LoraksOptionsType = TypeVar('LoraksOptionsType', bound=LoraksOptions)
 
 
 # TODO: include indices, matrix shapes and eg. count matrices in the respective operators and make them classes?
@@ -120,19 +119,35 @@ class LoraksBase(ABC):
     # 4) create loss func
     # 5) iteration
     # 6) reverse shape / batch preparation
-    
+
     # __ public
     @abstractmethod
-    def configure(self, options: LoraksOptions):
+    def configure(self, options: LoraksOptionsType):
         """Configure the solver with the given parameters"""
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
-    def _reconstruct_batch(self, batch: torch.Tensor) -> torch.Tensor:
+    def reconstruct_batch(self, k_space_batch: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement this method")
 
+    @abstractmethod
+    def _initialize(self, k_space: torch.Tensor):
+        """
+        Used to initialize the reconstruction algorithm once before processing each batch.
+        This method can be implemented by subclasses and is called once before the reconstruction starts.
+        """
+        pass
+
+    @abstractmethod
+    def _prepare_batch(self, batch):
+        raise NotImplementedError("Subclasses must implement this method")
+
+    @final
     def reconstruct(self, k_space):
-        """Reconstruct k-space data"""
+        """
+        Reconstructs k-space data.
+
+        """
         # prepare / batch k-space
         k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
         # allocate output
@@ -142,32 +157,29 @@ class LoraksBase(ABC):
             # batch = batch.to(self.device)
             k_space_recon[i] = self.reconstruct_batch(batch)
             # memory management?
-            
+
         return self._unprep_batches_to_k_space(k_space_recon, input_shape, combined_shape)
 
-    # __ private
-    @abstractmethod
-    def _prepare_batch(self, batch):
-        raise NotImplementedError("Subclasses must implement this method")
-
+    @final
     def _prep_k_space_to_batches(self, k_space: torch.Tensor) -> (torch.Tensor, tuple, tuple):
         """
         Prepare the input k-space tensor into batches for separate computations, adjusting for memory requirements.
 
-        The input tensor must have the shape [nx, ny, nz, ne, nt]. The output tensor will be reshaped into
+        The input tensor must have the shape [nt, ne, nz, ny, nx].
+        The output tensor will be reshaped into
         batches with a fixed output dimensionality of [b, -1], where b is the batch size.
 
-        :param k_space: Input k-space tensor of shape [nx, ny, nz, ne, nt].
+        :param k_space: Input k-space tensor of shape [nt, ne, nz, ny, nx].
         :raises ValueError: If the input tensor does not match the expected shape.
         :return: Output tensor divided into batches, reshaped to [b, -1].
         """
         # Validate input shape
         if k_space.dim() > 5:
-            raise ValueError("Input tensor must have 5 dimensions: [nx, ny, nz, ne, nt].")
+            raise ValueError("Input tensor must have 5 dimensions: [nt, ne, nz, ny, nx].")
         while k_space.dim() < 5:
-            warning = (f"Input tensor has less than 5 dimensions ({k_space.shape})."
-                       f" We unfold last dimension, might create unwanted behaviour.")
-            logger.warning(warning)
+            logger.warning(
+                f"Input tensor has less than 5 dimensions ({k_space.shape})."
+                f" We unfold last dimension, might create unwanted behaviour.")
             k_space = k_space.unsqueeze(-1)
         # TODO: we can include the padding here as well
         input_shape = k_space.shape
@@ -185,7 +197,9 @@ class LoraksBase(ABC):
 
         return k_batched, input_shape, combined_shape
 
-    def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple, combined_shape: tuple) -> torch.Tensor:
+    @final
+    def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple,
+                                   combined_shape: tuple) -> torch.Tensor:
         """
         This method needs to reverse the above batching
         :param k_batches:
@@ -198,3 +212,19 @@ class LoraksBase(ABC):
         k_space = k_combined.reshape(input_shape)
         # TODO: we need the unpadding here
         return k_space
+
+
+class Loraks:
+    @staticmethod
+    def create(options: LoraksOptionsType) -> LoraksBase:
+        """Factory method with support for implementation-specific options"""
+        recon = None
+        match options.loraks_type:
+            case LoraksImplementation.P_LORAKS:
+                from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
+                recon = PLoraks()
+            case LoraksImplementation.AC_LORAKS:
+                from pymritools.recon.loraks_dev_cleanup.ac_loraks import AcLoraks
+                recon = AcLoraks()
+        recon.configure(options)
+        return recon

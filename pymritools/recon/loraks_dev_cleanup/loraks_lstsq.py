@@ -9,7 +9,7 @@ import tqdm
 import plotly.graph_objects as go
 import plotly.subplots as psub
 
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksOptions, SVThresholdMethod, OperatorType
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksOptions, RankReduction, OperatorType
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices_in_2d_shape, get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import s_operator
 from pymritools.utils.algorithms import cgd
@@ -130,7 +130,7 @@ class AcLoraks:
     def configure(self, options: LoraksOptions):
         """Configure the solver with the given parameters"""
         # TODO: Implement adapter to user interface
-        if options.rank is not SVThresholdMethod.HARD_CUTOFF:
+        if options.rank is not RankReduction.HARD_CUTOFF:
             raise RuntimeError("Blue")
         self.rank = options.rank.value
         self.regularization_lambda = options.regularization_lambda
