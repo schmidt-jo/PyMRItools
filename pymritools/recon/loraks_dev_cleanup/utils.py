@@ -36,7 +36,9 @@ def check_channel_batch_size_and_batch_channels(k_space_rpsct: torch.Tensor, bat
 
     # batch channels
     if batching and batch_size_channels > 1:
-        batch_channel_indices = extract_channel_batch_indices(k_data_nrps_c=k_space_rpsct[..., 0])
+        batch_channel_indices = extract_channel_batch_indices(
+            k_data_nrps_c=k_space_rpsct[..., 0], batch_size_channels=batch_size_channels
+        )
     elif batching and batch_size_channels == 1:
         batch_channel_indices = torch.arange(n_channels)[:, None]
     else:
@@ -46,8 +48,6 @@ def check_channel_batch_size_and_batch_channels(k_space_rpsct: torch.Tensor, bat
 
 
 def prepare_k_space_to_batches(k_space_rpsct: torch.Tensor, batch_channel_indices: torch.Tensor = None):
-    # check shape
-    k_space_rpsct = validate_input_shape(k_space_rpsct=k_space_rpsct)
     # Assuming channel dimension = -2
     input_shape = k_space_rpsct.shape
     n_channels = input_shape[-2]
@@ -74,8 +74,7 @@ def prepare_k_space_to_batches(k_space_rpsct: torch.Tensor, batch_channel_indice
     k_data = k_data.permute(0, 3, 1, 2, 4, 5)
     # dims [bc, ns, ncb, nt, np, nr]
     # we reshape echo and batched channels, and batch dimensions
-    k_data = torch.reshape(k_data, (bc * ns, nt * ncb, np, nr))
-    batched_data_shape = k_data.shape
+    k_data = torch.reshape(k_data, (bc * ns,ncb * nt, np, nr))
     return k_data, input_shape
 
 
@@ -84,16 +83,15 @@ def unprepare_batches_to_k_space(
     # assume that batch_channel_indices have dims [bc, ncb] of num of channel batches and channel batch size
     num_channel_batches, batch_size_channels = batch_channel_indices.shape
     # needs to reverse above batching
-    # unflatten the shape dim (need some input shapes here...)
-    k_batched = k_batched.reshape(
-        (-1, original_shape[-1] * batch_size_channels, original_shape[1], original_shape[0])
-    )
     # now dims [bc * ns, nt * ncb, np, nr]
     # need some information about channel batching (we might take this from above method as well?)
     k_batched = k_batched.reshape(
-        (num_channel_batches, original_shape[2], original_shape[-1],
-         batch_size_channels, original_shape[1], original_shape[0])
+        (num_channel_batches, original_shape[2], batch_size_channels,
+         original_shape[-1], original_shape[1], original_shape[0])
     )
+    # now [bc, ns, nt, ncb, np, nr]
+    # undo slice permutation
+    k_batched = k_batched.permute(0, 2, 3, 1, 4, 5)
     # now dims [bc, ns, nt, ncb, np, nr]
     # allocate out data and use same permutation
     k_data_out = torch.zeros(original_shape, dtype=k_batched.dtype).permute(3, 4, 2, 1, 0)
@@ -205,7 +203,7 @@ def extract_channel_batch_indices(k_data_nrps_c: torch.Tensor, batch_size_channe
     available_channels = torch.arange(nc)
     batches = []
 
-    for idx_c in tqdm.trange(num_batches - 1):
+    for idx_c in tqdm.trange(num_batches - 1, desc="Process correlation based channel batching"):
         # each iteration we cluster the remaining elements
         kmeans = KMeans(n_clusters=num_batches - idx_c, verbose=False)
         # use kmeans clustering to group similar elements
