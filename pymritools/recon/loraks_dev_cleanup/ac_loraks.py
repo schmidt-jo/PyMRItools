@@ -261,7 +261,6 @@ def get_b_vector(k: torch.Tensor, mask:torch.Tensor, vvh: torch.Tensor,
     else:
         return operator_adjoint(operator(k) @ vvh)[~mask]
 
-
 def embedd_data(k_sampled_points: torch.Tensor, k_candidate: torch.Tensor,
                 mask_sampled_points: torch.Tensor, lambda_factor: float):
     if lambda_factor > 0.0:
@@ -333,7 +332,6 @@ def solve_autograd_batch(
                 loss = loss_lr
 
             loss.backward()
-
             # Use the optimal learning_rate to update parameters
             with torch.no_grad():
                 k -= learning_rate_function(i) * k.grad
@@ -461,6 +459,7 @@ class AcLoraks(LoraksBase):
         log_module.error(msg)
         raise AttributeError(msg)
 
+    # we want to pick the solver
     def _solve_cgd(self, k_sampled_points: torch.Tensor, vs: torch.Tensor, vc: torch.Tensor):
         # choose M and b operator based on true data consistency
         # solve cgd
