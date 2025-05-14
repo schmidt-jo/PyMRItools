@@ -169,20 +169,22 @@ def pad_input(k_space: torch.Tensor, sampling_dims: Tuple = (-2, -1)):
             - Padded k-space tensor
             - Padding values used
     """
-    # pad input to have odd dimensions along the sampling directions,
-    # as input this takes a tuple with 1s at the directions sampled and zero otherwise
-    # we want to build the padding based on this tuple, the padding pads before or after for each dim
-    padding = torch.zeros(2 * len(k_space.shape))
-    for i in sampling_dims:
-        if i < 0:
-            i = padding.shape[0] + i
-        # since the torch pad function is working in reversed indexing fashion we do the same
-        padding[2*i] = 1 - int(k_space.shape[i] % 2)
-    k_padded = pad(
-        k_space,
-        pad=padding, mode='constant', value=0.0
-    )
-    return k_padded, padding
+    # Convert negative dimensions to positive if needed
+    dims_to_pad = [dim if dim >= 0 else k_space.ndim + dim for dim in sampling_dims]
+
+    # Create padding list (torch.nn.functional.pad expects [x1, x2, y1, y2, z1, z2] order)
+    padding = [0] * (2 * k_space.ndim)
+
+    for dim in dims_to_pad:
+        # Check if the dimension is even
+        if k_space.shape[dim] % 2 == 0:
+            # Pad 0 at the end of this dimension
+            padding[2 * dim + 1] = 1
+
+    # Apply padding
+    k_padded = pad(k_space, pad=padding, mode='constant', value=0.0)
+
+    return k_padded, tuple(padding)
 
 
 def unpad_output(k_space: torch.Tensor, padding: Tuple[int, int]):
