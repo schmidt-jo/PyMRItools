@@ -88,6 +88,7 @@ class LoraksOptions(Serializable):
     Do not use this class directly but instead its subclasses for the particular algorithm.
     """
     loraks_type: LoraksImplementation = LoraksImplementation.P_LORAKS
+    loraks_neighborhood_size: int = 5
     loraks_matrix_type: OperatorType = OperatorType.C
     rank: RankReduction = field(
         default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
@@ -143,7 +144,8 @@ class LoraksBase(ABC):
 
         """
         # prepare / batch k-space
-        k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
+        # k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
+        k_space_prepared = k_space
         # allocate output
         k_space_recon = torch.zeros_like(k_space_prepared)
         for i, batch in tqdm.tqdm(enumerate(k_space_prepared)):
@@ -152,7 +154,7 @@ class LoraksBase(ABC):
             k_space_recon[i] = self.reconstruct_batch(batch)
             # memory management?
 
-        return self._unprep_batches_to_k_space(k_space_recon, input_shape, combined_shape)
+        return k_space_recon
 
     @abstractmethod
     def _prep_k_space_to_batches(self, k_space: torch.Tensor):
