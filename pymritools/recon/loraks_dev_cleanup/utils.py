@@ -172,14 +172,14 @@ def pad_input(k_space: torch.Tensor, sampling_dims: Tuple = (-2, -1)):
     # Convert negative dimensions to positive if needed
     dims_to_pad = [dim if dim >= 0 else k_space.ndim + dim for dim in sampling_dims]
 
-    # Create padding list (torch.nn.functional.pad expects [x1, x2, y1, y2, z1, z2] order)
+    # Create padding list (torch.nn.functional.pad expects reversed [xn1, xn2, ...., x11 x12, x01, x02] order)
     padding = [0] * (2 * k_space.ndim)
 
     for dim in dims_to_pad:
         # Check if the dimension is even
         if k_space.shape[dim] % 2 == 0:
             # Pad 0 at the end of this dimension
-            padding[2 * dim + 1] = 1
+            padding[2 * (k_space.ndim - dim) - 1] = 1
 
     # Apply padding
     k_padded = pad(k_space, pad=padding, mode='constant', value=0.0)
@@ -198,10 +198,15 @@ def unpad_output(k_space: torch.Tensor, padding: Tuple[int, int]):
     Returns:
         torch.Tensor: Unpadded tensor
     """
+    # padding has reversed order
+    padding = torch.tensor(padding).__reversed__()
     for i in range(len(k_space.shape)):
-        k_space = torch.movedim(k_space, i, 0)
-        k_space = k_space[padding[2*i]:-padding[2*i+1]]
-        k_space = torch.movedim(k_space, 0, i)
+        if not (padding[2*i:2*(i+1)] == 0).all():
+            start = padding[2*i+1]
+            end = k_space.shape[i] - padding[2*i]
+            k_space = torch.movedim(k_space, i, 0)
+            k_space = k_space[start:end]
+            k_space = torch.movedim(k_space, 0, i)
     return k_space
 
 
