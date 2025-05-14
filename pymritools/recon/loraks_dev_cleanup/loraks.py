@@ -70,9 +70,6 @@ class RankReduction(Serializable):
     method: RankReductionMethod
     value: Optional[float | int] = None
 
-    def set_value(self, value: int):
-        self.value = value
-
 
 class OperatorType(Enum):
     """
@@ -90,10 +87,12 @@ class LoraksOptions(Serializable):
     """
     loraks_type: LoraksImplementation = LoraksImplementation.P_LORAKS
     loraks_matrix_type: OperatorType = OperatorType.C
-    rank: RankReduction = field(default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
+    rank: RankReduction = field(
+        default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
     regularization_lambda: float = 0.1
     max_num_iter: int = 20
     device: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+
 
 # We need this type definition for type hinting to later have a method that can take subclasses LoraksOptions
 LoraksOptionsType = TypeVar('LoraksOptionsType', bound=LoraksOptions)
