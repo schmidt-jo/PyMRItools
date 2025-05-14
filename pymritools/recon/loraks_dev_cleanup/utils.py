@@ -11,6 +11,23 @@ log_module = logging.getLogger(__name__)
 
 
 def validate_input_shape(k_space_rpsct: torch.Tensor):
+    """
+    Validate and cast the input tensor to ensure it has 5 dimensions.
+
+    Checks if the input tensor has 5 dimensions. If not, it will either:
+    - Raise a ValueError if the tensor has more than 5 dimensions
+    - Unsqueeze (add) dimensions if the tensor has less than 5 dimensions
+
+    Args:
+        k_space_rpsct (torch.Tensor): Input tensor to validate
+
+    Returns:
+        torch.Tensor: Validated tensor with 5 dimensions
+            Dimensions represent: [n read, n phase, n slice, n channels, n contrasts]
+
+    Raises:
+        ValueError: If input tensor has more than 5 dimensions
+    """
     # Validate input shape
     if k_space_rpsct.dim() > 5:
         raise ValueError("Input tensor must have 5 dimensions: [n read, n phase, n slice, n channels, n contrasts].")
@@ -24,6 +41,18 @@ def validate_input_shape(k_space_rpsct: torch.Tensor):
 
 
 def check_channel_batch_size_and_batch_channels(k_space_rpsct: torch.Tensor, batch_size_channels: int):
+    """
+    Check and prepare channel batching for the input tensor.
+
+    Validates the input tensor shape and determines channel batching strategy.
+
+    Args:
+        k_space_rpsct (torch.Tensor): Input k-space tensor
+        batch_size_channels (int): Desired number of channels per batch
+
+    Returns:
+        torch.Tensor: Indices for channel batches
+    """
     k_space_rpsct = validate_input_shape(k_space_rpsct=k_space_rpsct)
 
     in_shape = k_space_rpsct.shape
@@ -48,6 +77,20 @@ def check_channel_batch_size_and_batch_channels(k_space_rpsct: torch.Tensor, bat
 
 
 def prepare_k_space_to_batches(k_space_rpsct: torch.Tensor, batch_channel_indices: torch.Tensor = None):
+    """
+    Prepare k-space tensor for batched processing by rearranging dimensions.
+
+    Transforms the input k-space tensor to a batched format suitable for computation.
+
+    Args:
+        k_space_rpsct (torch.Tensor): Input k-space tensor
+        batch_channel_indices (torch.Tensor, optional): Pre-computed channel batch indices
+
+    Returns:
+        Tuple[torch.Tensor, Tuple]:
+            - Batched k-space tensor with dimensions [bc * ns, ncb * nt, np, nr]
+            - Original input tensor shape
+    """
     # Assuming channel dimension = -2
     input_shape = k_space_rpsct.shape
     n_channels = input_shape[-2]
@@ -80,6 +123,17 @@ def prepare_k_space_to_batches(k_space_rpsct: torch.Tensor, batch_channel_indice
 
 def unprepare_batches_to_k_space(
         k_batched: torch.Tensor, batch_channel_indices: torch.Tensor, original_shape: Tuple):
+    """
+    Reverse the batching process and reconstruct the original k-space tensor.
+
+    Args:
+        k_batched (torch.Tensor): Batched k-space tensor
+        batch_channel_indices (torch.Tensor): Channel batch indices
+        original_shape (Tuple): Shape of the original input tensor
+
+    Returns:
+        torch.Tensor: Reconstructed k-space tensor with original dimensions
+    """
     # assume that batch_channel_indices have dims [bc, ncb] of num of channel batches and channel batch size
     num_channel_batches, batch_size_channels = batch_channel_indices.shape
     # needs to reverse above batching
@@ -103,6 +157,18 @@ def unprepare_batches_to_k_space(
 
 
 def pad_input(k_space: torch.Tensor, sampling_dims: Tuple = (-2, -1)):
+    """
+    Pad the input tensor to ensure odd dimensions along specified sampling directions.
+
+    Args:
+        k_space (torch.Tensor): Input tensor to be padded
+        sampling_dims (Tuple, optional): Dimensions to pad. Defaults to last two dimensions.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]:
+            - Padded k-space tensor
+            - Padding values used
+    """
     # pad input to have odd dimensions along the sampling directions,
     # as input this takes a tuple with 1s at the directions sampled and zero otherwise
     # we want to build the padding based on this tuple, the padding pads before or after for each dim
@@ -120,6 +186,16 @@ def pad_input(k_space: torch.Tensor, sampling_dims: Tuple = (-2, -1)):
 
 
 def unpad_output(k_space: torch.Tensor, padding: Tuple[int, int]):
+    """
+    Remove padding from the output tensor.
+
+    Args:
+        k_space (torch.Tensor): Padded tensor
+        padding (Tuple[int, int]): Padding values to remove
+
+    Returns:
+        torch.Tensor: Unpadded tensor
+    """
     for i in range(len(k_space.shape)):
         k_space = torch.movedim(k_space, i, 0)
         k_space = k_space[padding[2*i]:-padding[2*i+1]]
@@ -128,6 +204,22 @@ def unpad_output(k_space: torch.Tensor, padding: Tuple[int, int]):
 
 
 def check_channel_batching(batch_size_channels: int, n_channels: int) -> (bool, torch.Tensor, torch.Tensor):
+    """
+    Validate and determine channel batching strategy.
+
+    Args:
+        batch_size_channels (int): Desired number of channels per batch
+        n_channels (int): Total number of channels
+
+    Returns:
+        Tuple[bool, int, int]:
+            - Whether batching is necessary
+            - Actual batch size
+            - Number of batches
+
+    Raises:
+        AttributeError: If channel dimensions are not compatible with batching
+    """
     # check batching
     if 1 <= batch_size_channels < n_channels:
         if n_channels % batch_size_channels > 1e-9:
@@ -150,6 +242,17 @@ def check_channel_batching(batch_size_channels: int, n_channels: int) -> (bool, 
 
 def select_most_correlated_channels(
         correlation_matrix: torch.Tensor, channel_batch: torch.Tensor, batch_size_channels: int) -> torch.Tensor:
+    """
+    Select the most correlated channels within a given batch.
+
+    Args:
+        correlation_matrix (torch.Tensor): Matrix of channel correlations
+        channel_batch (torch.Tensor): Current channel batch
+        batch_size_channels (int): Desired number of channels per batch
+
+    Returns:
+        torch.Tensor: Indices of most correlated channels
+    """
     # If too many, select the batch_size most correlated channels within this cluster
     # Find all channels in the current batch
     sub_corr = correlation_matrix[channel_batch][:, channel_batch]
@@ -166,6 +269,19 @@ def select_most_correlated_channels(
 def pad_with_most_correlated_channels(
         correlation_matrix: torch.Tensor, channel_batch: torch.Tensor, batch_size_channels: int,
         available_channels_idx: torch.Tensor) -> torch.Tensor:
+    """
+    Pad the channel batch with additional most correlated channels.
+
+    Args:
+        correlation_matrix (torch.Tensor): Matrix of channel correlations
+        channel_batch (torch.Tensor): Current channel batch
+        batch_size_channels (int): Desired number of channels per batch
+        available_channels_idx (torch.Tensor): Indices of available channels
+
+    Returns:
+        torch.Tensor: Padded channel batch with most correlated channels
+    """
+
     # build a mask of all remaining channels to choose from,
     # not take the ones already identified to belong to the current batch
     remaining_channels = torch.tensor([ac for ac in available_channels_idx if ac not in channel_batch]).to(
@@ -187,6 +303,18 @@ def pad_with_most_correlated_channels(
 
 
 def extract_channel_batch_indices(k_data_nrps_c: torch.Tensor, batch_size_channels: int) -> torch.Tensor:
+    """
+    Extract channel batch indices based on correlation clustering.
+
+    Performs k-means clustering on channel correlations to group similar channels.
+
+    Args:
+        k_data_nrps_c (torch.Tensor): Input k-space data tensor
+        batch_size_channels (int): Desired number of channels per batch
+
+    Returns:
+        torch.Tensor: Tensor of channel batch indices
+    """
     nc = k_data_nrps_c.shape[-1]
     # ensure flatten for ech channel
     k_data_nrps_c = torch.reshape(k_data_nrps_c, (-1, nc))
