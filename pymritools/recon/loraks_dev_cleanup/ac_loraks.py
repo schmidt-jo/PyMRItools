@@ -7,7 +7,7 @@ from torch.nn.functional import pad
 from dataclasses import dataclass
 from typing import Tuple, Callable
 
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType, RANK
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType
 from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import S, C
 from pymritools.utils.algorithms import cgd
@@ -354,14 +354,23 @@ def solve_autograd_batch(
 class AcLoraksOptions(LoraksOptions):
     computation_type: ComputationType = ComputationType.FFT
     solver_type: SolverType = SolverType.LEASTSQUARES
+    loraks_neighborhood_radius: int = 3
 
 
 class AcLoraks(LoraksBase):
-    def _prepare_batch(self, batch):
-        pass
-
     def __init__(self):
         super().__init__()
+        self.op = None
+        self.tol = None
+        self.rank = None
+        self.solver_type = None
+        self.computation_type = None
+        self.max_num_iter = None
+        self.loraks_matrix_type = None
+        self.loraks_neighborhood_radius = None
+        self.regularization_lambda = None
+        self.device = None
+        self.options = None
 
     def configure(self, options: AcLoraksOptions = AcLoraksOptions()):
         self.options = options
@@ -397,6 +406,10 @@ class AcLoraks(LoraksBase):
         # in the end we need an M operator and a b vector to solve Mf = b least squares via cgd
         # self.count_matrix = self._get_count_matrix()
         torch.cuda.empty_cache()
+
+
+    def _prepare_batch(self, batch):
+        pass
 
     def _get_ac_matrix(self, batch: torch.Tensor):
         if self.loraks_matrix_type == OperatorType.S:
@@ -465,7 +478,7 @@ class AcLoraks(LoraksBase):
             max_num_iter=self.max_num_iter, learning_rate_function=lambda x: 1e-3
         )
 
-    def _reconstruct_batch(self, batch):
+    def reconstruct_batch(self, batch):
         # steps needed in AC LORAKS per batch
         # 1) deduce AC region within Loraks Matrix
         m_ac = self._get_ac_matrix(
