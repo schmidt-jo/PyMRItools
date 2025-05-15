@@ -118,7 +118,7 @@ class PLoraks(LoraksBase):
         self.operator_type: Optional[OperatorType] = None
         self.sv_cutoff_method: Optional[RankReduction] = None
         self.sv_cutoff_args: Optional[Tuple] = None
-        self.regularization_lambda: Optional[float] = 0.3
+        self.regularization_lambda: Optional[float] = 0.5
         self.max_num_iter: int = 50
         self.learning_rate_func: Callable = lambda _: 1e-3
         self.device: Optional[torch.device] = torch.get_default_device()
@@ -147,6 +147,24 @@ class PLoraks(LoraksBase):
             logger.info(f"Sample directions unchanged: {self.sample_directions}")
         return self
 
+    def with_regularization_lambda(self, regularization_lambda: float) -> "PLoraks":
+        if self.regularization_lambda != regularization_lambda:
+            logger.info(f"Regularization Lambda changed from {self.regularization_lambda} to {regularization_lambda}")
+            self.dirty_config = True
+            self.regularization_lambda = regularization_lambda
+        else:
+            logger.info(f"Regularization Lambda unchanged: {self.regularization_lambda}")
+        return self
+
+    def with_max_iterations(self, max_iter: int) -> "PLoraks":
+        if self.max_num_iter != max_iter:
+            logger.info(f"Maximum number of iterations changed from {self.max_num_iter} to {max_iter}")
+            self.dirty_config = True
+            self.max_num_iter = max_iter
+        else:
+            logger.info(f"Maximum number of iterations unchanged: {self.max_num_iter}")
+        return self
+
     def with_torch_lowrank_algorithm(self, q: int, niter: int) -> "PLoraks":
         if self.lowrank_algorithm != LowRankAlgorithmType.TORCH_LOWRANK_SVD or self.svd_algorithm_args != (q, niter):
             logger.info(f"SVD algorithm changed from {self.lowrank_algorithm} to {LowRankAlgorithmType.TORCH_LOWRANK_SVD}")
@@ -170,6 +188,44 @@ class PLoraks(LoraksBase):
             logger.info(f"SVD algorithm unchanged: {self.lowrank_algorithm}")
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     def with_rand_svd_algorithm(self, q: int, niter: int) -> "PLoraks":
         if self.lowrank_algorithm != LowRankAlgorithmType.RANDOM_SVD or self.svd_algorithm_args != (q, niter):
