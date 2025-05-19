@@ -21,7 +21,7 @@ def main():
     log_module.info(f"create ac loraks object")
     ac_opts = AcLoraksOptions(
         loraks_matrix_type=OperatorType.S, regularization_lambda=0.0,
-        solver_type=SolverType.AUTOGRAD, max_num_iter=1000
+        solver_type=SolverType.AUTOGRAD, max_num_iter=10000
     )
 
     ac_loraks = Loraks.create(ac_opts)
