@@ -117,7 +117,7 @@ def prepare_k_space_to_batches(k_space_rpsct: torch.Tensor, batch_channel_indice
     k_data = k_data.permute(0, 3, 1, 2, 4, 5)
     # dims [bc, ns, ncb, nt, np, nr]
     # we reshape echo and batched channels, and batch dimensions
-    k_data = torch.reshape(k_data, (bc * ns,ncb * nt, np, nr))
+    k_data = torch.reshape(k_data, (bc * ns, ncb * nt, np, nr))
     return k_data, input_shape
 
 
