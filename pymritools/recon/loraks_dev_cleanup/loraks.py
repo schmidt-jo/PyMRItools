@@ -137,12 +137,19 @@ class LoraksBase(ABC):
     def _prepare_batch(self, batch):
         raise NotImplementedError("Subclasses must implement this method")
 
+    @abstractmethod
+    def _initialize(self, k_space):
+        """ method to setup everything k-space dependent, e.g. indices, matrix shapes etc. """
+        raise NotImplementedError("Subclasses must implement this method")
     @final
     def reconstruct(self, k_space):
         """
-        Reconstructs k-space data.
+        Reconstructs k-space data. Assume data is given in shape:
+        [batches, channel/echo combinations, spatial dims xyz]
 
         """
+        # Check shape?
+        self._initialize(k_space=k_space)
         # prepare / batch k-space
         # k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
         k_space_prepared = k_space
@@ -155,24 +162,6 @@ class LoraksBase(ABC):
             # memory management?
 
         return k_space_recon
-
-    @abstractmethod
-    def _prep_k_space_to_batches(self, k_space: torch.Tensor):
-        """
-        Prepare the input k-space tensor into batches for separate computations, adjusting for memory requirements.
-
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple,
-                                   combined_shape: tuple) -> torch.Tensor:
-        """
-        This method needs to reverse the above batching
-        :param k_batches:
-        :return:
-        """
-        raise NotImplementedError
 
 
 class Loraks:
