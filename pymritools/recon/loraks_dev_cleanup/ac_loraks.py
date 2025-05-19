@@ -7,11 +7,14 @@ from torch.nn.functional import pad
 from dataclasses import dataclass
 from typing import Tuple, Callable
 
+from performance_experiments.utils import get_output_dir
 from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
-from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
-from pymritools.recon.loraks_dev_cleanup.operators import S, C
-from pymritools.recon.loraks_dev_cleanup.utils import prepare_k_space_to_batches, unprepare_batches_to_k_space
+from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices, get_linear_indices
+from pymritools.recon.loraks_dev_cleanup.operators import Operator
 from pymritools.utils.algorithms import cgd
+
+import plotly.graph_objects as go
+import plotly.subplots as psub
 
 log_module = logging.getLogger(__name__)
 
@@ -26,42 +29,36 @@ class ComputationType(Enum):
     REGULAR = auto()
 
 
-def get_ac_matrix_s(k_data: torch.Tensor, s: S):
-    # we extract the neighborhood size
-    nb_size = s.matrix_shape[0] * k_data.shape[0]
+def get_ac_matrix(k_data: torch.Tensor, operator: Operator) -> torch.Tensor:
+    # we extract the neighborhood size, its multiplied by the combined channel shape
+    k_data_shape = k_data.shape
+    nb_size = operator.matrix_shape[-1] * k_data_shape[0]
     mask = torch.abs(k_data) > 1e-10
+    # realize the matrix
+    ac_matrix = operator.forward(k_data)
 
-    ac_matrix = s.operator(k_data)
-
+    # index the mask, this way we can more easily extract the lines that are filled
+    # we want to find all sampling positions were the complete neighborhood is contained across all concatenations
     mask_p = torch.reshape(
-        mask.view(*k_data.shape[:-2], -1)[..., s.indices],
-        (-1, *s.matrix_shape)
+        mask.view(*k_data_shape[:-2], -1)[..., operator.indices],
+        (-1, *operator.matrix_shape)
     ).mT
     mask_p = torch.reshape(mask_p, (-1, mask_p.shape[-1]))
-    mask_f = torch.reshape(
-        mask.view(*k_data.shape[:-2], -1)[..., s.indices.reshape(s.matrix_shape).flip(dims=(0,))],
-        (-1, *s.matrix_shape)
-    ).mT
-    mask_f = torch.reshape(mask_p, (-1, mask_f.shape[-1]))
-
-    idx = (torch.sum(mask_p, dim=0) == nb_size) & (torch.sum(mask_f, dim=0) == nb_size)
-    idx = torch.concatenate([idx, idx], dim=0)
-    ac_matrix[:, ~idx] = 0.0
-    return ac_matrix
-
-
-def get_ac_matrix_c(k_data: torch.Tensor, c: C):
-    # we extract the neighborhood size
-    nb_size = c.matrix_size[0] * k_data.shape[0]
-    mask = torch.abs(k_data) > 1e-10
-
-    ac_matrix = c.operator(k_data)
-
-    mask_p = c.operator(mask)
-
-    idx = (torch.sum(mask_p, dim=0) == nb_size)
-    ac_matrix[:, ~idx] = 0.0
-    return ac_matrix
+    if operator.operator_type == OperatorType.S:
+        # for the s operator we additionally want to find all neighborhoods also contained for the symmetric points
+        mask_f = torch.reshape(
+            mask.view(*k_data_shape[:-2], -1)[..., operator.reversed_indices],
+        (-1, *operator.matrix_shape)
+        ).mT
+        mask_f = torch.reshape(mask_p, (-1, mask_f.shape[-1]))
+        idx = (torch.sum(mask_p, dim=0) == nb_size) & (torch.sum(mask_f, dim=0) == nb_size)
+        idx = torch.concatenate([idx, idx], dim=0)
+        ac_matrix[:, ~idx] = 0.0
+        return ac_matrix
+    else:
+        idx = (torch.sum(mask_p, dim=0) == nb_size)
+        ac_matrix[:, ~idx] = 0.0
+        return ac_matrix
 
 
 def get_count_matrix(shape_batch: Tuple, indices: torch.Tensor,
@@ -315,6 +312,20 @@ def solve_cgd_batch(
     return k_opt
 
 
+def bb_learning_rate(xk: torch.Tensor, xk_last: torch.Tensor, grad: torch.Tensor, grad_last: torch.Tensor):
+    sk = xk - xk_last
+    yk = grad - grad_last
+    if sk.ndim > 1:
+        alpha_k = sk.mT @ yk / yk.mT @ yk
+    else:
+        alpha_k = torch.dot(sk, yk) / torch.dot(yk, yk)
+    # should give a batch dependent learning rate
+    if torch.is_complex(alpha_k):
+        return torch.clip(alpha_k.real, 1e-3, 1e3) + torch.clip(alpha_k.imag, 1e-3, 1e3) * 1j
+    else:
+        return torch.clip(alpha_k, 1e-3, 1e3)
+
+
 def solve_autograd_batch(
         k_sampled_points: torch.Tensor,
         lambda_factor: float,
@@ -325,16 +336,20 @@ def solve_autograd_batch(
         nb_size: int,
         device: torch.device = "cpu",
         max_num_iter: int = 200,
-        learning_rate_function: Callable = lambda x: 1e-3):
+        learning_rate_function: Callable = lambda x: 1e-1):
     k_init = torch.randn_like(k_sampled_points) * 1e-5
     k_data_consistency = k_sampled_points[mask]
     k_init[mask] = k_data_consistency
     if not lambda_factor > 0.0:
         k_init = k_init[~mask]
+    k_last =k_init.clone()
+    grad_last = torch.zeros_like(k_init)
+
     k = k_init.clone().to(device).requires_grad_()
     k_data_consistency = k_data_consistency.to(device)
 
     progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
+    losses, learning_rates = [], []
 
     # iterations
     for i in progress_bar:
@@ -356,19 +371,42 @@ def solve_autograd_batch(
             loss = loss_lr
 
         loss.backward()
-        # Use the optimal learning_rate to update parameters
+
         with torch.no_grad():
-            k -= learning_rate_function(i) * k.grad
+            if i > max_num_iter:
+                # Use the optimal learning_rate to update parameters
+                # Barziali-Borwein method
+                # TODO: does this work for complex optimization too? we get a complex learning rate
+                alpha_k = bb_learning_rate(xk=k, xk_last=k_last, grad=k.grad, grad_last=grad_last)
+            else:
+                alpha_k = learning_rate_function(i)
+            convergence = torch.linalg.norm(k.grad).item()
+            # ToDo: bad convergence criterion (learning rate dependent), can we do better?
+            grad_last = k.grad.clone()
+            k_last = k.detach().clone()
+            k -= alpha_k * k.grad
         k.grad.zero_()
 
         progress_bar.postfix = (
-            f"LR: {learning_rate_function(i):.6f} -- "
             f"LowRank Loss: {1e3 * float(loss_lr):.2f} -- "
             f"Data Loss: {1e3 * float(loss_dc):.2f} -- "
-            f"Total Loss: {1e3 * float(loss):.2f}"
+            f"Total Loss: {1e3 * float(loss):.2f} -- "
+            f"Convergence: {convergence:.3f} -- "
+            f"Learning Rate: {alpha_k:.3f}"
         )
+        losses.append(loss.item())
+        learning_rates.append(alpha_k)
 
+    # ToDo: just a testing plot, get rid of this again!
     # k is our converged best guess candidate, need to unwrap / reshape
+    fig = psub.make_subplots(rows=2, cols=1, row_titles=("LR", "Loss"))
+    for i, l in enumerate([torch.tensor(learning_rates).cpu(), torch.tensor(losses).cpu()]):
+        fig.add_trace(
+            go.Scatter(y=l.abs(), mode="markers"),
+            row=i + 1, col=1
+        )
+    path = get_output_dir("ac_loraks")
+    fig.write_html(path.joinpath("lrs").with_suffix(".html"))
     return k.detach()
 
 
@@ -406,11 +444,7 @@ class AcLoraks(LoraksBase):
         self.solver_type = options.solver_type
         self.rank = options.rank.value
         self.tol = 1e-5
-
-        if self.loraks_matrix_type == OperatorType.S:
-            self.op = S
-        else:
-            self.op = C
+        self.op: Operator = None
 
         if self.regularization_lambda < 1e-9:
             # set strict data consistency
@@ -429,6 +463,17 @@ class AcLoraks(LoraksBase):
         # in the end we need an M operator and a b vector to solve Mf = b least squares via cgd
         # self.count_matrix = self._get_count_matrix()
         torch.cuda.empty_cache()
+
+    def _initialize(self, k_space):
+        self._log("Initialize")
+        # setup operator / indexing, shape dependent
+        self.op = Operator(
+            k_space_shape=k_space.shape[-2:],
+            nb_side_length=self.loraks_neighborhood_size,
+            device=self.device,
+            operator_type=self.loraks_matrix_type
+        )
+
 
     def _prep_k_space_to_batches(self, k_space: torch.Tensor):
         """
@@ -471,19 +516,8 @@ class AcLoraks(LoraksBase):
         return vc, vs
 
     def _get_ac_matrix(self, batch: torch.Tensor):
-        if not self.init_op:
-            shape = batch.shape[-2:]
-            self.op = self.op(
-                k_space_shape=shape, nb_side_length=self.loraks_neighborhood_size, device=self.device
-            )
-            self.init_op = True
-        if self.loraks_matrix_type == OperatorType.S:
-            return get_ac_matrix_s(
-                k_data=batch, s=self.op
-            )
-        else:
-            return get_ac_matrix_c(
-                k_data=batch, c=self.op
+        return get_ac_matrix(
+                k_data=batch, operator=self.op,
             )
 
     def _complex_subspace_representation(self, v):
@@ -541,7 +575,7 @@ class AcLoraks(LoraksBase):
             k_sampled_points=k_sampled_points, lambda_factor=self.regularization_lambda,
             mask=torch.abs(k_sampled_points) > 1e-10, shape_batch=k_sampled_points.shape,
             vs=vs, vc=vc, nb_size=self.loraks_neighborhood_size, device=self.device,
-            max_num_iter=self.max_num_iter, learning_rate_function=lambda x: 1e-3
+            max_num_iter=self.max_num_iter, learning_rate_function=lambda x: 1e-1
         )
 
     def reconstruct_batch(self, batch):
