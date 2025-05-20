@@ -7,14 +7,11 @@ from torch.nn.functional import pad
 from dataclasses import dataclass
 from typing import Tuple, Callable
 
-from performance_experiments.utils import get_output_dir
 from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
-from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices, get_linear_indices
+from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
 from pymritools.recon.loraks_dev_cleanup.operators import Operator
 from pymritools.utils.algorithms import cgd
-
-import plotly.graph_objects as go
-import plotly.subplots as psub
+from pymritools.utils.functions import SimpleKalmanFilter
 
 log_module = logging.getLogger(__name__)
 
@@ -312,7 +309,11 @@ def solve_cgd_batch(
     return k_opt
 
 
-def bb_learning_rate(xk: torch.Tensor, xk_last: torch.Tensor, grad: torch.Tensor, grad_last: torch.Tensor):
+def bb_learning_rate(
+    xk: torch.Tensor, xk_last: torch.Tensor,
+    grad: torch.Tensor, grad_last: torch.Tensor,
+    lr_min = 1e-4, lr_max = 1e1
+):
     sk = xk - xk_last
     yk = grad - grad_last
     if sk.ndim > 1:
@@ -321,9 +322,9 @@ def bb_learning_rate(xk: torch.Tensor, xk_last: torch.Tensor, grad: torch.Tensor
         alpha_k = torch.dot(sk, yk) / torch.dot(yk, yk)
     # should give a batch dependent learning rate
     if torch.is_complex(alpha_k):
-        return torch.clip(alpha_k.real, 1e-3, 1e3) + torch.clip(alpha_k.imag, 1e-3, 1e3) * 1j
+        return torch.clip(alpha_k.real, lr_min, lr_max) + torch.clip(alpha_k.imag, lr_min, lr_max) * 1j
     else:
-        return torch.clip(alpha_k, 1e-3, 1e3)
+        return torch.clip(alpha_k, lr_min, lr_max)
 
 
 def solve_autograd_batch(
@@ -336,7 +337,8 @@ def solve_autograd_batch(
         nb_size: int,
         device: torch.device = "cpu",
         max_num_iter: int = 200,
-        learning_rate_function: Callable = lambda x: 1e-1):
+        warmup_iter: int = 2,
+        learning_rate_function: Callable = lambda x: 1e-3) -> (torch.Tensor, torch.Tensor, torch.Tensor):
     k_init = torch.randn_like(k_sampled_points) * 1e-5
     k_data_consistency = k_sampled_points[mask]
     k_init[mask] = k_data_consistency
@@ -350,9 +352,13 @@ def solve_autograd_batch(
 
     progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
     losses, learning_rates = [], []
-
+    # loss_last = 1e10
+    # alpha_filter = SimpleKalmanFilter(process_variance=1e-1, measurement_variance=1e-1)
+    optimizer = torch.optim.Adam([k], lr=5e-1)
+    # optimizer = torch.optim.RMSprop([k], lr=5e-1, momentum=0.8)
     # iterations
     for i in progress_bar:
+        optimizer.zero_grad()
         # embed data based on lambda factor
         k_data = embed_data(
             k_sampled_points=k_sampled_points, mask_sampled_points=mask,
@@ -371,43 +377,39 @@ def solve_autograd_batch(
             loss = loss_lr
 
         loss.backward()
-
-        with torch.no_grad():
-            if i > max_num_iter:
-                # Use the optimal learning_rate to update parameters
-                # Barziali-Borwein method
-                # TODO: does this work for complex optimization too? we get a complex learning rate
-                alpha_k = bb_learning_rate(xk=k, xk_last=k_last, grad=k.grad, grad_last=grad_last)
-            else:
-                alpha_k = learning_rate_function(i)
-            convergence = torch.linalg.norm(k.grad).item()
-            # ToDo: bad convergence criterion (learning rate dependent), can we do better?
-            grad_last = k.grad.clone()
-            k_last = k.detach().clone()
-            k -= alpha_k * k.grad
-        k.grad.zero_()
+        optimizer.step()
+        # with torch.no_grad():
+        #     if i > warmup_iter:
+        #         # Use the optimal learning_rate to update parameters
+        #         # Barziali-Borwein method
+        #         # TODO: does this work for complex optimization too? we get a complex learning rate
+        #         alpha_k = bb_learning_rate(xk=k, xk_last=k_last, grad=k.grad, grad_last=grad_last, lr_max=5e1)
+        #         # ToDo: some kind of running average to make this less spiky?
+        #         # alpha_k = smooth_value(alpha_k, alpha_last, alpha=0.5)
+        #         # alpha_k = alpha_filter.update(alpha_k)
+        #     else:
+        #         alpha_k = learning_rate_function(i)
+        #     convergence = torch.linalg.norm(loss - loss_last).item()
+        #     # ToDo: bad convergence criterion (learning rate dependent), can we do better?
+        #     grad_last = k.grad.clone()
+        #     k_last = k.detach().clone()
+        #     loss_last = loss.detach().clone()
+        #     alpha_last = alpha_k
+        #     k -= alpha_k * k.grad
+        # k.grad.zero_()
 
         progress_bar.postfix = (
             f"LowRank Loss: {1e3 * float(loss_lr):.2f} -- "
             f"Data Loss: {1e3 * float(loss_dc):.2f} -- "
             f"Total Loss: {1e3 * float(loss):.2f} -- "
-            f"Convergence: {convergence:.3f} -- "
-            f"Learning Rate: {alpha_k:.3f}"
+            # f"Convergence: {convergence:.3f} -- "
+            # f"Learning Rate: {alpha_k:.3f}"
         )
         losses.append(loss.item())
-        learning_rates.append(alpha_k)
+        # learning_rates.append(alpha_k)
+        learning_rates.append(0)
 
-    # ToDo: just a testing plot, get rid of this again!
-    # k is our converged best guess candidate, need to unwrap / reshape
-    fig = psub.make_subplots(rows=2, cols=1, row_titles=("LR", "Loss"))
-    for i, l in enumerate([torch.tensor(learning_rates).cpu(), torch.tensor(losses).cpu()]):
-        fig.add_trace(
-            go.Scatter(y=l.abs(), mode="markers"),
-            row=i + 1, col=1
-        )
-    path = get_output_dir("ac_loraks")
-    fig.write_html(path.joinpath("lrs").with_suffix(".html"))
-    return k.detach()
+    return k.detach(), torch.tensor(losses), torch.tensor(learning_rates)
 
 
 @dataclass
@@ -420,18 +422,19 @@ class AcLoraksOptions(LoraksOptions):
 class AcLoraks(LoraksBase):
     def __init__(self):
         super().__init__()
-        self.op = None
-        self.tol = None
-        self.rank = None
-        self.solver_type = None
-        self.computation_type = None
-        self.max_num_iter = None
-        self.loraks_matrix_type = None
-        self.loraks_neighborhood_size = None
-        self.regularization_lambda = None
-        self.device = None
-        self.options = None
-        self.init_op = False
+        self.op: Operator = NotImplemented
+        self.tol: float = NotImplemented
+        self.rank: int = NotImplemented
+        self.solver_type: SolverType = NotImplemented
+        self.computation_type: ComputationType = NotImplemented
+        self.max_num_iter: int = NotImplemented
+        self.loraks_matrix_type: OperatorType = NotImplemented
+        self.loraks_neighborhood_size: int = NotImplemented
+        self.regularization_lambda: float = NotImplemented
+        self.device: torch.device = NotImplemented
+        self.options: LoraksOptions = NotImplemented
+        self.autograd_losses: torch.Tensor = NotImplemented
+        self.autograd_lr: torch.Tensor = NotImplemented
 
     def configure(self, options: AcLoraksOptions = AcLoraksOptions()):
         self.options = options
@@ -444,7 +447,6 @@ class AcLoraks(LoraksBase):
         self.solver_type = options.solver_type
         self.rank = options.rank.value
         self.tol = 1e-5
-        self.op: Operator = None
 
         if self.regularization_lambda < 1e-9:
             # set strict data consistency
@@ -473,24 +475,13 @@ class AcLoraks(LoraksBase):
             device=self.device,
             operator_type=self.loraks_matrix_type
         )
-
-
-    def _prep_k_space_to_batches(self, k_space: torch.Tensor):
-        """
-
-        The input tensor must have the shape [nt, ne, nz, ny, nx].
-        The output tensor will be reshaped into
-        batches with a fixed output dimensionality of [b, -1], where b is the batch size.
-
-        :param k_space: Input k-space tensor of shape [nt, ne, nz, ny, nx].
-        :raises ValueError: If the input tensor does not match the expected shape.
-        :return: Output tensor divided into batches, reshaped to [b, -1].
-        """
-        pass
-
-    def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple,
-                                   combined_shape: tuple) -> torch.Tensor:
-        pass
+        if self.solver_type == SolverType.AUTOGRAD:
+            self.autograd_losses = torch.zeros(
+                (k_space.shape[0], self.max_num_iter), dtype=torch.float32
+            )
+            self.autograd_lr = torch.zeros(
+                (k_space.shape[0], self.max_num_iter), dtype=k_space.dtype
+            )
 
     def _prepare_batch(self, batch):
         # 1) deduce AC region within Loraks Matrix
@@ -570,7 +561,8 @@ class AcLoraks(LoraksBase):
             max_num_iter=self.max_num_iter, conv_tol=self.tol
         )
 
-    def _solve_autograd(self, k_sampled_points: torch.Tensor, vs: torch.Tensor, vc: torch.Tensor):
+    def _solve_autograd(self, k_sampled_points: torch.Tensor, vs: torch.Tensor, vc: torch.Tensor
+                        ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
         return solve_autograd_batch(
             k_sampled_points=k_sampled_points, lambda_factor=self.regularization_lambda,
             mask=torch.abs(k_sampled_points) > 1e-10, shape_batch=k_sampled_points.shape,
@@ -578,7 +570,7 @@ class AcLoraks(LoraksBase):
             max_num_iter=self.max_num_iter, learning_rate_function=lambda x: 1e-1
         )
 
-    def reconstruct_batch(self, batch):
+    def reconstruct_batch(self, batch: torch.Tensor, idx_batch: int = 0):
         batch = batch.to(device=self.device, dtype=torch.complex64)
         # steps needed in AC LORAKS per batch
         vc, vs = self._prepare_batch(batch=batch)
@@ -588,7 +580,9 @@ class AcLoraks(LoraksBase):
             k = self._solve_cgd(k_sampled_points=batch, vs=vs, vc=vc)
         else:
             # or by solving k directly using autograd
-            k = self._solve_autograd(k_sampled_points=batch, vs=vs, vc=vc)
+            k, losses, learning_rates = self._solve_autograd(k_sampled_points=batch, vs=vs, vc=vc)
+            self.autograd_losses[idx_batch] = losses
+            self.autograd_lr[idx_batch] = learning_rates
 
         # if true data consisctency is true embed the data
         k = embed_data(
@@ -596,3 +590,11 @@ class AcLoraks(LoraksBase):
             lambda_factor=self.regularization_lambda, k_candidate=k
         )
         return k.cpu()
+
+    def get_autograd_stats(self):
+        if self.solver_type == SolverType.AUTOGRAD:
+            return self.autograd_losses, self.autograd_lr
+        else:
+            msg = "Autograd stats only available for autograd solver"
+            log_module.error(msg)
+            raise AttributeError(msg)
