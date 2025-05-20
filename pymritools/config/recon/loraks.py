@@ -22,9 +22,9 @@ class Settings(BaseClass):
         alias="-ps", default=False,
         help="toggle processing of middle slize and not whole volume, eg. for testing LORAKS parameters."
     )
-    radius: int = field(
-        alias="-r", default=3,
-        help="Loraks neighborhood radius."
+    patch_size: int = field(
+        alias="-p", default=5,
+        help="Loraks neighborhood square patch size."
     )
     rank: int = field(alias="-rank", default=250)
     reg_lambda: float = field(
@@ -32,22 +32,26 @@ class Settings(BaseClass):
         help=f"regularization parameter for Loraks matrix "
              f"rank minimization. Set 0.0 to use true data consistency (default)."
     )
+    loraks_algorithm: str = choice(
+        "AC-LORAKS", "P-LORAKS", alias="-alg", default="P-LORAKS",
+        help="LORAKS algorithm to be used"
+    )
     matrix_type: str = choice(
         "S", "C", alias="-t", default="S",
         help="LORAKS matrix type to be used"
     )
-    # lambda_data: float = field(alias="-dl", default=0.5)
     conv_tol: float = field(
         alias="-tol", default=1e-3,
         help="Convergence tolerance for the conjugate gradient algorithm."
     )
     max_num_iter: int = field(
-        alias="-mni", default=10,
+        alias="-mni", default=200,
         help="Maximum number of iterations if not converged."
     )
 
     batch_size: int = field(
-        alias="-b", default=4,
+        alias="-b", default=-1,
         help="Batch size for gpu computation. Reduce if out of memory."
     )
+
     
