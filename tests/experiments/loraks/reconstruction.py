@@ -1,6 +1,6 @@
 import logging
 
-from performance_experiments.utils import get_output_dir
+from tests.experiments.utils import get_output_dir
 from pymritools.config.recon.loraks import Settings
 from pymritools.recon.loraks_dev_cleanup.recon import main as reco
 

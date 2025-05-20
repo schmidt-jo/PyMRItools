@@ -1,5 +1,5 @@
 import logging
-from performance_experiments.utils import get_output_dir, create_phantom_data
+from tests.experiments.utils import get_output_dir, create_phantom_data
 from pymritools.recon.loraks_dev_cleanup.loraks import Loraks, OperatorType
 from pymritools.recon.loraks_dev_cleanup.ac_loraks import AcLoraksOptions, SolverType
 from pymritools.recon.loraks_dev_cleanup.utils import (

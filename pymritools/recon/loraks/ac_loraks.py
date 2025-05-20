@@ -217,7 +217,7 @@ def get_m_operator_fft(
         def _m_op(x):
             x = torch.reshape(x, shape_batch)
             m = m_op_base(x, v_c=v_c, v_s=v_s, nb_size=nb_size, shape_batch=shape_batch)
-            return (aha * x + 2 * lambda_factor * m)
+            return aha * x + 2 * lambda_factor * m
 
     else:
         def _m_op(x):

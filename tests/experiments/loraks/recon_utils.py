@@ -2,7 +2,7 @@ import logging
 
 import torch
 
-from performance_experiments.utils import create_phantom_data, get_output_dir
+from tests.experiments.utils import create_phantom_data, get_output_dir
 from pymritools.recon.loraks_dev_cleanup.utils import (
     prepare_k_space_to_batches, unprepare_batches_to_k_space, check_channel_batch_size_and_batch_channels,
     pad_input, unpad_output

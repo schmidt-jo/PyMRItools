@@ -405,7 +405,7 @@ class PLoraks(LoraksBase):
         logger.info("Call to the _prepare_batch() method of PLoraks")
         pass
 
-    def reconstruct_batch(self, k_space: torch.Tensor) -> torch.Tensor:
+    def reconstruct_batch(self, k_space: torch.Tensor, idx_batch: int = 0) -> torch.Tensor:
         if k_space.shape != self.k_space_shape:
             self.dirty_config = True
             self.k_space_shape = k_space.shape
