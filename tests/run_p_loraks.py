@@ -2,7 +2,7 @@ import os.path
 
 import torch
 
-from pymritools.recon.loraks_dev.ps_loraks import Loraks, LowRankAlgorithmType
+from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
 from pymritools.utils import Phantom, fft_to_img
 from tests.utils import get_test_result_output_dir
 
@@ -10,11 +10,11 @@ import plotly.subplots as psub
 import plotly.graph_objects as go
 
 
-def run_ps_loraks():
+def run_p_loraks():
     import logging
     logging.basicConfig(level=logging.INFO)
-    loraks = (Loraks(max_num_iter=1, lambda_factor=0.1)
-              .with_device(torch.device("mps"))
+    loraks = (PLoraks()
+              .with_regularization_lambda(0.3)
               .with_c_matrix()
               .with_torch_lowrank_algorithm(q=90, niter=2)
               .with_sv_auto_soft_cutoff()
@@ -65,10 +65,10 @@ def run_ps_loraks():
     fig.add_trace(go.Heatmap(z=torch.sqrt(torch.abs(jupiter_img_loraks_recon)),
                              colorscale="Jet", showscale=False),
                   row=3, col=2)
-    fig.add_trace(go.Heatmap(z=torch.log(torch.abs(jupiter_k_loraks_recon[0]-jupiter_k_subsampled)),
+    fig.add_trace(go.Heatmap(z=torch.log(torch.abs(jupiter_k_loraks_recon[0] - jupiter_k_subsampled)),
                              colorscale="Viridis", showscale=False),
                   row=4, col=1)
-    fig.add_trace(go.Heatmap(z=torch.abs(jupiter_img_recon-jupiter_img_loraks_recon),
+    fig.add_trace(go.Heatmap(z=torch.abs(jupiter_img_recon - jupiter_img_loraks_recon),
                              colorscale="Jet", showscale=False),
                   row=4, col=2)
 
@@ -83,8 +83,8 @@ def run_ps_loraks():
     fig.update_xaxes(showticklabels=False)
     fig.update_yaxes(showticklabels=False)
 
-    fig.write_html(os.path.join(output_dir,"ps_loraks_reconstruction.html"))
+    fig.write_html(os.path.join(output_dir, "ps_loraks_reconstruction.html"))
 
 
 if __name__ == '__main__':
-    run_ps_loraks()
+    run_p_loraks()
