@@ -160,3 +160,36 @@ def gaussian_2d_kernel(size_x: int, size_y: int, center_x: int=None, center_y:in
 
     return gauss_2d
 
+
+class SimpleKalmanFilter:
+    def __init__(self, process_variance=1e-5, measurement_variance=1e-3):
+        self.process_variance = process_variance
+        self.measurement_variance = measurement_variance
+        self.estimate = None
+        self.error_estimate = 1
+
+    def update(self, measurement):
+        if self.estimate is None:
+            self.estimate = measurement
+            return self.estimate
+
+        # Kalman gain calculation
+        kalman_gain = self.error_estimate / (self.error_estimate + self.measurement_variance)
+
+        # Estimate update
+        self.estimate = self.estimate + kalman_gain * (measurement - self.estimate)
+
+        # Error estimate update
+        self.error_estimate = (1 - kalman_gain) * self.error_estimate + abs(
+            measurement - self.estimate) * self.process_variance
+
+        return self.estimate
+
+
+def exponential_moving_average(new_value, previous_smoothed, alpha=0.1):
+    """
+    Exponential Moving Average smoothing
+    - alpha controls the smoothing (0 < alpha < 1)
+    - Lower alpha = more smoothing, higher alpha = less smoothing
+    """
+    return alpha * new_value + (1 - alpha) * previous_smoothed
