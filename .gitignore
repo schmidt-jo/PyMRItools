@@ -93,4 +93,3 @@ cython_debug/
 /resources/
 /pymritools/optimization/
 /pex_output/
-/performance_experiments/torch_matlab_comp/
