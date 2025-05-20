@@ -39,9 +39,6 @@ from simple_parsing.helpers import Serializable
 import torch
 import tqdm
 
-from pymritools.recon.loraks_dev_cleanup.utils import prepare_k_space_to_batches, unprepare_batches_to_k_space
-
-
 
 logger = logging.getLogger("Loraks")
 
@@ -88,12 +85,13 @@ class LoraksOptions(Serializable):
     Do not use this class directly but instead its subclasses for the particular algorithm.
     """
     loraks_type: LoraksImplementation = LoraksImplementation.P_LORAKS
+    loraks_neighborhood_size: int = 5
     loraks_matrix_type: OperatorType = OperatorType.C
     rank: RankReduction = field(
         default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
     regularization_lambda: float = 0.1
     batch_size_channels: int = -1
-    max_num_iter: int = 20
+    max_num_iter: int = 300
     device: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 
@@ -129,59 +127,39 @@ class LoraksBase(ABC):
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
-    def reconstruct_batch(self, k_space_batch: torch.Tensor) -> torch.Tensor:
+    def reconstruct_batch(self, k_space_batch: torch.Tensor, idx_batch: int = 0) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
     def _prepare_batch(self, batch):
         raise NotImplementedError("Subclasses must implement this method")
 
+    @abstractmethod
+    def _initialize(self, k_space):
+        """ method to setup everything k-space dependent, e.g. indices, matrix shapes etc. """
+        raise NotImplementedError("Subclasses must implement this method")
     @final
     def reconstruct(self, k_space):
         """
-        Reconstructs k-space data.
+        Reconstructs k-space data. Assume data is given in shape:
+        [batches, channel/echo combinations, spatial dims xyz]
 
         """
+        # Check shape?
+        self._initialize(k_space=k_space)
         # prepare / batch k-space
-        k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
+        # k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
+        k_space_prepared = k_space
         # allocate output
         k_space_recon = torch.zeros_like(k_space_prepared)
         for i, batch in tqdm.tqdm(enumerate(k_space_prepared)):
+            logger.info(f"Reconstructing batch {i+1} / {k_space_prepared.shape[0]}")
             # put on device - device management, thus _reconstruct_batch to be a device agnostic function?
             # batch = batch.to(self.device)
-            k_space_recon[i] = self.reconstruct_batch(batch)
+            k_space_recon[i] = self.reconstruct_batch(batch, idx_batch=i)
             # memory management?
 
-        return self._unprep_batches_to_k_space(k_space_recon, input_shape, combined_shape)
-
-    @final
-    def _prep_k_space_to_batches(self, k_space: torch.Tensor) -> (torch.Tensor, tuple, tuple):
-        """
-        Prepare the input k-space tensor into batches for separate computations, adjusting for memory requirements.
-
-        The input tensor must have the shape [nt, ne, nz, ny, nx].
-        The output tensor will be reshaped into
-        batches with a fixed output dimensionality of [b, -1], where b is the batch size.
-
-        :param k_space: Input k-space tensor of shape [nt, ne, nz, ny, nx].
-        :raises ValueError: If the input tensor does not match the expected shape.
-        :return: Output tensor divided into batches, reshaped to [b, -1].
-        """
-        # how to compute the channel batching?
-
-        k_batched, input_shape, combined_shape = prepare_k_space_to_batches(k_space=k_space, batch_size_channels=-1)
-        return k_batched, input_shape, combined_shape
-
-    @final
-    def _unprep_batches_to_k_space(self, k_batches: torch.Tensor, input_shape: tuple,
-                                   combined_shape: tuple) -> torch.Tensor:
-        """
-        This method needs to reverse the above batching
-        :param k_batches:
-        :return:
-        """
-        k_space = unprepare_batches_to_k_space()
-        return k_space
+        return k_space_recon
 
 
 class Loraks:

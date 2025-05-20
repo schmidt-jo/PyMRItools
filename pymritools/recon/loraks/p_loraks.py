@@ -1,18 +1,20 @@
-import torch
-from typing import Callable, Tuple, Optional, Union
-from enum import Enum, auto
-import psutil
-
-import tqdm
-
-from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.recon.loraks_dev.operators import c_operator, s_operator
-from pymritools.utils import randomized_svd
 import logging
+from dataclasses import dataclass, fields
 
-from pymritools.utils.algorithms import subspace_orbit_randomized_svd
+import torch
+import tqdm
+from typing import Callable, Tuple, Optional, Union
+import psutil
+from enum import Enum, auto
 
-logger = logging.getLogger("Loraks")
+from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_linear_indices
+from pymritools.recon.loraks_dev_cleanup.operators import c_operator, s_operator, calculate_matrix_size
+from pymritools.recon.loraks_dev_cleanup.loraks import OperatorType, LoraksBase, LoraksOptions, RankReduction, \
+    RankReductionMethod
+from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
+from pymritools.recon.loraks_dev_cleanup.loraks import LoraksOptionsType, LoraksImplementation
+
+logger = logging.getLogger(__name__)
 
 
 class LowRankAlgorithmType(Enum):
@@ -20,17 +22,9 @@ class LowRankAlgorithmType(Enum):
     RANDOM_SVD = auto()
     SOR_SVD = auto()
 
-
-class OperatorType(Enum):
-    C = auto()
-    S = auto()
-
-
-class SVThresholdMethod(Enum):
-    HARD_CUTOFF = auto()
-    RELU_SHIFT = auto()
-    RELU_SHIFT_AUTOMATIC = auto()
-
+@dataclass
+class PLoraksOptions(LoraksOptions):
+    lowrank_algorithm: LowRankAlgorithmType = LowRankAlgorithmType.TORCH_LOWRANK_SVD
 
 def get_lowrank_algorithm_function(algorithm: LowRankAlgorithmType, args: Tuple):
     # Check if args is actually two values and both are integers
@@ -48,23 +42,27 @@ def get_lowrank_algorithm_function(algorithm: LowRankAlgorithmType, args: Tuple)
             return lambda matrix: randomized_svd(matrix=matrix, q=q, power_projections=niter)
         case LowRankAlgorithmType.SOR_SVD:
             return lambda matrix: subspace_orbit_randomized_svd(matrix=matrix, q=q, power_projections=niter)
+    raise ValueError("Unknown lowrank algorithm")
 
-
-def get_sv_threshold_function(method: SVThresholdMethod, args: Tuple, device: torch.device = "cpu"):
-    match method:
-        case SVThresholdMethod.HARD_CUTOFF:
-            if len(args) != 2 or not isinstance(args[0], int) or not isinstance(args[1], int):
-                raise ValueError("Hard cutoff method arguments must be two integers: "
-                                 "the length of the singular value vector and the the  cut_off_index.")
+def get_sv_threshold_function(rank_reduction_method: RankReduction, args: Optional[Tuple], device: torch.device = "cpu"):
+    match rank_reduction_method.method:
+        case RankReductionMethod.HARD_CUTOFF:
+            if args is None or len(args) != 1 or not isinstance(args[0], int):
+                raise ValueError("Hard cutoff method arguments must provide the length of the singular value vector.")
+            r = int(rank_reduction_method.value)
+            if r >= args[0]:
+                raise ValueError(f"Rank cutoff ({r}) should be significantly small than the length of the singular "
+                                 f"singular value vector ({args[0]}.")
             sv_multiplier = torch.ones(args[0], device=device)
-            sv_multiplier[args[1]:] = 0
+            sv_multiplier[r:] = 0.0
             return lambda singular_values: singular_values * sv_multiplier
-        case SVThresholdMethod.RELU_SHIFT:
-            if len(args) != 1 or not isinstance(args[0], float):
-                raise ValueError("ReLU cutoff method arguments must be one float tau.")
-            return lambda singular_values: torch.relu(singular_values - args[0])
-        case SVThresholdMethod.RELU_SHIFT_AUTOMATIC:
-            if len(args) != 0:
+        case RankReductionMethod.RELU_SHIFT:
+            if args is not None:
+                raise ValueError("ReLU shift method does not take arguments.")
+            shift = float(rank_reduction_method.value)
+            return lambda singular_values: torch.relu(singular_values - shift)
+        case RankReductionMethod.RELU_SHIFT_AUTOMATIC:
+            if args is not None or rank_reduction_method.value is not None:
                 raise ValueError("ReLU shift automatic method does not take arguments.")
             def func(singular_values: torch.Tensor):
                 scaled_cum_sum = torch.cumsum(singular_values, dim=0)/torch.sum(singular_values)
@@ -73,10 +71,10 @@ def get_sv_threshold_function(method: SVThresholdMethod, args: Tuple, device: to
                 return torch.relu(singular_values - singular_values[idx])
             return func
         case _:
-            raise ValueError(f"Unknown singular value cutoff method: {method}")
+            raise ValueError(f"Unknown singular value cutoff method: {rank_reduction_method}")
 
 
-def create_loss_func(
+def create_loss_function(
         operator: Callable[[torch.Tensor, torch.Tensor, Tuple], torch.Tensor],
         svd_func: Callable[[torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
         threshold_func: Callable[[torch.Tensor], torch.Tensor]):
@@ -87,66 +85,41 @@ def create_loss_func(
                   sampling_mask: torch.Tensor,
                   lam_s: float,
                   device: torch.device = "cpu"):
-        matrix = operator(k_space_candidate, indices, matrix_shape)
+        # lambda <= 0.0 means true data consistency
+        if lam_s > 0.0:
+            k_data = k_space_candidate
+        else:
+            k_data = k_sampled_points.clone()
+            k_data[~sampling_mask] = k_space_candidate
+        matrix = operator(k_data, indices, matrix_shape)
         u, s, vh = svd_func(matrix)
         s_r = threshold_func(s)
         matrix_recon_loraks = torch.matmul(u * s_r.to(u.dtype), vh)
         loss_1 = torch.linalg.norm(matrix - matrix_recon_loraks, ord="fro")
-        loss_2 = torch.linalg.norm(k_space_candidate * sampling_mask - k_sampled_points)
-        return loss_2 + lam_s*loss_1, loss_1, loss_2
-
+        if lam_s > 0.0:
+            loss_2 = torch.linalg.norm(k_space_candidate * sampling_mask - k_sampled_points)
+            return loss_2 + lam_s * loss_1, loss_1, loss_2
+        else:
+            return loss_1, loss_1, 0.0
     # return torch.compile(loss_func, fullgraph=True)
     return loss_func
 
-def calculate_matrix_size(k_space_shape: Tuple,
-                          patch_shape: Tuple,
-                          sample_directions: Tuple,
-                          matrix_type: OperatorType) -> tuple[int, int]:
-    """
-        Calculates the operator matrix size for a given k-space shape, patch shape, sample directions,
-        and matrix type.
-
-        Args:
-        k_space_shape (Tuple): The shape of the k-space which impacts the number of sampling points.
-        patch_shape (Tuple): The patch shape to extract from the k-space.
-        sample_directions (Tuple): Directional sampling patterns for patches.
-        matrix_type (OperatorType): Type of operator matrix
-
-        Returns:
-        tuple[int, int]: A tuple containing two integers representing the dimensions of the
-        operator matrix based on the given inputs and the specified operator type.
-    """
-    k_space_shape = torch.tensor(k_space_shape)
-    patch_shape = torch.tensor(patch_shape)
-    sample_directions = torch.tensor(sample_directions)
-    patch_sizes = torch.where(patch_shape == 0, torch.tensor(1), patch_shape)
-    patch_sizes = torch.where(patch_shape == -1, k_space_shape, patch_sizes)
-
-    sample_steps = torch.where(sample_directions == 0, torch.tensor(1), k_space_shape - patch_sizes + 1)
-    if matrix_type == OperatorType.C:
-        return torch.prod(patch_sizes).item(),  torch.prod(sample_steps).item()
-    elif matrix_type == OperatorType.S:
-        return 2 * torch.prod(patch_sizes).item(), 2 * torch.prod(sample_steps).item()
-    else:
-        raise ValueError(f"Unknown matrix type: {matrix_type}")
-
-
-
-class Loraks:
-    def __init__(self, lambda_factor: float = 0.3, max_num_iter: int = 50):
+class PLoraks(LoraksBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.dirty_config = True
         self.dirty_indices = True
 
         self.patch_shape: Optional[Tuple] = None
         self.sample_directions: Optional[Tuple] = None
         self.k_space_shape: Optional[Tuple] = None
-        self.svd_algorithm: Optional[LowRankAlgorithmType] = None
+        self.lowrank_algorithm: Optional[LowRankAlgorithmType] = None
         self.svd_algorithm_args: Optional[Tuple] = None
         self.operator_type: Optional[OperatorType] = None
-        self.sv_cutoff_method: Optional[SVThresholdMethod] = None
+        self.sv_cutoff_method: Optional[RankReduction] = None
         self.sv_cutoff_args: Optional[Tuple] = None
-        self.lambda_factor: Optional[float] = lambda_factor
-        self.max_num_iter = max_num_iter
+        self.regularization_lambda: Optional[float] = 0.5
+        self.max_num_iter: int = 50
         self.learning_rate_func: Callable = lambda _: 1e-3
         self.device: Optional[torch.device] = torch.get_default_device()
 
@@ -154,7 +127,7 @@ class Loraks:
         self.indices: Optional[torch.Tensor] = None
         self.matrix_operator_shape: Optional[Tuple] = None
 
-    def with_patch_shape(self, patch_shape: Tuple) -> "Loraks":
+    def with_patch_shape(self, patch_shape: Tuple) -> "PLoraks":
         if self.patch_shape != patch_shape:
             logger.info(f"Patch shape changed from {self.patch_shape} to {patch_shape}")
             self.dirty_config = True
@@ -164,7 +137,7 @@ class Loraks:
             logger.info(f"Patch shape unchanged: {self.patch_shape}")
         return self
 
-    def with_sample_directions(self, sample_directions: Tuple) -> "Loraks":
+    def with_sample_directions(self, sample_directions: Tuple) -> "PLoraks":
         if self.sample_directions != sample_directions:
             logger.info(f"Sample directions changed from {self.sample_directions} to {sample_directions}")
             self.dirty_config = True
@@ -174,43 +147,62 @@ class Loraks:
             logger.info(f"Sample directions unchanged: {self.sample_directions}")
         return self
 
-    def with_torch_lowrank_algorithm(self, q: int, niter: int) -> "Loraks":
-        if self.svd_algorithm != LowRankAlgorithmType.TORCH_LOWRANK_SVD or self.svd_algorithm_args != (q, niter):
-            logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.TORCH_LOWRANK_SVD}")
+    def with_regularization_lambda(self, regularization_lambda: float) -> "PLoraks":
+        if self.regularization_lambda != regularization_lambda:
+            logger.info(f"Regularization Lambda changed from {self.regularization_lambda} to {regularization_lambda}")
+            self.dirty_config = True
+            self.regularization_lambda = regularization_lambda
+        else:
+            logger.info(f"Regularization Lambda unchanged: {self.regularization_lambda}")
+        return self
+
+    def with_max_iterations(self, max_iter: int) -> "PLoraks":
+        if self.max_num_iter != max_iter:
+            logger.info(f"Maximum number of iterations changed from {self.max_num_iter} to {max_iter}")
+            self.dirty_config = True
+            self.max_num_iter = max_iter
+        else:
+            logger.info(f"Maximum number of iterations unchanged: {self.max_num_iter}")
+        return self
+
+    def with_torch_lowrank_algorithm(self, q: int, niter: int) -> "PLoraks":
+        if self.lowrank_algorithm != LowRankAlgorithmType.TORCH_LOWRANK_SVD or self.svd_algorithm_args != (q, niter):
+            logger.info(f"SVD algorithm changed from {self.lowrank_algorithm} to {LowRankAlgorithmType.TORCH_LOWRANK_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
             self.dirty_config = True
-            self.svd_algorithm = LowRankAlgorithmType.TORCH_LOWRANK_SVD
+            self.lowrank_algorithm = LowRankAlgorithmType.TORCH_LOWRANK_SVD
             self.svd_algorithm_args = (q, niter)
         else:
-            logger.info(f"SVD algorithm unchanged: {self.svd_algorithm}")
+            logger.info(f"SVD algorithm unchanged: {self.lowrank_algorithm}")
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
-    def with_sor_svd_algorithm(self, q: int, niter: int) -> "Loraks":
-        if self.svd_algorithm != LowRankAlgorithmType.SOR_SVD or self.svd_algorithm_args != (q, niter):
-            logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.SOR_SVD}")
+    def with_sor_svd_algorithm(self, q: int, niter: int) -> "PLoraks":
+        if self.lowrank_algorithm != LowRankAlgorithmType.SOR_SVD or self.svd_algorithm_args != (q, niter):
+            logger.info(f"SVD algorithm changed from {self.lowrank_algorithm} to {LowRankAlgorithmType.SOR_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
             self.dirty_config = True
-            self.svd_algorithm = LowRankAlgorithmType.SOR_SVD
+            self.lowrank_algorithm = LowRankAlgorithmType.SOR_SVD
             self.svd_algorithm_args = (q, niter)
         else:
-            logger.info(f"SVD algorithm unchanged: {self.svd_algorithm}")
+            logger.info(f"SVD algorithm unchanged: {self.lowrank_algorithm}")
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
-    def with_rand_svd_algorithm(self, q: int, niter: int) -> "Loraks":
-        if self.svd_algorithm != LowRankAlgorithmType.RANDOM_SVD or self.svd_algorithm_args != (q, niter):
-            logger.info(f"SVD algorithm changed from {self.svd_algorithm} to {LowRankAlgorithmType.RANDOM_SVD}")
+
+    def with_rand_svd_algorithm(self, q: int, niter: int) -> "PLoraks":
+        if self.lowrank_algorithm != LowRankAlgorithmType.RANDOM_SVD or self.svd_algorithm_args != (q, niter):
+            logger.info(f"SVD algorithm changed from {self.lowrank_algorithm} to {LowRankAlgorithmType.RANDOM_SVD}")
             logger.info(f"SVD algorithm arguments changed from {self.svd_algorithm_args} to ({q}, {niter})")
             self.dirty_config = True
-            self.svd_algorithm = LowRankAlgorithmType.RANDOM_SVD
+            self.lowrank_algorithm = LowRankAlgorithmType.RANDOM_SVD
             self.svd_algorithm_args = (q, niter)
         else:
-            logger.info(f"SVD algorithm unchanged: {self.svd_algorithm}")
+            logger.info(f"SVD algorithm unchanged: {self.lowrank_algorithm}")
             logger.info(f"SVD algorithm arguments unchanged: {self.svd_algorithm_args}")
         return self
 
-    def with_c_matrix(self) -> "Loraks":
+    def with_c_matrix(self) -> "PLoraks":
         if self.operator_type != OperatorType.C:
             logger.info(f"Matrix type changed from {self.operator_type} to {OperatorType.C}")
             self.dirty_config = True
@@ -219,7 +211,7 @@ class Loraks:
             logger.info(f"Matrix type unchanged: {self.operator_type}")
         return self
 
-    def with_s_matrix(self) -> "Loraks":
+    def with_s_matrix(self) -> "PLoraks":
         if self.operator_type != OperatorType.S:
             logger.info(f"Matrix type changed from {self.operator_type} to {OperatorType.S}")
             self.dirty_config = True
@@ -228,26 +220,26 @@ class Loraks:
             logger.info(f"Matrix type unchanged: {self.operator_type}")
         return self
 
-    def with_sv_hard_cutoff(self, q: int, rank: int) -> "Loraks":
-        if self.sv_cutoff_method != SVThresholdMethod.HARD_CUTOFF or self.sv_cutoff_args != (q, rank):
+    def with_sv_hard_cutoff(self, q: int, rank: int) -> "PLoraks":
+        if self.sv_cutoff_method.method != RankReductionMethod.HARD_CUTOFF or self.sv_cutoff_args != (q, rank):
             logger.info(
-                f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.HARD_CUTOFF}")
+                f"Singular values cutoff method changed from {self.sv_cutoff_method} to {RankReductionMethod.HARD_CUTOFF}")
             logger.info(f"Singular values cutoff arguments changed from {self.sv_cutoff_args} to ({q},)")
             self.dirty_config = True
-            self.sv_cutoff_method = SVThresholdMethod.HARD_CUTOFF
+            self.sv_cutoff_method = RankReductionMethod.HARD_CUTOFF
             self.sv_cutoff_args = (q, rank)
         else:
             logger.info(f"Singular values cutoff method unchanged: {self.sv_cutoff_method}")
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
         return self
 
-    def with_sv_soft_cutoff(self, tau: float) -> "Loraks":
-        if self.sv_cutoff_method != SVThresholdMethod.RELU_SHIFT or self.sv_cutoff_args != (tau,):
+    def with_sv_soft_cutoff(self, tau: float) -> "PLoraks":
+        if self.sv_cutoff_method != RankReductionMethod.RELU_SHIFT or self.sv_cutoff_args != (tau,):
             logger.info(
-                f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.RELU_SHIFT}")
+                f"Singular values cutoff method changed from {self.sv_cutoff_method} to {RankReductionMethod.RELU_SHIFT}")
             logger.info(f"Singular values cutoff arguments changed from {self.sv_cutoff_args} to ({tau},)")
             self.dirty_config = True
-            self.sv_cutoff_method = SVThresholdMethod.RELU_SHIFT
+            self.sv_cutoff_method = RankReductionMethod.RELU_SHIFT
             self.sv_cutoff_args = (tau,)
         else:
             logger.info(f"Singular values cutoff method unchanged: {self.sv_cutoff_method}")
@@ -255,29 +247,29 @@ class Loraks:
         return self
 
 
-    def with_sv_auto_soft_cutoff(self) -> "Loraks":
-        if self.sv_cutoff_method != SVThresholdMethod.RELU_SHIFT_AUTOMATIC:
+    def with_sv_auto_soft_cutoff(self) -> "PLoraks":
+        if self.sv_cutoff_method != RankReductionMethod.RELU_SHIFT_AUTOMATIC:
             logger.info(
-                f"Singular values cutoff method changed from {self.sv_cutoff_method} to {SVThresholdMethod.RELU_SHIFT}")
+                f"Singular values cutoff method changed from {self.sv_cutoff_method} to {RankReductionMethod.RELU_SHIFT}")
             self.dirty_config = True
-            self.sv_cutoff_method = SVThresholdMethod.RELU_SHIFT_AUTOMATIC
+            self.sv_cutoff_method = RankReductionMethod.RELU_SHIFT_AUTOMATIC
             self.sv_cutoff_args = tuple()
         else:
             logger.info(f"Singular values cutoff method unchanged: {self.sv_cutoff_method}")
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
         return self
 
-    def with_constant_learning_rate(self, learning_rate: float) -> "Loraks":
+    def with_constant_learning_rate(self, learning_rate: float) -> "PLoraks":
         self.learning_rate_func = lambda _: learning_rate
         return self
 
-    def with_linear_learning_rate(self, min_learning_rate: float, max_learning_rate: float) -> "Loraks":
+    def with_linear_learning_rate(self, min_learning_rate: float, max_learning_rate: float) -> "PLoraks":
         self.learning_rate_func = lambda i: (
                 min_learning_rate + (max_learning_rate - min_learning_rate) * (1.0 - i / self.max_num_iter)
         )
         return self
 
-    def with_device(self, device: Union[torch.device, str]) -> "Loraks":
+    def with_device(self, device: Union[torch.device, str]) -> "PLoraks":
         if isinstance(device, str):
             device = torch.device(device)
         if not isinstance(device, torch.device):
@@ -335,19 +327,19 @@ class Loraks:
     def _prepare(self):
         """
         Sets up the necessary configuration for the reconstruction.
-        This method can only be called from within the reconstruct method when we have already set the shape of the
-        k-space.
+        This method should only be called from within the reconstruct_batch method when we have already set the shape
+        of the k-space.
         """
         if not self.dirty_config:
             logger.info("No configuration changes detected. Skipping preparation.")
             return
 
-        if not isinstance(self.k_space_shape, tuple) or len(self.k_space_shape) < 3:
-            raise ValueError("k_space_shape must be a tuple of at least 3 dimensions (batch, nx, ny, ...)")
+        if not isinstance(self.k_space_shape, tuple) or len(self.k_space_shape) < 2:
+            raise ValueError("k_space_shape must be a tuple of at least 2 dimensions (nz, ny, nx ...)")
 
         if self.patch_shape is None:
             logger.info("No patch shape specified. Using default.")
-            self.with_patch_shape((5, 5, *[-1 for _ in range(len(self.k_space_shape) - 3)]))
+            self.with_patch_shape((*[-1 for _ in range(len(self.k_space_shape) - 2)], 5, 5))
         elif len(self.patch_shape) != len(self.k_space_shape) - 1:
             raise ValueError("patch_shape must have the same length as the number of spatial dimensions")
 
@@ -357,26 +349,63 @@ class Loraks:
         elif len(self.sample_directions) != len(self.patch_shape):
             raise ValueError("sample_directions must have the same length as patch_shape")
 
-        if self.svd_algorithm is None:
-            logger.info("No SVD algorithm specified. Using default.")
-            # God, I hope this makes sense. For calculating the size of q, we calculate the
-            # size of the c/s-matrix and take a portion of it.
-            m_width, m_height = self._get_operator_matrix_size()
-            neighborhood_size = min(m_width, m_height)
-            # This gives a good reduction for size of the low-rank calculation
-            self.with_torch_lowrank_algorithm(int(100 * neighborhood_size / (100 + neighborhood_size)), 2)
-
         if self.operator_type is None:
             logger.info("No operator type specified. Using default.")
             self.with_c_matrix()
 
+        if self.lowrank_algorithm is None:
+            logger.info("No SVD algorithm specified. Using default.")
+            # God, I hope this makes sense. For calculating the size of q, we calculate the
+            # size of the c/s-matrix and take a portion of it.
+            m_width, m_height = self._get_operator_matrix_size()
+            full_rank = min(m_width, m_height)
+            # This gives a good reduction for size of the low-reduced_rank calculation
+            reduced_rank = int(100 * full_rank / (100 + full_rank))
+            self.with_torch_lowrank_algorithm(reduced_rank, 2)
+            self.with_sv_hard_cutoff(reduced_rank, full_rank)
+
         if self.sv_cutoff_method is None:
             logger.info("No singular values cutoff method specified. Using default.")
             # Hard to determine this automatically if it is not set.
-            # We just assume we use one of the rand, sor or lowrank methods and use q-2
-            self.with_sv_hard_cutoff(self.svd_algorithm_args[0] - 2)
+            # Let's use an automatic method that doesn't need any values specified.
+            self.with_sv_auto_soft_cutoff()
 
-    def reconstruct(self, k_space: torch.Tensor, sampling_mask: torch.Tensor):
+    def configure(self, options: PLoraksOptions):
+        logger.info("Call to the configure() method of PLoraks")
+
+        # We loop through all fields for one reason only: To get an error if we forget to handle an available option
+        for field_info in fields(options):
+            name = field_info.name
+            match name:
+                case "loraks_type":
+                    if options.loraks_type is not LoraksImplementation.P_LORAKS:
+                        raise ValueError(f"Wrong configuration type for PLoraks: {options.loraks_type}")
+                case "loraks_matrix_type":
+                    self.operator_type = options.loraks_matrix_type
+                case "rank":
+                    self.lowrank_algorithm = options.rank
+                case "regularization_lambda":
+                    self.regularization_lambda = options.regularization_lambda
+                case "max_num_iter":
+                    self.max_num_iter = int(options.max_num_iter)
+                case "device":
+                    self.device = options.device
+                case "lowrank_algorithm":
+                    self.lowrank_algorithm = options.lowrank_algorithm
+                case _:
+                    raise ValueError(f"Unknown PLoraks option value: {name}")
+            self.dirty_config = True
+            self.dirty_indices = True
+
+    def _initialize(self, k_space: torch.Tensor):
+        logger.info("Call to the _initialize() method of PLoraks")
+        pass
+
+    def _prepare_batch(self, batch):
+        logger.info("Call to the _prepare_batch() method of PLoraks")
+        pass
+
+    def reconstruct_batch(self, k_space: torch.Tensor) -> torch.Tensor:
         if k_space.shape != self.k_space_shape:
             self.dirty_config = True
             self.k_space_shape = k_space.shape
@@ -385,13 +414,14 @@ class Loraks:
         self._initialize_matrix_indices()
 
         operator_func = c_operator if self.operator_type == OperatorType.C else s_operator
-        svd_func = get_lowrank_algorithm_function(self.svd_algorithm, self.svd_algorithm_args)
+        svd_func = get_lowrank_algorithm_function(self.lowrank_algorithm, self.svd_algorithm_args)
         sv_threshold_func = get_sv_threshold_function(self.sv_cutoff_method, self.sv_cutoff_args, self.device)
-        loss_func = create_loss_func(operator_func, svd_func, sv_threshold_func)
+        loss_func = create_loss_function(operator_func, svd_func, sv_threshold_func)
 
         batch_size = self.k_space_shape[0]
         k_input = k_space.contiguous()
         k_out = torch.empty_like(k_input)
+        sampling_mask = torch.abs(k_input) > 1e-10
 
         for b in range(batch_size):
             progress_bar = tqdm.trange(self.max_num_iter, desc="Optimization")
@@ -407,7 +437,7 @@ class Loraks:
                     self.matrix_operator_shape,
                     k_sampled_points,
                     sampling_mask_batch,
-                    self.lambda_factor)
+                    self.regularization_lambda)
                 loss.backward()
 
                 # Use the optimal learning_rate to update parameters

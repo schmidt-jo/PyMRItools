@@ -1,8 +1,12 @@
+from typing import Tuple
+
 import torch
 import time
 import os
 import logging
 import pickle
+
+from pymritools.utils import Phantom
 
 test_dir = os.path.dirname(__file__)
 test_output_dir = os.path.join(os.path.dirname(test_dir), "test_output")
@@ -237,3 +241,10 @@ class MemoryProfiler:
             self.logger.info("Memory profiling stopped")
         except Exception as e:
             self.logger.error(f"Failed to stop memory profiling: {e}")
+
+
+def create_phantom(shape_xyct: Tuple, acc: float = 3.0, ac_lines: int = 24):
+    phantom = Phantom.get_shepp_logan(
+        shape=shape_xyct[:2], num_coils=shape_xyct[-2], num_echoes=shape_xyct[-1]
+    )
+    return phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=ac_lines)
