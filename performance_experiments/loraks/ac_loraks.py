@@ -10,6 +10,7 @@ from pymritools.utils import fft_to_img
 
 import plotly.graph_objects as go
 import plotly.subplots as psub
+import plotly.colors as plc
 
 log_module = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def main():
     log_module.info(f"create ac loraks object")
     ac_opts = AcLoraksOptions(
         loraks_matrix_type=OperatorType.S, regularization_lambda=0.0,
-        solver_type=SolverType.AUTOGRAD, max_num_iter=10000
+        solver_type=SolverType.AUTOGRAD, max_num_iter=250
     )
 
     ac_loraks = Loraks.create(ac_opts)
@@ -64,6 +65,26 @@ def main():
     fn = path.joinpath("recon_test").with_suffix(".html")
     log_module.info(f"Write fie: {fn}")
     fig.write_html(fn)
+
+    if ac_loraks.solver_type == SolverType.AUTOGRAD:
+        fig = psub.make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            row_titles=["loss", "learning rate"]
+        )
+        losses, lrs = ac_loraks.get_autograd_stats()
+        cmap = plc.sample_colorscale("Sunset", losses.shape[0], 0.1, 0.9)
+        for i, d in enumerate([losses, lrs]):
+            for h, b in enumerate(d):
+                fig.add_trace(
+                    go.Scatter(
+                        y=b.abs(), showlegend=True if i==0 else False, marker=dict(color=cmap[h]), name=f"Batch {h+1}",
+                        legendgroup=h
+                    ),
+                    row=i+1, col=1
+                )
+        fn = path.joinpath("recon_test_autograd_stats").with_suffix(".html")
+        log_module.info(f"Write fie: {fn}")
+        fig.write_html(fn)
 
 
 if __name__ == '__main__':
