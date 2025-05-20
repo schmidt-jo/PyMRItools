@@ -1,4 +1,5 @@
 from typing import Tuple
+from enum import Enum, auto
 
 import torch
 import time
@@ -8,11 +9,21 @@ import pickle
 
 from pymritools.utils import Phantom
 
+
 test_dir = os.path.dirname(__file__)
 test_output_dir = os.path.join(os.path.dirname(test_dir), "test_output")
 
 
-def get_test_result_output_dir(func) -> str:
+class ResultMode(Enum):
+    """
+    Specifies the type of test result to be generated.
+    """
+    TEST = auto()
+    VISUAL = auto()
+    EXPERIMENT = auto()
+
+
+def get_test_result_output_dir(func, mode: ResultMode = ResultMode.TEST) -> str:
     """
     Returns a unique output directory for the given test function.
 
@@ -28,7 +39,7 @@ def get_test_result_output_dir(func) -> str:
     else:
         raise RuntimeError(f"Provided function argument should be a function or a string.")
 
-    out_dir = os.path.join(test_output_dir, func_name)
+    out_dir = os.path.join(test_output_dir, mode.name, func_name)
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
     return os.path.abspath(out_dir)
@@ -248,3 +259,4 @@ def create_phantom(shape_xyct: Tuple, acc: float = 3.0, ac_lines: int = 24):
         shape=shape_xyct[:2], num_coils=shape_xyct[-2], num_echoes=shape_xyct[-1]
     )
     return phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=ac_lines)
+
