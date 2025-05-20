@@ -322,3 +322,188 @@ class DE:
         return best_agent, ba
 
 
+def gradient_normalized_step_size(
+    grad,
+    base_lr=0.01,
+    min_lr=1e-5,
+    max_lr=1.0,
+    norm_type='adaptive'
+):
+    """
+    Calculate step size based on gradient normalization
+
+    Args:
+        grad (torch.Tensor): Gradient tensor
+        base_lr (float): Base learning rate
+        min_lr (float): Minimum learning rate
+        max_lr (float): Maximum learning rate
+        norm_type (str): Normalization strategy
+
+    Returns:
+        float: Adaptive step size
+    """
+    # Gradient norm calculations
+    norm_strategies = {
+        'l2': torch.norm(grad).item(),
+        'l1': torch.norm(grad, p=1).item(),
+        'linf': torch.norm(grad, p=float('inf')).item(),
+        'adaptive': np.log(1 + torch.norm(grad).item())
+    }
+
+    # Select normalization strategy
+    grad_norm = norm_strategies.get(norm_type, norm_strategies['adaptive'])
+
+    # Adaptive step size calculation
+    # Inverse relationship with gradient magnitude
+    adaptive_lr = base_lr / (1 + grad_norm)
+
+    # Clamp to prevent extreme values
+    return max(min(adaptive_lr, max_lr), min_lr)
+
+
+def curvature_based_step_size(
+    grad,
+    prev_grad=None,
+    damping=1e-3,
+    base_lr=0.01
+):
+    """
+    Estimate step size using curvature information
+
+    Args:
+        grad (torch.Tensor): Current gradient
+        prev_grad (torch.Tensor, optional): Previous gradient
+        damping (float): Numerical stability parameter
+        base_lr (float): Base learning rate
+
+    Returns:
+        float: Curvature-informed step size
+    """
+    # Handle case when previous gradient is not provided
+    if prev_grad is None:
+        return base_lr
+
+    # Gradient difference
+    grad_diff = grad - prev_grad
+
+    # Prevent division by zero
+    epsilon = 1e-8
+
+    # Curvature estimation techniques
+    curvature_estimates = [
+        # Gradient difference norm
+        torch.norm(grad_diff).item() / (torch.norm(grad).item() + epsilon),
+
+        # Inner product based estimation
+        torch.abs(torch.dot(grad_diff, grad)).item() /
+        (torch.norm(grad_diff).item() + epsilon),
+
+        # Secant method approximation
+        torch.abs(torch.dot(grad_diff, grad_diff)).item() /
+        (torch.norm(grad_diff).item() + epsilon)
+    ]
+
+    # Average curvature estimate
+    avg_curvature = sum(curvature_estimates) / len(curvature_estimates)
+
+    # Step size calculation
+    step_size = base_lr / (avg_curvature + damping)
+
+    return max(step_size, 1e-5)
+
+
+class AdaptiveLearningRateEstimator:
+    """
+    Comprehensive learning rate estimation class
+    Combines multiple adaptive strategies
+    """
+
+    def __init__(
+        self,
+        base_lr=0.01,
+        min_lr=1e-5,
+        max_lr=1.0,
+        damping=1e-3
+    ):
+        """
+        Initialize adaptive learning rate estimator
+
+        Args:
+            base_lr (float): Base learning rate
+            min_lr (float): Minimum learning rate
+            max_lr (float): Maximum learning rate
+            damping (float): Numerical stability parameter
+        """
+        self.base_lr = base_lr
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+        self.damping = damping
+
+        # History tracking
+        self.grad_history = []
+        self.step_size_history = []
+
+    def estimate_step_size(
+        self,
+        grad,
+        prev_grad=None,
+        method='combined'
+    ):
+        """
+        Estimate step size using various methods
+
+        Args:
+            grad (torch.Tensor): Current gradient
+            prev_grad (torch.Tensor, optional): Previous gradient
+            method (str): Estimation method
+
+        Returns:
+            float: Estimated step size
+        """
+        # Method-specific step size estimation
+        if method == 'normalized':
+            step_size = gradient_normalized_step_size(
+                grad,
+                base_lr=self.base_lr,
+                min_lr=self.min_lr,
+                max_lr=self.max_lr
+            )
+        elif method == 'curvature':
+            step_size = curvature_based_step_size(
+                grad,
+                prev_grad,
+                damping=self.damping,
+                base_lr=self.base_lr
+            )
+        elif method == 'combined':
+            # Weighted combination of methods
+            norm_lr = gradient_normalized_step_size(
+                grad,
+                base_lr=self.base_lr,
+                min_lr=self.min_lr,
+                max_lr=self.max_lr
+            )
+            curve_lr = curvature_based_step_size(
+                grad,
+                prev_grad,
+                damping=self.damping,
+                base_lr=self.base_lr
+            )
+
+            # Weighted average
+            step_size = 0.5 * norm_lr + 0.5 * curve_lr
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        # Track history
+        self.grad_history.append(grad)
+        self.step_size_history.append(step_size)
+
+        # Limit history length
+        if len(self.grad_history) > 10:
+            self.grad_history.pop(0)
+        if len(self.step_size_history) > 10:
+            self.step_size_history.pop(0)
+
+        return max(min(step_size, self.max_lr), self.min_lr)
+
