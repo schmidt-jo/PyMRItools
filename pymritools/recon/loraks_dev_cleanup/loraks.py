@@ -39,9 +39,6 @@ from simple_parsing.helpers import Serializable
 import torch
 import tqdm
 
-from pymritools.recon.loraks_dev_cleanup.utils import prepare_k_space_to_batches, unprepare_batches_to_k_space
-
-
 
 logger = logging.getLogger("Loraks")
 
@@ -94,7 +91,7 @@ class LoraksOptions(Serializable):
         default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
     regularization_lambda: float = 0.1
     batch_size_channels: int = -1
-    max_num_iter: int = 20
+    max_num_iter: int = 300
     device: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 
@@ -130,7 +127,7 @@ class LoraksBase(ABC):
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
-    def reconstruct_batch(self, k_space_batch: torch.Tensor) -> torch.Tensor:
+    def reconstruct_batch(self, k_space_batch: torch.Tensor, idx_batch: int = 0) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
@@ -156,9 +153,10 @@ class LoraksBase(ABC):
         # allocate output
         k_space_recon = torch.zeros_like(k_space_prepared)
         for i, batch in tqdm.tqdm(enumerate(k_space_prepared)):
+            logger.info(f"Reconstructing batch {i+1} / {k_space_prepared.shape[0]}")
             # put on device - device management, thus _reconstruct_batch to be a device agnostic function?
             # batch = batch.to(self.device)
-            k_space_recon[i] = self.reconstruct_batch(batch)
+            k_space_recon[i] = self.reconstruct_batch(batch, idx_batch=i)
             # memory management?
 
         return k_space_recon
