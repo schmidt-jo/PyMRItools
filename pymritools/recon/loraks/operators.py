@@ -1,8 +1,8 @@
 import torch
 from typing import Tuple
 
-from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_linear_indices, get_circular_nb_indices_in_2d_shape
-from pymritools.recon.loraks_dev_cleanup.loraks import OperatorType
+from pymritools.recon.loraks.matrix_indexing import get_linear_indices, get_circular_nb_indices_in_2d_shape
+from pymritools.recon.loraks.loraks import OperatorType
 
 
 def c_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):

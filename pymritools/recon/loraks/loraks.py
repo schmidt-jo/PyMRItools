@@ -169,10 +169,10 @@ class Loraks:
         recon = None
         match options.loraks_type:
             case LoraksImplementation.P_LORAKS:
-                from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
+                from pymritools.recon.loraks.p_loraks import PLoraks
                 recon = PLoraks()
             case LoraksImplementation.AC_LORAKS:
-                from pymritools.recon.loraks_dev_cleanup.ac_loraks import AcLoraks
+                from pymritools.recon.loraks.ac_loraks import AcLoraks
                 recon = AcLoraks()
         recon.configure(options)
         return recon

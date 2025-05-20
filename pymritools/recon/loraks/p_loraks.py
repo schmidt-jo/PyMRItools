@@ -7,12 +7,12 @@ from typing import Callable, Tuple, Optional, Union
 import psutil
 from enum import Enum, auto
 
-from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_linear_indices
-from pymritools.recon.loraks_dev_cleanup.operators import c_operator, s_operator, calculate_matrix_size
-from pymritools.recon.loraks_dev_cleanup.loraks import OperatorType, LoraksBase, LoraksOptions, RankReduction, \
+from pymritools.recon.loraks.matrix_indexing import get_linear_indices
+from pymritools.recon.loraks.operators import c_operator, s_operator, calculate_matrix_size
+from pymritools.recon.loraks.loraks import OperatorType, LoraksBase, LoraksOptions, RankReduction, \
     RankReductionMethod
 from pymritools.utils.algorithms import subspace_orbit_randomized_svd, randomized_svd
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksOptionsType, LoraksImplementation
+from pymritools.recon.loraks.loraks import LoraksOptionsType, LoraksImplementation
 
 logger = logging.getLogger(__name__)
 

@@ -9,9 +9,9 @@ import torch
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.recon.loraks import Settings
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksOptions, Loraks, LoraksImplementation, OperatorType
-from pymritools.recon.loraks_dev_cleanup.ac_loraks import AcLoraksOptions, SolverType
-from pymritools.recon.loraks_dev_cleanup.utils import (
+from pymritools.recon.loraks.loraks import LoraksOptions, Loraks, LoraksImplementation, OperatorType
+from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType
+from pymritools.recon.loraks.utils import (
     check_channel_batch_size_and_batch_channels, prepare_k_space_to_batches, unprepare_batches_to_k_space,
     pad_input, unpad_output
 )

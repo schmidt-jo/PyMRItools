@@ -7,9 +7,9 @@ from torch.nn.functional import pad
 from dataclasses import dataclass
 from typing import Tuple, Callable
 
-from pymritools.recon.loraks_dev_cleanup.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
-from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices
-from pymritools.recon.loraks_dev_cleanup.operators import Operator
+from pymritools.recon.loraks.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
+from pymritools.recon.loraks.matrix_indexing import get_circular_nb_indices
+from pymritools.recon.loraks.operators import Operator
 from pymritools.utils.algorithms import cgd
 from pymritools.utils.functions import SimpleKalmanFilter
 
