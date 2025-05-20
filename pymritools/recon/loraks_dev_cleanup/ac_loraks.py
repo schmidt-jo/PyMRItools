@@ -337,6 +337,7 @@ def solve_autograd_batch(
         nb_size: int,
         device: torch.device = "cpu",
         max_num_iter: int = 200,
+        conv_tol: float = 1e-6,
         warmup_iter: int = 2,
         learning_rate_function: Callable = lambda x: 1e-3) -> (torch.Tensor, torch.Tensor, torch.Tensor):
     k_init = torch.randn_like(k_sampled_points) * 1e-5
@@ -352,13 +353,14 @@ def solve_autograd_batch(
 
     progress_bar = tqdm.trange(max_num_iter, desc="Optimization")
     losses, learning_rates = [], []
-    # loss_last = 1e10
+    loss_last = 1e10
+    # adapt_step_size = AdaptiveLearningRateEstimator(base_lr=1, min_lr=1e-3, max_lr=50.0)
     # alpha_filter = SimpleKalmanFilter(process_variance=1e-1, measurement_variance=1e-1)
-    optimizer = torch.optim.Adam([k], lr=5e-1)
+    # optimizer = torch.optim.Adam([k], lr=1e-2, momentum=0.9)
     # optimizer = torch.optim.RMSprop([k], lr=5e-1, momentum=0.8)
     # iterations
     for i in progress_bar:
-        optimizer.zero_grad()
+        # optimizer.zero_grad()
         # embed data based on lambda factor
         k_data = embed_data(
             k_sampled_points=k_sampled_points, mask_sampled_points=mask,
@@ -377,38 +379,41 @@ def solve_autograd_batch(
             loss = loss_lr
 
         loss.backward()
-        optimizer.step()
-        # with torch.no_grad():
-        #     if i > warmup_iter:
-        #         # Use the optimal learning_rate to update parameters
-        #         # Barziali-Borwein method
-        #         # TODO: does this work for complex optimization too? we get a complex learning rate
-        #         alpha_k = bb_learning_rate(xk=k, xk_last=k_last, grad=k.grad, grad_last=grad_last, lr_max=5e1)
-        #         # ToDo: some kind of running average to make this less spiky?
-        #         # alpha_k = smooth_value(alpha_k, alpha_last, alpha=0.5)
-        #         # alpha_k = alpha_filter.update(alpha_k)
-        #     else:
-        #         alpha_k = learning_rate_function(i)
-        #     convergence = torch.linalg.norm(loss - loss_last).item()
-        #     # ToDo: bad convergence criterion (learning rate dependent), can we do better?
-        #     grad_last = k.grad.clone()
-        #     k_last = k.detach().clone()
-        #     loss_last = loss.detach().clone()
-        #     alpha_last = alpha_k
-        #     k -= alpha_k * k.grad
-        # k.grad.zero_()
+        # optimizer.step()
+        with torch.no_grad():
+            if i > warmup_iter:
+                # Use the optimal learning_rate to update parameters
+                # Barziali-Borwein method
+                # TODO: does this work for complex optimization too? we get a complex learning rate
+                # alpha_k = adapt_step_size.estimate_step_size(grad=k.grad, prev_grad=grad_last, method='normalized')
+                alpha_k = bb_learning_rate(xk=k, xk_last=k_last, grad=k.grad, grad_last=grad_last, lr_max=5e1)
+                # ToDo: some kind of running average to make this less spiky?
+                # alpha_k = smooth_value(alpha_k, alpha_last, alpha=0.5)
+                # alpha_k = alpha_filter.update(alpha_k)
+            else:
+                alpha_k = learning_rate_function(i)
+            convergence = torch.linalg.norm(loss - loss_last).item()
+            # ToDo: bad convergence criterion (learning rate dependent), can we do better?
+            grad_last = k.grad.clone()
+            k_last = k.detach().clone()
+            loss_last = loss.detach().clone()
+            alpha_last = alpha_k
+            k -= alpha_k * k.grad
+        k.grad.zero_()
 
         progress_bar.postfix = (
             f"LowRank Loss: {1e3 * float(loss_lr):.2f} -- "
             f"Data Loss: {1e3 * float(loss_dc):.2f} -- "
             f"Total Loss: {1e3 * float(loss):.2f} -- "
-            # f"Convergence: {convergence:.3f} -- "
-            # f"Learning Rate: {alpha_k:.3f}"
+            f"Convergence: {convergence:.3f} -- "
+            f"Learning Rate: {alpha_k:.3f}"
         )
         losses.append(loss.item())
-        # learning_rates.append(alpha_k)
-        learning_rates.append(0)
-
+        learning_rates.append(alpha_k)
+        # learning_rates.append(0)
+        if convergence < conv_tol:
+            log_module.info(f"Reached convergence after {i} iterations")
+            break
     return k.detach(), torch.tensor(losses), torch.tensor(learning_rates)
 
 
@@ -581,8 +586,8 @@ class AcLoraks(LoraksBase):
         else:
             # or by solving k directly using autograd
             k, losses, learning_rates = self._solve_autograd(k_sampled_points=batch, vs=vs, vc=vc)
-            self.autograd_losses[idx_batch] = losses
-            self.autograd_lr[idx_batch] = learning_rates
+            self.autograd_losses[idx_batch, :losses.shape[0]] = losses
+            self.autograd_lr[idx_batch, :learning_rates.shape[0]] = learning_rates
 
         # if true data consisctency is true embed the data
         k = embed_data(
