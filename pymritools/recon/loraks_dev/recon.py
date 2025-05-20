@@ -638,12 +638,12 @@ def recon(settings: PyLoraksConfig):
     nx, ny, nz, nc, ne = k_space.shape
 
     log_module.info(f"___ Loraks Reconstruction ___")
-    log_module.info(f"Radius - {settings.radius}; ")
+    log_module.info(f"Radius - {settings.patch_size}; ")
     log_module.info(
         f"Rank - {settings.rank}; Lambda - {settings.reg_lambda}; Matrix Type - {settings.matrix_type}; "
     )
     # set up name
-    loraks_name = f"ac_loraks_k_space_recon_r-{settings.radius}_rank-{settings.rank}"
+    loraks_name = f"ac_loraks_k_space_recon_r-{settings.patch_size}_rank-{settings.rank}"
     if settings.reg_lambda > 1e-6:
         loraks_name = f"{loraks_name}_lambda-{settings.reg_lambda:.3f}"
     else:
@@ -670,7 +670,7 @@ def recon(settings: PyLoraksConfig):
     # create loraks algorithm
     ac_loraks = AC_LORAKS(
         k_space_xyzct=k_space,
-        rank=settings.rank, loraks_neighborhood_radius=settings.radius,
+        rank=settings.rank, loraks_neighborhood_radius=settings.patch_size,
         device=device, batch_channel_size=settings.batch_size, regularization_lambda=settings.reg_lambda,
         loraks_matrix_type=settings.matrix_type, max_num_iter=settings.max_num_iter, conv_tol=settings.conv_tol
     )
