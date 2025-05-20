@@ -131,33 +131,35 @@ class LoraksBase(ABC):
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
-    def _prepare_batch(self, batch):
+    def _prepare_batch(self, k_space_batch: torch.Tensor) -> None:
         raise NotImplementedError("Subclasses must implement this method")
 
     @abstractmethod
-    def _initialize(self, k_space):
+    def _initialize(self, k_space: torch.Tensor) -> None:
         """ method to setup everything k-space dependent, e.g. indices, matrix shapes etc. """
         raise NotImplementedError("Subclasses must implement this method")
     @final
-    def reconstruct(self, k_space):
+    def reconstruct(self, k_space: torch.Tensor) -> torch.Tensor:
         """
         Reconstructs k-space data. Assume data is given in shape:
         [batches, channel/echo combinations, spatial dims xyz]
-
         """
         # Check shape?
         self._initialize(k_space=k_space)
         # prepare / batch k-space
         # k_space_prepared, input_shape, combined_shape = self._prep_k_space_to_batches(k_space)
-        k_space_prepared = k_space
         # allocate output
-        k_space_recon = torch.zeros_like(k_space_prepared)
-        for i, batch in tqdm.tqdm(enumerate(k_space_prepared)):
-            logger.info(f"Reconstructing batch {i+1} / {k_space_prepared.shape[0]}")
-            # put on device - device management, thus _reconstruct_batch to be a device agnostic function?
+        k_space_recon = torch.zeros_like(k_space)
+        n_batches = k_space.shape[0]
+        for i in tqdm.tqdm(range(n_batches), desc="Reconstructing batches"):
+            logger.info(f"Reconstructing batch {i+1} / {n_batches}")
+            # put on device - device management, thus _reconstruct_batch to be a device-agnostic function?
             # batch = batch.to(self.device)
-            k_space_recon[i] = self.reconstruct_batch(batch, idx_batch=i)
+            k_space_recon[i] = self.reconstruct_batch(k_space[i], idx_batch=i)
             # memory management?
+            # Here is an idea: We already allocated k_space_recon at this place. At least in P-Loraks, I will
+            # allocate another batch-sized tensor for the candidate. AFAIK it's all just C pointers and it should
+            # be possible to assign this directly.
 
         return k_space_recon
 
