@@ -2,7 +2,7 @@ import os.path
 
 import torch
 
-from pymritools.recon.loraks_dev_cleanup.p_loraks import PLoraks
+from pymritools.recon.loraks.p_loraks import PLoraks, LowRankAlgorithmType
 from pymritools.utils import Phantom, fft_to_img
 from tests.utils import get_test_result_output_dir
 
@@ -16,9 +16,8 @@ def run_p_loraks():
     loraks = (PLoraks()
               .with_regularization_lambda(0.3)
               .with_c_matrix()
-              .with_torch_lowrank_algorithm(q=90, niter=2)
+              .with_lowrank_algorithm(LowRankAlgorithmType.TORCH_LOWRANK_SVD, q=90, niter=2)
               .with_sv_auto_soft_cutoff()
-              # .with_sv_hard_cutoff(20, 5)
               .with_patch_shape((10, 10))
               .with_sample_directions((1, 1))
               .with_linear_learning_rate(0.0001, 0.001)
@@ -31,9 +30,8 @@ def run_p_loraks():
     jupiter_img_recon = fft_to_img(jupiter_k)
     jupiter_k_subsampled = jupiter.sub_sample_ac_random_lines(acceleration, 20).to(dtype=torch.complex64)
     jupiter_img_subsampled = fft_to_img(jupiter_k_subsampled)
-    mask = torch.abs(jupiter_k_subsampled) > 10e-7
 
-    jupiter_k_loraks_recon = loraks.reconstruct(jupiter_k_subsampled[None], mask[None])
+    jupiter_k_loraks_recon = loraks.reconstruct(jupiter_k_subsampled[None])
     jupiter_img_loraks_recon = fft_to_img(jupiter_k_loraks_recon[0])
     output_dir = get_test_result_output_dir("ps_loraks_quality")
 

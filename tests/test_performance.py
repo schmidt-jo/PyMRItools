@@ -1,7 +1,11 @@
-from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
-from pymritools.recon.loraks_dev.ps_loraks import create_loss_func, get_lowrank_algorithm_function, \
-    LowRankAlgorithmType, get_sv_threshold_function, SVThresholdMethod, Loraks
-from .utils import do_performance_test, measure_cuda_function_call
+from pymritools.recon.loraks.loraks import RankReductionMethod, RankReduction
+from pymritools.recon.loraks.matrix_indexing import get_linear_indices
+from pymritools.recon.loraks.p_loraks import (create_loss_function,
+                                              get_lowrank_algorithm_function,
+                                              LowRankAlgorithmType,
+                                              get_sv_threshold_function,
+                                              PLoraks)
+from .utils import do_performance_test
 import torch
 import pymritools.utils.matrix_indexing as op_indexing
 import pymritools.recon.loraks.operators as op_operators
@@ -52,7 +56,7 @@ def test_c_operator():
     nx = 512
     ny = 512
     radius = 5
-    k_space = torch.randn((nx, ny, 1, 1), dtype=torch.complex64)
+    k_space = torch.randn((1, 1, ny, nx), dtype=torch.complex64)
     c_mapping = op_indexing.get_idx_2d_circular_neighborhood_patches_in_shape((nx, ny), radius)
     do_performance_test(op_operators.c_operator, k_space, c_mapping)
 
@@ -80,12 +84,12 @@ def test_loraks_loss_function():
 
     k_candidate = k_space.clone().requires_grad_()
 
-    from pymritools.recon.loraks_dev.operators import s_operator
+    from pymritools.recon.loraks.operators import s_operator
 
     operator_func = s_operator
     svd_func = get_lowrank_algorithm_function(LowRankAlgorithmType.TORCH_LOWRANK_SVD, (40, 2))
-    sv_threshold_func = get_sv_threshold_function(SVThresholdMethod.RELU_SHIFT, (100.0,))
-    loss_func = create_loss_func(
+    sv_threshold_func = get_sv_threshold_function(RankReduction(RankReductionMethod.RELU_SHIFT, 15.0))
+    loss_func = create_loss_function(
         operator_func,
         svd_func,
         sv_threshold_func
@@ -119,11 +123,12 @@ def test_reconstruction():
     sample_directions = (1, 1, 0, 0)
     k_space = torch.randn(k_space_shape, dtype=torch.complex64)
     sampling_mask = torch.randn_like(k_space, dtype=torch.float) > 0.7
-    l = (Loraks()
+    k_space[sampling_mask] = 0.0
+    l = (PLoraks()
          .with_patch_shape(patch_shape)
          .with_sample_directions(sample_directions)
-         .with_torch_lowrank_algorithm(50, 2)
+         .with_lowrank_algorithm(LowRankAlgorithmType.TORCH_LOWRANK_SVD, 50, 2)
          .with_c_matrix()
          .with_sv_soft_cutoff(15.0)
          )
-    l.reconstruct(k_space, sampling_mask)
+    l.reconstruct(k_space)
