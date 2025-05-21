@@ -56,55 +56,37 @@ def figure_compare_k_matrix(k, k_rec, matrix, path, name):
             ),
             row=3, col=3 * i + 1
         )
-    # fig.update_xaxes(visible=False)
-    # fig.update_yaxes(visible=False)
+
     fn = path.joinpath(f"forward_adjoint_k_matrix_{name}").with_suffix(".html")
     fig.write_html(fn)
 
 
-def test_c_operator():
+def process_operator_test(operator_type: OperatorType, device: torch.device):
     torch.manual_seed(0)
-
     k = create_test_tensor()
 
-    c = Operator(
-        k_space_shape=k.shape, nb_side_length=5, operator_type=OperatorType.C, device=torch.device("cpu")
+    op = Operator(
+        k_space_shape=k.shape, nb_side_length=5, operator_type=operator_type, device=device
     )
-    matrix = c.forward(k_space=k)
+    matrix = op.forward(k_space=k)
 
-    k_recovered = c.adjoint(matrix)
-    k_recovered /= c.count_matrix\
+    k_recovered = op.adjoint(matrix)
+    k_recovered /= op.count_matrix\
 
     print(f"")
-    print(f"__C Operator__")
+    print(f"__{op.operator_type.name} Operator__")
     print(f"Forward - Adjoint, allclose: {torch.allclose(k, k_recovered)}")
 
-    path = plib.Path(get_test_result_output_dir("c_operator", mode=ResultMode.TEST)).absolute()
+    path = plib.Path(get_test_result_output_dir(f"{op.operator_type.name.lower()}_operator", mode=ResultMode.TEST)).absolute()
 
-    figure_compare_k_matrix(k, k_recovered, matrix, path, c.operator_type.name)
+    figure_compare_k_matrix(k, k_recovered, matrix, path, op.operator_type.name)
 
     assert torch.allclose(k, k_recovered)
 
 
 def test_s_operator():
-    torch.manual_seed(0)
+    process_operator_test(OperatorType.S, torch.device("cpu"))
 
-    k = create_test_tensor()
 
-    s = Operator(
-        k_space_shape=k.shape, nb_side_length=5, operator_type=OperatorType.S, device=torch.device("cpu")
-    )
-    matrix = s.forward(k_space=k)
-
-    k_recovered = s.adjoint(matrix)
-    k_recovered /= s.count_matrix
-    k_recovered = k_recovered.to(k.dtype)
-
-    print(f"")
-    print(f"__S Operator__")
-    print(f"Forward - Adjoint, allclose: {torch.allclose(k, k_recovered)}")
-
-    path = plib.Path(get_test_result_output_dir("s_operator", mode=ResultMode.TEST)).absolute()
-
-    figure_compare_k_matrix(k, k_recovered, matrix, path, s.operator_type.name)
-    assert torch.allclose(k, k_recovered)
+def test_c_operator():
+    process_operator_test(OperatorType.C, torch.device("cpu"))
