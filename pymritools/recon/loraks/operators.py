@@ -13,14 +13,19 @@ def c_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple
     :param matrix_shape: Shape of the neighborhood matrix
     :return: neighborhood representation with shape (nxyz valid, nb * ncem)
     """
-    return k_space.view(-1)[indices].view(matrix_shape)
+    matrix = k_space.view(*k_space.shape[:-2], -1)[..., indices].view(*k_space.shape[:-2], *matrix_shape).mT
+    # merge batch dims with neighborhood dim
+    return torch.reshape(matrix, (-1, matrix.shape[-1]))
 
 
 def c_adjoint_operator(c_matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
-    adj_c_matrix = torch.zeros(k_space_dims, dtype=c_matrix.dtype, device=c_matrix.device).view(-1)
+    # allocate the output
+    adj_c_matrix = torch.zeros(k_space_dims, dtype=c_matrix.dtype, device=c_matrix.device).view(*k_space_dims[:-2], -1)
+    # we need to unfold the neighborhood / channel dimension into neighborhood and channels and transpose to fit indices
+    c_matrix = c_matrix.view(*k_space_dims[:-2], -1, c_matrix.shape[-1]).mT.contiguous()
     # Here is the crucial step - eliminate loops in the adjoint operation by using 1D linear indexing and
     # torch index_add
-    adj_c_matrix = adj_c_matrix.index_add(0, indices.view(-1), c_matrix.view(-1))
+    adj_c_matrix = adj_c_matrix.index_add(-1, indices.view(-1), c_matrix.view(*k_space_dims[:-2], -1))
     return adj_c_matrix.view(k_space_dims)
 
 
@@ -58,13 +63,16 @@ def s_operator_matlab(k_space: torch.Tensor, indices: torch.Tensor, indices_rev:
 
 
 def s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple):
-    match k_space.dtype:
-        case torch.float32:
-            dtype = torch.complex64
-        case torch.float64:
-            dtype = torch.complex128
-        case _:
-            dtype = torch.complex64
+    if not k_space.is_complex():
+        match k_space.dtype:
+            case torch.float32:
+                dtype = torch.complex64
+            case torch.float64:
+                dtype = torch.complex128
+            case _:
+                dtype = torch.complex64
+    else:
+        dtype = k_space.dtype
     # we merge the spatial dimensions and keep the "combination" dimension along to concatenate in front
     # (usually channels, echoes)
     k_space = k_space.view(*k_space.shape[:-2], -1)
@@ -86,7 +94,7 @@ def s_operator(k_space: torch.Tensor, indices: torch.Tensor, matrix_shape: tuple
     s = torch.concatenate([s_u, s_d], dim=-1).contiguous()
     # dims [ne nc, 2 * nb, ~ 2 * nxy]
     # we now merge the channel and echoes into the neighborhood dimension
-    # to dims [2 * nc * ne * nb, ~ 2 * nxy
+    # to dims [2 * nc * ne * nb, ~ 2 * nxy]
     return s.view(-1, s.shape[-1])
 
 
@@ -143,8 +151,11 @@ def s_adjoint_operator_like_matlab(matrix: torch.Tensor, indices: torch.Tensor, 
 
 def s_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, k_space_dims: tuple):
     # the input matrix dimensions are [2 * nb * nc * ne,  2 * nxy]
+    matrix_shape = matrix.shape
     # want to extract the channels and echoes first
-    s = torch.reshape(matrix, (k_space_dims[0], indices.shape[0] * 2, -1))
+    dim_combined = torch.tensor(k_space_dims[:-2]).prod().item()
+    s = torch.reshape(matrix, (dim_combined, -1, matrix_shape[-1]))
+
     # get the quadrants
     s_u, s_d = torch.tensor_split(s, 2, dim=-1)
 
@@ -154,19 +165,19 @@ def s_adjoint_operator(matrix: torch.Tensor, indices: torch.Tensor, k_space_dims
     spmm = s_ul - 1j * s_ur
     sppm = s_lr + 1j * s_ll
 
-    s_p = (0.5 * (spmm + sppm)).contiguous()
-    s_m = (0.5 * (sppm - spmm)).contiguous()
+    s_p = (0.5 * (spmm + sppm)).mT.contiguous()
+    s_m = (0.5 * (sppm - spmm)).mT.contiguous()
 
-    adj_s_matrix = torch.zeros(k_space_dims, dtype=s_p.dtype, device=s_p.device).view(k_space_dims[0], -1)
+    adj_s_matrix = torch.zeros(k_space_dims, dtype=s_p.dtype, device=s_p.device).view(*k_space_dims[:-2], -1)
     # Here is the crucial step - eliminate loops in the adjoint operation by using 1D linear indexing and
     # torch index_add
     # get the point symmetric indices
-    indices_rev = indices.view(*matrix.shape[-2:]).flip(dims=(0,))
+    indices_rev = indices.view(s_m.shape[-2:]).flip(dims=(0,))
 
-    adj_s_matrix = adj_s_matrix.index_add(1, indices.view(-1), s_p.view(s_p.shape[0], -1))
-    adj_s_matrix = adj_s_matrix.index_add(1, indices_rev.view(-1), s_m.view(s_m.shape[0], -1))
+    adj_s_matrix = adj_s_matrix.index_add(-1, indices.view(-1), s_p.view(*s_p.shape[:-2], -1))
+    adj_s_matrix = adj_s_matrix.index_add(-1, indices_rev.view(-1), s_m.view(*s_m.shape[:-2], -1))
 
-    return adj_s_matrix.view(k_space_dims)
+    return adj_s_matrix.view(k_space_dims) / 2
 
 def calculate_matrix_size(k_space_shape: Tuple,
                           patch_shape: Tuple,
@@ -221,7 +232,9 @@ class Operator:
     def count_matrix(self):
         in_ones = torch.ones(self.k_space_shape, dtype=torch.complex64, device=self.device)
         matrix = self.forward(in_ones)
-        return self.adjoint(matrix).to(torch.int)
+        cm = self.adjoint(matrix).to(torch.int)
+        cm[cm < 1] = 1
+        return cm
 
     def forward(self, k_space: torch.Tensor):
         match self.operator_type:
