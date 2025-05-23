@@ -152,7 +152,7 @@ class LoraksBase(ABC):
         k_space_recon = torch.zeros_like(k_space)
         n_batches = k_space.shape[0]
         for i in tqdm.tqdm(range(n_batches), desc="Reconstructing batches"):
-            logger.info(f"Reconstructing batch {i+1} / {n_batches}")
+            logger.debug(f"Reconstructing batch {i+1} / {n_batches}")
             # put on device - device management, thus _reconstruct_batch to be a device-agnostic function?
             # batch = batch.to(self.device)
             k_space_recon[i] = self.reconstruct_batch(k_space[i], idx_batch=i)
