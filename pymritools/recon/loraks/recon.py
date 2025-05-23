@@ -21,10 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 def get_options_from_cmd_config(config: Settings) -> LoraksOptions:
-    if config.loraks_algorithm == "AC-LORAKS":
+    if config.loraks_algorithm.startswith("AC-LORAKS"):
         opts = AcLoraksOptions()
         opts.loraks_type = LoraksImplementation.AC_LORAKS
-        opts.solver_type = SolverType.AUTOGRAD
+        if config.loraks_algorithm.endswith("ls"):
+            opts.solver_type = SolverType.LEASTSQUARES
+        else:
+            opts.solver_type = SolverType.AUTOGRAD
     elif config.loraks_algorithm == "P-LORAKS":
         opts = LoraksOptions()
         opts.loraks_type = LoraksImplementation.P_LORAKS
@@ -35,6 +38,7 @@ def get_options_from_cmd_config(config: Settings) -> LoraksOptions:
     opts.regularization_lambda = config.reg_lambda
     opts.batch_size_channels = config.batch_size
     opts.max_num_iter = config.max_num_iter
+    opts.rank.value = config.rank
 
     # set device
     if config.use_gpu:
@@ -50,13 +54,15 @@ def get_options_from_cmd_config(config: Settings) -> LoraksOptions:
     else:
         raise ValueError(f"Unknown matrix type: {config.matrix_type}")
 
+    for key, val in opts.__dict__.items():
+        logger.info(f"\t\t  {key}: {val}")
     return opts
 
 
 def main(config: Settings):
 
     logger.info("Load Data")
-    k = torch_load(config.in_k_space).unsqueeze_(2)
+    k = torch_load(config.in_k_space)
     while k.ndim < 5:
         logger.info(f"Expanding dimension of k-space to {k.ndim + 1}")
         k.unsqueeze_(-1)
@@ -77,7 +83,7 @@ def main(config: Settings):
 
     img_in = fft_to_img(k[:, :, k.shape[2] // 2], dims=(0, 1))
 
-    nifti_save(data=img_in, img_aff=aff, path_to_dir=path_out, file_name="input_img")
+    nifti_save(data=img_in.abs(), img_aff=aff, path_to_dir=path_out, file_name="input_img")
 
     logger.info("Prepare Data")
     batch_size_channels = config.batch_size
@@ -108,18 +114,18 @@ def main(config: Settings):
 
     logger.info("Save")
     nifti_save(
-        data=fft_to_img(k_recon[:, :, k.shape[2] // 2], dims=(0, 1)),
+        data=fft_to_img(k_recon[:, :, k.shape[2] // 2], dims=(0, 1)).abs(),
         img_aff=aff, path_to_dir=path_out, file_name="recon_img"
     )
     torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
 
 
-if __name__ == '__main__':
+def loraks_from_cli():
     setup_program_logging(name="LORAKS Reconstruction", level=logging.INFO)
     parser, prog_args = setup_parser(
         prog_name="LORAKS Reconstruction",
         dict_config_dataclasses={
-                "config": Settings
+            "config": Settings
         }
     )
     settings = Settings.from_cli(args=prog_args.config, parser=parser)
@@ -129,3 +135,7 @@ if __name__ == '__main__':
     except Exception as e:
         parser.print_usage()
         logger.exception(e)
+
+
+if __name__ == '__main__':
+    loraks_from_cli()
