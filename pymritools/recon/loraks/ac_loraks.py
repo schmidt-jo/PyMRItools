@@ -10,7 +10,7 @@ from typing import Tuple, Callable
 from pymritools.recon.loraks.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
 from pymritools.recon.loraks.matrix_indexing import get_circular_nb_indices
 from pymritools.recon.loraks.operators import Operator
-from pymritools.utils.algorithms import cgd
+from pymritools.utils.algorithms import cgd, AdaptiveLearningRateEstimator
 from pymritools.utils.functions import SimpleKalmanFilter
 
 log_module = logging.getLogger(__name__)
@@ -355,8 +355,8 @@ def solve_autograd_batch(
     losses, learning_rates = [], []
     loss_last = 1e10
     # adapt_step_size = AdaptiveLearningRateEstimator(base_lr=1, min_lr=1e-3, max_lr=50.0)
-    # alpha_filter = SimpleKalmanFilter(process_variance=1e-1, measurement_variance=1e-1)
-    # optimizer = torch.optim.Adam([k], lr=1e-2, momentum=0.9)
+    alpha_filter = SimpleKalmanFilter(process_variance=1e-1, measurement_variance=1e-1)
+    # optimizer = torch.optim.Adam([k], lr=1e-2)
     # optimizer = torch.optim.RMSprop([k], lr=5e-1, momentum=0.8)
     # iterations
     for i in progress_bar:
@@ -389,7 +389,7 @@ def solve_autograd_batch(
                 alpha_k = bb_learning_rate(xk=k, xk_last=k_last, grad=k.grad, grad_last=grad_last, lr_max=5e1)
                 # ToDo: some kind of running average to make this less spiky?
                 # alpha_k = smooth_value(alpha_k, alpha_last, alpha=0.5)
-                # alpha_k = alpha_filter.update(alpha_k)
+                alpha_k = alpha_filter.update(alpha_k)
             else:
                 alpha_k = learning_rate_function(i)
             convergence = torch.linalg.norm(loss - loss_last).item()
