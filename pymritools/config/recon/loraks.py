@@ -33,7 +33,7 @@ class Settings(BaseClass):
              f"rank minimization. Set 0.0 to use true data consistency (default)."
     )
     loraks_algorithm: str = choice(
-        "AC-LORAKS", "P-LORAKS", alias="-alg", default="P-LORAKS",
+        "AC-LORAKS", "P-LORAKS", "AC-LORAKS-ls", alias="-alg", default="P-LORAKS",
         help="LORAKS algorithm to be used"
     )
     matrix_type: str = choice(
@@ -48,7 +48,6 @@ class Settings(BaseClass):
         alias="-mni", default=200,
         help="Maximum number of iterations if not converged."
     )
-
     batch_size: int = field(
         alias="-b", default=-1,
         help="Batch size for gpu computation. Reduce if out of memory."
