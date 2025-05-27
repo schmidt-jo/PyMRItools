@@ -171,17 +171,26 @@ class Phantom:
 
     # __ subsampling
     def sub_sample_ac_skip_lines(self, acceleration: int, ac_lines: int) -> torch.Tensor:
+        if acceleration < 1.1:
+            return self.get_2d_k_space()
         k_us, k_fs, y_l, y_u = self._get_ac_sampled_k(ac_lines=ac_lines)
         # we fill every acc._factor line in outer k_space and move one step for every echo
+        acceleration = int(np.round(acceleration))
         for e in range(self.num_echoes):
-            k_us[:, e:y_l:acceleration, ..., e] = k_fs[:, e:y_l:acceleration, ..., e]
-            k_us[:, y_u + e::acceleration, ..., e] = k_fs[:, y_u + e::acceleration, ..., e]
+            k_us[:, e % acceleration:y_l:acceleration, ..., e] = k_fs[:, e % acceleration:y_l:acceleration, ..., e]
+            k_us[:, y_u + e % acceleration::acceleration, ..., e] = k_fs[:, y_u + e % acceleration::acceleration, ...,
+                                                                    e]
         return torch.squeeze(k_us)
 
     def sub_sample_ac_random_lines(self, acceleration: int, ac_lines: int) -> torch.Tensor:
+        if acceleration < 1.1:
+            return self.get_2d_k_space()
         return self.sub_sample_ac_weighted_lines(acceleration=acceleration, ac_lines=ac_lines, weighting_factor=0.0)
 
-    def sub_sample_ac_weighted_lines(self, acceleration: int, ac_lines: int, weighting_factor: float = 0.3) -> torch.Tensor:
+    def sub_sample_ac_weighted_lines(self, acceleration: int, ac_lines: int,
+                                     weighting_factor: float = 0.3) -> torch.Tensor:
+        if acceleration < 1.1:
+            return self.get_2d_k_space()
         k_us, k_fs, y_l, y_u = self._get_ac_sampled_k(ac_lines=ac_lines)
         # build weighting function and normalize
         weighting = np.clip(
@@ -212,12 +221,17 @@ class Phantom:
         return torch.squeeze(k_us)
 
     def sub_sample_ac_grappa(self, acceleration: int, ac_lines: int) -> torch.Tensor:
+        if acceleration < 1.1:
+            return self.get_2d_k_space()
         k_us, k_fs, y_l, y_u = self._get_ac_sampled_k(ac_lines=ac_lines)
+        acceleration = int(np.round(acceleration))
         k_us[:, :y_l:acceleration] = k_fs[:, :y_l:acceleration]
         k_us[:, y_u::acceleration] = k_fs[:, y_u::acceleration]
         return torch.squeeze(k_us)
 
     def sub_sample_random(self, acceleration: int, ac_central_radius: int = 5) -> torch.Tensor:
+        if acceleration < 1.1:
+            return self.get_2d_k_space()
         k_fs = self.get_2d_k_space()
         k_us = torch.zeros_like(k_fs)
         if self.num_echoes <= 1:
@@ -230,7 +244,7 @@ class Phantom:
                 [x + int(self.shape[0] / 2), y + int(self.shape[1] / 2)]
                 for x in np.arange(-ac_central_radius, ac_central_radius)
                 for y in np.arange(-ac_central_radius, ac_central_radius)
-                if x**2 + y**2 <= ac_central_radius**2
+                if x ** 2 + y ** 2 <= ac_central_radius ** 2
             ])
         i = torch.from_numpy(np.array([[x, y] for x in np.arange(self.shape[0]) for y in np.arange(self.shape[1])]))
         for e in range(self.num_echoes):
@@ -267,6 +281,7 @@ def main():
     psl_us = psl.sub_sample_ac_weighted_lines(acceleration=3, ac_lines=30, weighting_factor=0.3)
     pj_us = pj.sub_sample_random(acceleration=3)
     print("done")
+
 
 if __name__ == '__main__':
     main()
