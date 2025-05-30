@@ -7,8 +7,6 @@ import pathlib as plib
 from typing import Tuple
 
 import torch
-import tqdm
-
 from pymritools.recon.loraks.loraks import Loraks, OperatorType
 from pymritools.recon.loraks.utils import (
     prepare_k_space_to_batches, pad_input, unprepare_batches_to_k_space, unpad_output,
@@ -21,8 +19,66 @@ from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
 
 import plotly.graph_objects as go
 import plotly.subplots as psub
+import plotly.colors as plc
 
 logger = logging.getLogger(__name__)
+
+
+class AdaptiveSampler:
+    def __init__(self, p: torch.Tensor):
+        """
+        Parameters:
+        - p: 2D importance distribution
+        - n1, n2: dimensions of the sampling space
+        - n_sub: number of samples to draw per dimension
+        """
+        self.p = p / p.sum()  # Normalize distribution
+        self.n1, self.n2 = p.shape
+
+    def sample(self, n_sub: int, repulsion_radius: int = 2):
+        """
+        Sample with importance and spatial diversity
+
+        Args:
+        - repulsion_radius: Minimum distance between selected points
+        """
+        # Initial sampling based on importance
+        samples = []
+
+        # Flattened importance distribution
+        flat_dist = self.p.ravel()
+
+        for e in range(self.n2):
+            # Candidate points for this dimension
+            e_candidates = torch.where(self.p[:, e] > 0)[0]
+
+            # Weighted sampling of candidates
+            e_weights = self.p[e_candidates, e]
+            e_weights /= e_weights.sum()
+
+            # Track selected points for this dimension
+            dim_samples = []
+
+            while len(dim_samples) < n_sub:
+                # Sample candidate with probability proportional to importance
+                # candidate = np.random.choice(e_candidates, p=e_weights)
+                candidate_idx = e_weights.multinomial(num_samples=1).item()
+                candidate = e_candidates[candidate_idx]
+
+                # Check repulsion condition
+                if not self._is_too_close(candidate, dim_samples, repulsion_radius):
+                    dim_samples.append(candidate)
+
+            samples.append(dim_samples)
+
+        return torch.tensor(samples)
+
+    @staticmethod
+    def _is_too_close(point, existing_points, radius):
+        """
+        Check if point is too close to existing points
+        """
+        return any(abs(point - ex) < radius for ex in existing_points)
 
 
 def prep_k_space(k: torch.Tensor, batch_size_channels: int = -1):
@@ -171,35 +227,55 @@ def autograd_subsampling_optimization_iv(data: torch.Tensor):
     grad_am = torch.sum(grad_am_cm, dim=1)
     # now we have an "importance" score per phase encode point, per echo.
 
+    # remove ac indices
+    indices_ac = torch.where(torch.sum(ac_mask.to(torch.int), dim=0) == ac_mask.shape[0])[0]
+
+    grad_mac = grad_am.clone()
+    grad_mac[indices_ac] = 0
+    cmap = plc.sample_colorscale("Inferno", ne, 0.1, 0.9)
+
     fig = psub.make_subplots(
-        rows=2, cols=grad_am_cm.shape[-1],
-        specs=[
-            [{}]*grad_am_cm.shape[-1],
-            [{"colspan": grad_am_cm.shape[-1]}, *[None]*(grad_am_cm.shape[-1] - 1)]
-        ]
+        rows=2, cols=1,
+        row_titles=[""]
     )
     for i in range(ne):
-        fig.add_trace(
-            go.Heatmap(z=torch.log(grad_am_cm[..., i]), showlegend=False, colorscale="Inferno", showscale=False),
-            row=1, col=1 + i
-        )
-        fig.add_trace(
-            go.Scatter(y=torch.log(grad_am[..., i]), showlegend=False,),
-            row=2, col=1
-        )
+        # fig.add_trace(
+        #     go.Heatmap(
+        #         z=torch.log(grad_am_cm[..., i]), showlegend=False, colorscale="Inferno", showscale=False
+        #     ),
+        #     row=1, col=1 + i
+        # )
+        # fig.update_xaxes(visible=False, row=1, col=1 + i)
+        # fig.update_yaxes(visible=False, row=1, col=1 + i)
+
+        for h, gg in enumerate([torch.log(grad_am), grad_mac / grad_mac.sum()]):
+            fig.add_trace(
+                go.Scatter(
+                    y=gg[..., i], showlegend=h == 0, marker=dict(color=cmap[i]),
+                    name=f"Echo {i + 1}", mode="lines", opacity=0.7
+                ),
+                row=1+h, col=1
+            )
     p_min = torch.where(ac_mask[0])[0][0].item()
     p_max = torch.where(ac_mask[0])[0][-1].item()
     fig.add_trace(
         go.Scatter(
             x=[p_min, p_max, p_max, p_min, p_min],
             y=[0, 0, 1.1*torch.log(grad_am).max().item(), 1.1*torch.log(grad_am).max().item(), 0],
-            mode="lines", fill="toself", line=dict(width=0),
+            mode="lines", fill="toself", line=dict(width=0), name="AC Region",
             showlegend=False,
         ),
         row=2, col=1
     )
+
+    fig.update_layout(
+        width=800,
+        height=350,
+        margin=dict(t=25, b=55, l=65, r=5)
+    )
+
     path = plib.Path(get_test_result_output_dir(autograd_subsampling_optimization_iv, mode=ResultMode.EXPERIMENT))
-    fn = path.joinpath("Optimized_Sampling_Pattern").with_suffix(".html")
+    fn = path.joinpath("sampling_density").with_suffix(".html")
     logger.info(f"Write file: {fn}")
     fig.write_html(fn)
     for suff in [".png", ".pdf"]:
@@ -207,26 +283,16 @@ def autograd_subsampling_optimization_iv(data: torch.Tensor):
         logger.info(f"Write file: {fn}")
         fig.write_image(fn)
     # calculate how many we want
-    # remove ac indices
-    indices_ac = torch.where(torch.sum(ac_mask.to(torch.int), dim=0) == ac_mask.shape[0])[0]
-    acceleration = 6
-    np = (nx - len(indices_ac)) // acceleration
 
-    # sort those
-    indices = torch.argsort(grad_am, dim=0, descending=True)
-    # build sampling indices
-    indices_sub = []
-    for i in range(ne):
-        # start with ac region
-        idx_per_echo = indices_ac.tolist()
-        # add most important lines
-        for idx in indices[:, i].tolist():
-            if idx not in indices_ac:
-                idx_per_echo.append(idx)
-            if len(idx_per_echo) >= np + len(indices_ac):
-                break
-        indices_sub.append(idx_per_echo)
-    indices_sub = torch.tensor(indices_sub)
+    acceleration = 6
+    n_sub = (nx - len(indices_ac)) // acceleration
+
+    # we now want to draw from the indexes to keep, using the gradient function as sampling distribution per echo.
+    # additionally we want to maximize the distribution to neighboring points across phase encodes and echoes.AvE!!ow92_pHd33
+    adaptive_sampler = AdaptiveSampler(p=grad_mac)
+    us_idxs = adaptive_sampler.sample(n_sub, repulsion_radius=acceleration // 2)
+    indices_sub = torch.concatenate((indices_ac[None, ]. expand(ne, -1), us_idxs), dim=1)
+
     # reset size
     mask_sub = torch.zeros(nx, ne)
     for i in range(ne):
@@ -247,7 +313,7 @@ def subsampling_optimization():
     nx, ny, nc, ne = k.shape
     phantom = Phantom.get_shepp_logan(shape=(ny, nx), num_coils=nc, num_echoes=ne)
     masks = []
-    names = ["Fully Sampled", "Pseudo Random", "Weighted Random", "Skipped (Grappa)", "Skipped Interleaved", "Optimized"]
+    names = ["Fully Sampled", "Pseudo Rand.", "Weighted Rand.", "Skip (Grappa)", "Skip Interl.", "Optimized"]
     # fnames = ["fs", "pr", "wr", "s", "si", "opt"]
     for i, f in enumerate([
         phantom.sub_sample_ac_random_lines,
@@ -269,41 +335,67 @@ def subsampling_optimization():
     ac_opts.rank.value = 150
     ac_loraks = Loraks.create(ac_opts)
 
-    # create figure
+    # plot sampling schemes
     fig = psub.make_subplots(
-        cols=6, rows=len(names),
-        row_titles=names,
-        column_titles=["Sampling Mask", "Input K", "Input FFT", "Recon. FFT", "RSOS", "RSOS - GT"],
-        vertical_spacing=0.02, horizontal_spacing=0.05,
-        x_title="Phase Encode Direction", shared_xaxes=True
+        rows=1, cols=len(names),
+        column_titles=names,
+        vertical_spacing=0.02,
+        y_title="Phase Encode Direction",
+        shared_yaxes=True,
+        x_title="Echo Number"
     )
+
     sample_column_width = 70
-    gt = 0
-    norms = []
-    plot_err_percentage = 15
     # for each sub-sampled dataset
     for i, d in enumerate(masks):
-        logger.info(" ")
-        logger.info(f"__ process: {names[i]} __")
+        logger.info(f"__ plot sampling: {names[i]} __")
         # plot mask
         m = torch.zeros((nx, ne * sample_column_width))
         for e in range(ne):
             m[
-                :, e * sample_column_width:(e + 1) * sample_column_width
+            :, e * sample_column_width:(e + 1) * sample_column_width
             ] = (e + 3) * d[:, d.shape[1] // 2, 0, e, None].expand(nx, sample_column_width)
 
         fig.add_trace(
             go.Heatmap(
-                z=m, showscale=False, transpose=True, showlegend=False, colorscale="Inferno",
+                z=m, showscale=False, transpose=False, showlegend=False, colorscale="Inferno",
             ),
-            col=1, row=1 + i
+            col=1+i, row=1
         )
-        fig.update_yaxes(
+        fig.update_xaxes(
             tickmode="array", ticktext=torch.arange(1, 1 + ne).to(torch.int).numpy(),
-            tickvals=(0.5 + torch.arange(ne)) * sample_column_width, row=1 + i, col=1,
+            tickvals=(0.5 + torch.arange(ne)) * sample_column_width, row=1, col=1 + i,
             # title="Echo Number"
         )
 
+    fig.update_layout(
+        width=1000,
+        height=350,
+        margin=dict(t=25, b=55, l=65, r=5)
+    )
+    fn = path.joinpath(f"sampling_patterns").with_suffix(".html")
+    logger.info(f"write file: {fn}")
+    fig.write_html(fn)
+    for suff in [".pdf", ".png"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"write file: {fn}")
+        fig.write_image(fn)
+
+    # create figure
+    fig = psub.make_subplots(
+        rows=5, cols=len(names),
+        column_titles=names,
+        row_titles=["Input K", "Input FFT", "Recon. FFT", "RSOS", "RSOS - GT"],
+        vertical_spacing=0.015, horizontal_spacing=0.015,
+        x_title="Phase Encode Direction", y_title="Readout Direction", shared_xaxes=True, shared_yaxes=True,
+    )
+    gt = 0
+    norms = []
+    rmse = []
+    plot_err_percentage = 15
+
+    # for each sub-sampled dataset
+    for i, d in enumerate(masks):
         # save undersampled masked input
         # p = path.joinpath(f"k_slice_sub-{fnames[i]}").with_suffix(".pt")
         # if not p.is_file():
@@ -331,6 +423,7 @@ def subsampling_optimization():
             gt = rsos_rim.clone()
         delta = rsos_rim - gt
         norms.append(torch.mean(delta.abs()).item())
+        rmse.append(torch.sqrt(torch.mean(delta.abs() ** 2)))
         delta = torch.nan_to_num(delta.abs() / gt, nan=0.0, posinf=0.0, neginf=0.0) * 100
 
         # for plotting
@@ -343,30 +436,54 @@ def subsampling_optimization():
 
             zmin = [None, 0.0, 0.0, 0, 0]
             zmax = [None, pkm.max().item() * 0.5, pkm.max().item() * 0.5, pkm.max().item() * 0.5, plot_err_percentage]
-            col = 2 + ki
+            row = 1 + ki
             fig.add_trace(
                 go.Heatmap(
-                    z=pkm, showscale=True if ki == 4 and i ==2 else False,
+                    z=pkm, showscale=True if ki == 4 and i == 2 else False,
                     showlegend=False, transpose=True, colorscale="Inferno",
                     zmin=zmin[ki], zmax=zmax[ki]
                 ),
-                row=1+i, col=col
+                row=1+ki, col=1+i
             )
-            fig.update_yaxes(
-                # title="Frequency Encode",
-                row=1+i, col=col,
-            )
-        logger.info(" ")
 
-    fn = path.joinpath("sampling_schemes").with_suffix(".html")
+    fig.update_layout(
+        width=1000,
+        height=800,
+        margin=dict(t=25, b=55, l=65, r=5)
+    )
+    fn = path.joinpath("recon_vs_sampling").with_suffix(".html")
     print(f"Write file: {fn}")
     fig.write_html(fn)
     for suff in [".png", ".pdf"]:
-        fn = path.joinpath("sampling_schemes").with_suffix(suff)
+        fn = fn.with_suffix(suff)
         print(f"Write file: {fn}")
         fig.write_image(fn)
 
+    logger.info("Plot Norms")
     print(norms)
+    print(rmse)
+    # cmap = plc.sample_colorscale("Inferno", len(norms), 0.2, 0.9)
+    # fig = go.Figure()
+    # fig.add_trace(
+    #     go.Scatter(
+    #         y=[None, *norms[1:]], x=names, showlegend=False,
+    #         line=dict(color=cmap[0]),
+    #     ),
+    # )
+    #
+    # fig.update_layout(
+    #     yaxis=dict(title="|| Recon - Ground Truth || [a.u.]"),
+    #     width=800,
+    #     height=250,
+    #     margin=dict(t=5, b=5, l=5, r=5)
+    # )
+    # fn = path.joinpath("recon_norm").with_suffix(".html")
+    # print(f"Write file: {fn}")
+    # fig.write_html(fn)
+    # for suff in [".png", ".pdf"]:
+    #     fn = fn.with_suffix(suff)
+    #     print(f"Write file: {fn}")
+    #     fig.write_image(fn)
 
 
 if __name__ == '__main__':
