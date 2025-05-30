@@ -188,7 +188,7 @@ class Phantom:
         return self.sub_sample_ac_weighted_lines(acceleration=acceleration, ac_lines=ac_lines, weighting_factor=0.0)
 
     def sub_sample_ac_weighted_lines(self, acceleration: int, ac_lines: int,
-                                     weighting_factor: float = 0.3) -> torch.Tensor:
+                                     weighting_factor: float = 0.5) -> torch.Tensor:
         if acceleration < 1.1:
             return self.get_2d_k_space()
         k_us, k_fs, y_l, y_u = self._get_ac_sampled_k(ac_lines=ac_lines)
