@@ -200,8 +200,14 @@ def autograd_subsampling_optimization_sl():
     fig.write_html(fn)
 
 
-def autograd_subsampling_optimization_iv(data: torch.Tensor):
-    k = data
+def autograd_subsampling_optimization_iv():
+    # load input data fully sampled
+    path = plib.Path(
+        get_test_result_output_dir(subsampling_optimization, mode=ResultMode.EXPERIMENT)
+    )
+
+    k = torch_load(path.joinpath("fs_data_slice.pt"))
+
     # create sub-sampling schemes
     nx, ny, nc, ne = k.shape
     phantom = Phantom.get_shepp_logan(shape=(ny, nx), num_coils=nc, num_echoes=ne)
@@ -232,11 +238,29 @@ def autograd_subsampling_optimization_iv(data: torch.Tensor):
 
     grad_mac = grad_am.clone()
     grad_mac[indices_ac] = 0
+    sampling_density = grad_mac / grad_mac.sum(dim=0)
     cmap = plc.sample_colorscale("Inferno", ne, 0.1, 0.9)
 
     fig = psub.make_subplots(
         rows=2, cols=1,
-        row_titles=[""]
+        row_titles=["Grad. Density", "Sampling Distribution"],
+        y_title="Magnitude [a.u.]",
+        x_title="Phase Encode Direction"
+    )
+    p_min = torch.where(ac_mask[0])[0][0].item()
+    p_max = torch.where(ac_mask[0])[0][-1].item()
+    fig.add_trace(
+        go.Scatter(
+            x=[p_min, p_max, p_max, p_min, p_min],
+            y=[0, 0, 1.1*torch.log(grad_am).max().item(), 1.1*torch.log(grad_am).max().item(), 0],
+            mode="lines", fill="toself", line=dict(width=0), name="AC Region",
+            showlegend=False, marker=dict(color="#B6E880"), opacity=0.8
+        ),
+        row=1, col=1
+    )
+    fig.add_annotation(
+        text="AC Region", x=p_min, y=0, xref="x", yref="y",
+        xanchor="left", yanchor="bottom", showarrow=False,
     )
     for i in range(ne):
         # fig.add_trace(
@@ -248,30 +272,33 @@ def autograd_subsampling_optimization_iv(data: torch.Tensor):
         # fig.update_xaxes(visible=False, row=1, col=1 + i)
         # fig.update_yaxes(visible=False, row=1, col=1 + i)
 
-        for h, gg in enumerate([torch.log(grad_am), grad_mac / grad_mac.sum()]):
+        for h, gg in enumerate([torch.log(grad_am), sampling_density]):
             fig.add_trace(
                 go.Scatter(
-                    y=gg[..., i], showlegend=h == 0, marker=dict(color=cmap[i]),
+                    y=gg[..., i], showlegend=False, marker=dict(color=cmap[i]),
                     name=f"Echo {i + 1}", mode="lines", opacity=0.7
                 ),
                 row=1+h, col=1
             )
-    p_min = torch.where(ac_mask[0])[0][0].item()
-    p_max = torch.where(ac_mask[0])[0][-1].item()
+    # add colorbar
     fig.add_trace(
         go.Scatter(
-            x=[p_min, p_max, p_max, p_min, p_min],
-            y=[0, 0, 1.1*torch.log(grad_am).max().item(), 1.1*torch.log(grad_am).max().item(), 0],
-            mode="lines", fill="toself", line=dict(width=0), name="AC Region",
-            showlegend=False,
-        ),
-        row=2, col=1
+            x=[None], y=[None],
+            marker=dict(
+                size=ne / 100,
+                color=[1, ne],
+                colorscale="Inferno",
+                colorbar=dict(title="Echo", thickness=10),
+                showscale=True
+            ),
+            showlegend=False
+        )
     )
 
     fig.update_layout(
         width=800,
         height=350,
-        margin=dict(t=25, b=55, l=65, r=5)
+        margin=dict(t=15, b=55, l=65, r=5)
     )
 
     path = plib.Path(get_test_result_output_dir(autograd_subsampling_optimization_iv, mode=ResultMode.EXPERIMENT))
@@ -488,4 +515,4 @@ def subsampling_optimization():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    subsampling_optimization()
+    autograd_subsampling_optimization_iv()
