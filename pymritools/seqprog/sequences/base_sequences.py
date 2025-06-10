@@ -20,6 +20,83 @@ from pypulseq import Opts, Sequence
 log_module = logging.getLogger(__name__)
 
 
+class AdaptiveSampler:
+    def __init__(self, p: np.ndarray):
+        """
+        Parameters:
+        - p: 2D importance distribution
+        - n1, n2: dimensions of the sampling space
+        """
+        self.p = p / p.sum()  # Normalize distribution
+        self.n1, self.n2 = p.shape
+
+    @classmethod
+    def seq_optimized_ac_sampling_from_dim(cls, n: int, n_ac: int, e: int):
+        """
+        Create an adative sampler given only the dimensions of the line dimension (without AC lines).
+        And number of echoes.
+
+        For this we use an estimated sampling density shape obtained from in-vivo measurements.
+        """
+        x = np.arange(-n // 2, n // 2)
+        # this is the rough density shape we found in the optimization
+        # (except for some fft shift to make it peak in the middle)
+        y = (x / (n // 2)) ** 2 + 4
+        y = np.fft.fftshift(y)
+        # set central ac lines 0
+        y[(-n_ac // 2 <= x) & (x < n_ac // 2)] = 0
+        # to be used as a density for numpy choice
+        y = y / np.sum(y)
+        # expand the echoes
+        p = np.repeat(y[:, None], e, axis=1)
+
+        # return sampler
+        return cls(p=p)
+
+    def sample(self, n_sub: int, repulsion_radius: int = 2):
+        """
+        Sample with importance and spatial diversity
+
+        Args:
+        - n_sub: number of samples to draw per dimension
+        - repulsion_radius: Minimum distance between selected points
+        """
+        repulsion_radius = max(repulsion_radius, 2)
+        # Initial sampling based on importance
+        samples = []
+
+        for e in range(self.n2):
+            # Candidate points for this dimension
+            e_candidates = np.where(self.p[:, e] > 0)[0]
+
+            # Weighted sampling of candidates
+            e_weights = self.p[e_candidates, e]
+            e_weights /= e_weights.sum()
+
+            # Track selected points for this dimension
+            dim_samples = []
+
+            while len(dim_samples) < n_sub:
+                # Sample candidate with probability proportional to importance
+                candidate_idx = np.random.choice(e_candidates.shape[0], p=e_weights)
+                candidate = e_candidates[candidate_idx]
+
+                # Check repulsion condition
+                if not self._is_too_close(candidate, dim_samples, repulsion_radius):
+                    dim_samples.append(candidate)
+
+            samples.append(dim_samples)
+
+        return np.array(samples)
+
+    @staticmethod
+    def _is_too_close(point, existing_points, radius):
+        """
+        Check if point is too close to existing points
+        """
+        return any(abs(point - ex) < radius for ex in existing_points)
+
+
 class Sequence2D(abc.ABC):
     """
     Base class for 2D sequences.
@@ -33,9 +110,10 @@ class Sequence2D(abc.ABC):
         of slices to measure, they are epi style readouts with lower resolution and can be switched on here)
 
     """
+
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D,
                  create_excitation_kernel: bool = True, create_refocus_1_kernel: bool = True,
-                 create_refocus_kernel: bool = True, relax_read_grad_stress: bool = False,):
+                 create_refocus_kernel: bool = True, relax_read_grad_stress: bool = False, ):
 
         self.config: PulseqConfig = config
         self.visualize: bool = config.visualize
@@ -174,7 +252,7 @@ class Sequence2D(abc.ABC):
 
         # navigators
         # self.navs_on: bool = self.params.use_navs
-        self.navs_on: bool = False      # not yet implemented
+        self.navs_on: bool = False  # not yet implemented
         self.nav_num: int = 0
         self.nav_t_total: float = 0.0
         # for now we fix the navigator resolution at 5 times coarser than the chosen resolution
@@ -185,6 +263,7 @@ class Sequence2D(abc.ABC):
 
     def set_on_grad_raster_time(self, time: float):
         return np.ceil(time / self.system.grad_raster_time) * self.system.grad_raster_time
+
     # __ public __
     # create
     # @classmethod
@@ -406,8 +485,8 @@ class Sequence2D(abc.ABC):
         log_module.info(f"__Build Sequence__")
         log_module.info(f"build -- calculate total scan time")
         self._calculate_scan_time()
-        log_module.info(f"build -- set up k-space")
-        self._set_k_space()
+        log_module.info(f"build -- set up k-space sampling")
+        self._set_k_space_sampling()
         log_module.info(f"build -- set up slices")
         self._set_delta_slices()
         log_module.info(f"build variant specifics")
@@ -480,7 +559,7 @@ class Sequence2D(abc.ABC):
         # set phase (the slice dependent phase is set in another method)
         sbb.rf.phase_rad = phase_rad
         self._apply_slice_offset(sbb=sbb, idx_slice=slice_idx)
-    
+
     def _apply_slice_offset(self, sbb: Kernel, idx_slice: int):
         grad_slice_amplitude_hz = sbb.grad_slice.amplitude[sbb.grad_slice.t_array_s >= sbb.rf.t_delay_s][0]
         sbb.rf.freq_offset_hz = grad_slice_amplitude_hz * self.z[idx_slice]
@@ -512,7 +591,8 @@ class Sequence2D(abc.ABC):
             block = self.block_refocus
             # we set the re-phase phase encode gradient - add additional area if set
             phase_enc_time_pre_pulse = np.sum(np.diff(block.grad_phase.t_array_s[:4]) * area_factors)
-            block.grad_phase.amplitude[1:3] = (self.phase_areas[last_idx_phase] + add_rephase) / phase_enc_time_pre_pulse
+            block.grad_phase.amplitude[1:3] = (self.phase_areas[
+                                                   last_idx_phase] + add_rephase) / phase_enc_time_pre_pulse
 
         # we set the post pulse phase encode gradient that sets up the next readout
         if np.abs(self.phase_areas[idx_phase]) > 1:
@@ -647,7 +727,7 @@ class Sequence2D(abc.ABC):
         )
 
     # methods
-    def _set_k_space(self):
+    def _set_k_space_sampling(self):
         if self.params.acceleration_factor > 1.1:
             # calculate center of k space and indexes for full sampling band
             k_central_phase = round(self.params.resolution_n_phase / 2)
@@ -656,7 +736,7 @@ class Sequence2D(abc.ABC):
             k_start = k_central_phase - k_half_central_lines
             k_end = k_central_phase + k_half_central_lines
 
-            # different sampling choices ["weighted_sampling", "random", "interleaved_lines", "grappa"]
+            # different sampling choices ["weighted_sampling", "random", "interleaved_lines", "grappa", "optimized]
             if self.params.sampling_pattern.startswith("weighted") or self.params.sampling_pattern.startswith("random"):
                 # The rest of the lines we will use tse style phase step blip between the echoes of one echo train
                 # Trying random sampling, ie. pick random line numbers for remaining indices,
@@ -669,7 +749,8 @@ class Sequence2D(abc.ABC):
                 # build array with dim [num_slices, num_outer_lines] to sample different random scheme per slice
                 # hardcode weighting
                 weighting_factor = 0.5 if self.params.sampling_pattern.startswith("weighted") else 0.0
-                log_module.info(f"\t\t-random sampling of k-space phase encodes, central weighting factor: {weighting_factor}")
+                log_module.info(
+                    f"\t\t-random sampling of k-space phase encodes, central weighting factor: {weighting_factor}")
                 # random encodes for different echoes - random choice weighted towards center
                 weighting = np.clip(np.power(np.linspace(0, 1, k_start), weighting_factor), 1e-5, 1)
                 weighting /= np.sum(weighting)
@@ -687,6 +768,7 @@ class Sequence2D(abc.ABC):
                     k_indices[::2] = self.params.resolution_n_phase - 1 - k_indices[::2]
                     self.k_pe_indexes[idx_echo, self.params.number_central_lines:] = np.sort(k_indices)
             elif self.params.sampling_pattern.startswith("interleaved"):
+                log_module.info(f"\t\t-interleaved grappa style k-space phase encodes")
                 # we want to skip a line per echo, to achieve complementary lines throughout the echo train
                 for idx_echo in range(self.params.etl):
                     # same encode for all echoes -> central lines
@@ -713,6 +795,27 @@ class Sequence2D(abc.ABC):
                     elif k_indices.shape[0] > len_to_fill:
                         k_indices = k_indices[:len_to_fill]
                     self.k_pe_indexes[idx_echo, self.params.number_central_lines:] = k_indices
+            elif self.params.sampling_pattern.startswith("optimized"):
+                log_module.info(f"\t\t-optimized sampling k-space phase encodes")
+                # same encode for all echoes -> central lines
+                self.k_pe_indexes[:, :self.params.number_central_lines] = np.repeat(
+                    np.arange(k_start, k_end)[None], repeats=self.params.etl, axis=0
+                )
+                # we want to use an adaptive optimized sampling that does a couple of things:
+                # 1) sample a k-space dimension using a density function which concentrates more samples towards
+                # the centre (respectively edges of the AC region)
+                # 2) try to introduce a radius around each sample in phase encode AND echo dimension
+                # to not place adjacent samples (adjacent in the sense of phase and echo directions)
+                # not within a certain radius to ensure more uniform sampling across echoes.
+                adaptive_sampler = AdaptiveSampler.seq_optimized_ac_sampling_from_dim(
+                    n=self.params.resolution_n_phase, n_ac=self.params.number_central_lines,
+                    e=self.params.etl
+                )
+
+                s_idxs = adaptive_sampler.sample(
+                    n_sub=self.params.number_outer_lines, repulsion_radius=int(self.params.acceleration_factor / 2)
+                )
+                self.k_pe_indexes[:, self.params.number_central_lines:] = np.sort(s_idxs, axis=1)
             else:
                 log_module.info(f"\t\t-grappa style alternating k-space phase encodes")
                 # same encode for all echoes -> central lines
@@ -722,7 +825,6 @@ class Sequence2D(abc.ABC):
                 # drop the central ones
                 k_indices = k_indices[(k_indices < k_start) | (k_indices > k_end)]
                 self.k_pe_indexes[:, self.params.number_central_lines:] = np.sort(k_indices)[None]
-
         else:
             self.k_pe_indexes[:, :] = np.arange(
                 self.params.number_central_lines + self.params.number_outer_lines
@@ -1316,6 +1418,7 @@ class Sequence2D(abc.ABC):
         else:
             fig.write_html(fig_path.as_posix())
 
+
 # def _plot_grad_moments(self, grad_moments: np.ndarray, dt_in_us: int):
 #     ids = ["gx"] * grad_moments.shape[1] + ["gy"] * grad_moments.shape[1] + ["gz"] * grad_moments.shape[1] + \
 #           ["adc"] * grad_moments.shape[1]
@@ -1484,7 +1587,7 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     if config.visualize:
         logging.info("Plotting")
         # plot start
-        sequence.plot_sequence(t_start_s=0, t_end_s=0.65*sequence.params.tr*1e-3, sim_grad_moments=True)
+        sequence.plot_sequence(t_start_s=0, t_end_s=0.65 * sequence.params.tr * 1e-3, sim_grad_moments=True)
         if sequence.params.resolution_slice_num < 30:
             n = 2
         elif sequence.params.resolution_slice_num < 60:

@@ -239,6 +239,7 @@ def autograd_subsampling_optimization_iv():
     grad_mac = grad_am.clone()
     grad_mac[indices_ac] = 0
     sampling_density = grad_mac / grad_mac.sum(dim=0)
+    torch_save(sampling_density, path_to_file=path, file_name="sampling_density_data.pt")
     cmap = plc.sample_colorscale("Inferno", ne, 0.1, 0.9)
 
     fig = psub.make_subplots(
