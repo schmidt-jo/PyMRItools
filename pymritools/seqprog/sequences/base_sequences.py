@@ -41,7 +41,7 @@ class AdaptiveSampler:
         x = np.arange(-n // 2, n // 2)
         # this is the rough density shape we found in the optimization
         # (except for some fft shift to make it peak in the middle)
-        y = (x / (n // 2)) ** 2 + 4
+        y = (x / (n // 2)) ** 2 + 2
         y = np.fft.fftshift(y)
         # set central ac lines 0
         y[(-n_ac // 2 <= x) & (x < n_ac // 2)] = 0
