@@ -352,16 +352,8 @@ def subsampling_optimization():
         masks.append((k_us.abs() > 1e-10).to(torch.int))
 
     # compute optimized sampling scheme
-    m_opt = autograd_subsampling_optimization_iv(data=k.clone())
+    m_opt = autograd_subsampling_optimization_iv()
     masks.append(m_opt.squeeze())
-
-    # plot and process
-    ac_opts = AcLoraksOptions(
-        loraks_matrix_type=OperatorType.S, regularization_lambda=0.0, batch_size_channels=8, max_num_iter=50,
-        solver_type=SolverType.LEASTSQUARES
-    )
-    ac_opts.rank.value = 150
-    ac_loraks = Loraks.create(ac_opts)
 
     # plot sampling schemes
     fig = psub.make_subplots(
@@ -387,6 +379,7 @@ def subsampling_optimization():
         fig.add_trace(
             go.Heatmap(
                 z=m, showscale=False, transpose=False, showlegend=False, colorscale="Inferno",
+                zmin=0.0, zmax=ne + 2,
             ),
             col=1+i, row=1
         )
@@ -408,6 +401,14 @@ def subsampling_optimization():
         fn = fn.with_suffix(suff)
         logger.info(f"write file: {fn}")
         fig.write_image(fn)
+
+    # plot and process
+    ac_opts = AcLoraksOptions(
+        loraks_matrix_type=OperatorType.S, regularization_lambda=0.0, batch_size_channels=8, max_num_iter=50,
+        solver_type=SolverType.LEASTSQUARES
+    )
+    ac_opts.rank.value = 150
+    ac_loraks = Loraks.create(ac_opts)
 
     # create figure
     fig = psub.make_subplots(
@@ -516,4 +517,4 @@ def subsampling_optimization():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    autograd_subsampling_optimization_iv()
+    subsampling_optimization()
