@@ -1,38 +1,31 @@
 {
-  "config_file": "./examples/simulation/emc/emc_settings.json",
-  "emc_params_file": "./examples/simulation/emc/emc_params.json",
-  "pulse_file": "./examples/simulation/emc/pulse_pypulseq_default_gauss.pkl",
-  "out_path": "./examples/simulation/emc/results",
-  "database_name": "database_test.pkl",
-  "sim_type": "mese_balanced_read",
+  "config_file": "examples/simulation/emc/emc_settings.json",
+  "out_path": "examples/simulation/emc/results",
+  "use_gpu": true,
+  "gpu_device": 0,
+  "visualize": true,
+  "debug": false,
+  "emc_params_file": "examples/simulation/emc/emc_params.json",
+  "kernel_file": "examples/simulation/emc/mese_kernels.pkl",
+  "te_file": "examples/simulation/emc/mese_te.json",
+  "pulse_file": "resources/pulses/gauss.json",
+  "database_name": "db_mese_cfa_sp3500.pkl",
   "t1_list": [
     1.5
   ],
   "t2_list": [
     [
-      20,
       35,
-      1
-    ],
-    [
-      35,
-      45,
-      2
+      66,
+      5
     ]
   ],
   "b1_list": [
-    0.6,
-    0.8,
-    1.0
+    0.5, 1.0, 1.2
   ],
   "b0_list": [
-    0,
-    10
+    0.0
   ],
   "signal_fourier_sampling": false,
-  "resample_pulse_to_dt_us": 5.0,
-  "visualize": true,
-  "debug": false,
-  "use_gpu": true,
-  "gpu_device": 0
+  "resample_pulse_to_dt_us": 5.0
 }
