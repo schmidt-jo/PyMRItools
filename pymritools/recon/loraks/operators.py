@@ -227,6 +227,7 @@ class Operator:
         self.indices, self.matrix_shape = get_linear_indices(
             k_space_shape=k_space_shape[-2:], patch_shape=self.patch_shape, sample_directions=self.sample_directions
         )
+        self.indices = self.indices.to(self.device)
 
     @property
     def count_matrix(self):
