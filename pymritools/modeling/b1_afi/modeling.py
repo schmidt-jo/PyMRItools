@@ -114,7 +114,7 @@ def calculate_b1(b1_data: torch.Tensor, r_tr21: float, flip_angle_set_deg: float
 
     # smooth
     alpha_filtered = smooth_b1(alpha=alpha, smoothing_kernel=smoothing_kernel)
-    return alpha_filtered / flip_angle_set_deg * 100
+    return alpha_filtered
 
 
 def smooth_b1(alpha: torch.Tensor, smoothing_kernel: float) -> torch.Tensor:
@@ -127,12 +127,21 @@ def processing(settings: Settings):
     b1_data = torch.from_numpy(b1_data)
 
     # estimate noise voxels
-    noise_mask = extract_noise_mask(input_data=b1_data, erode_iter=0)
+    noise_mask = extract_noise_mask(input_data=b1_data, erode_iter=1)
+    nifti_save(data=noise_mask.to(torch.int), img_aff=b1_img, path_to_dir=settings.out_path, file_name="noise_mask")
 
     # calculate b1
     b1 = calculate_b1(
         b1_data=b1_data, r_tr21=settings.ratio_tr2_tr1,
         flip_angle_set_deg=settings.flip_angle, smoothing_kernel=settings.smoothing_kernel
+    ) / settings.flip_angle * 100
+
+    # b1 correction luke
+    p = torch.tensor([0.000012295234437, -0.0017655889077654, 0.981394299349869, 3.067045680657626])
+    po = torch.arange(p.shape[0]).__reversed__()
+    b1_corr = torch.sum(
+        p[None, None, None] * torch.pow(b1[..., None], po[None, None, None]),
+        dim=-1
     )
 
     # calculate error map
@@ -151,6 +160,7 @@ def processing(settings: Settings):
     nifti_save(data=b1, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi")
     nifti_save(data=b1_data[..., 0], img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi_ref")
     nifti_save(data=b1_rel_err, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_rel_err")
+    nifti_save(data=b1_corr, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi_corr-poly")
 
 
 def main():
