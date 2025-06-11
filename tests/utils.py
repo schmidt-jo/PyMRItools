@@ -21,6 +21,7 @@ class ResultMode(Enum):
     TEST = auto()
     VISUAL = auto()
     EXPERIMENT = auto()
+    OPTIMIZATION = auto()
 
 
 def get_test_result_output_dir(func, mode: ResultMode = ResultMode.TEST) -> str:
