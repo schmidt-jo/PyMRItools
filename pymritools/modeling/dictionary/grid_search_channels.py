@@ -542,28 +542,23 @@ def fit_revisited():
         )
 
 
-def fit_mese():
-    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+def fit_mese(settings: EmcFitSettings):
+    device = torch.device("cuda:0") if settings.use_gpu and torch.cuda.is_available() else torch.device("cpu")
     log_module.info(f"set device: {device}")
-    log_module.info(f"Load data")
-    data = torch_load(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/processing/"
-        "mese_vfa-a3p5ws/recon/ac_loraks_bcs_recon_acc-3p50_r-300.pt"
-    )
-    # data = data[:, :, data.shape[2] // 2, None]
-    affine = torch_load(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/raw/"
-        "mese_vfa-a3p5ws/affine.pt"
-    )
-    log_module.info(f"load database")
-    db = DB.load(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/02_emc/vfa/db_mese_vfa.pkl"
-    )
-    path = plib.Path(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/"
-        "estimation/mese_vfa_a3p5ws/loraks_b1_in"
-    )
 
+    log_module.info(f"Load data")
+    data = torch_load(settings.input_data)
+
+    if settings.process_slice:
+        data = data[:, :, data.shape[2] // 2, None]
+    affine = torch_load(settings.input_affine) if settings.input_affine else torch.eye(4)
+
+    log_module.info(f"load database")
+    db = DB.load(settings.input_database)
+
+    path = plib.Path(settings.out_path)
+
+    log_module.info(f"Prepare data")
     # get torch tensors
     db_torch_mag, db_torch_phase = db.get_torch_tensors_t1t2b1b0e()
     # get t2 and b1 values
@@ -592,10 +587,6 @@ def fit_mese():
     db_pattern_normed = torch.abs(db_pattern_normed)
     db_pattern_normed = db_pattern_normed.to(dtype=data_normed.dtype, device=device)
 
-    t1t2b1b0_vals = torch.tensor([
-        [t1, t2, b1, b0] for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals for b0 in b0_vals
-    ], device=device)
-
     t2 = torch.zeros(data_normed.shape[:-1])
     b1 = torch.zeros(data_normed.shape[:-1])
     l2_res = torch.zeros(data_normed.shape[:-1])
@@ -604,50 +595,67 @@ def fit_mese():
     b1_rsos = torch.zeros(data_rsos_normed.shape[:-1])
     l2_res_rsos = torch.zeros(data_rsos_normed.shape[:-1])
 
-    log_module.info(f"l2 fit - b1 estimate")
-    batch_size = 10
-    num_batches = int(np.ceil(data_normed.shape[0] / batch_size))
-    for idx_c in tqdm.trange(data_normed.shape[-2], desc="channel wise processing"):
-        for idx_z in range(data_normed.shape[2]):
+    path_in_b1 = plib.Path(settings.input_b1)
+    if not path_in_b1.is_file():
+        log_module.info(f"No B1 input given or input invalid, estimating B1 from data")
+        t1t2b1b0_vals = torch.tensor([
+            [t1, t2, b1, b0] for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals for b0 in b0_vals
+        ], device=device)
+
+        log_module.info(f"l2 fit - b1 estimate")
+        batch_size = 10
+        num_batches = int(np.ceil(data_normed.shape[0] / batch_size))
+        for idx_c in tqdm.trange(data_normed.shape[-2], desc="channel wise processing"):
+            for idx_z in range(data_normed.shape[2]):
+                for idx_x in range(num_batches):
+                    start = idx_x * batch_size
+                    end = min((idx_x + 1) * batch_size, data_normed.shape[0])
+                    data_batch = data_normed[start:end, :, idx_z, idx_c, :].to(device)
+
+                    l2 = torch.linalg.norm(data_batch[:, None] - db_pattern_normed[None, :,  None], dim=-1)
+                    vals, indices = torch.min(l2, dim=1)
+                    batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
+
+                    b1[start:end, :, idx_z, idx_c] = batch_t1t2b1b0_vals[..., 2].cpu()
+                    l2_res[start:end, :, idx_z, idx_c] = vals
+
+        log_module.info(f"l2 fit - b1 estimate - rsos")
+        for idx_z in range(data_rsos_normed.shape[2]):
             for idx_x in range(num_batches):
                 start = idx_x * batch_size
-                end = min((idx_x + 1) * batch_size, data_normed.shape[0])
-                data_batch = data_normed[start:end, :, idx_z, idx_c, :].to(device)
+                end = min((idx_x + 1) * batch_size, data_rsos_normed.shape[0])
+                data_batch = data_rsos_normed[start:end, :, idx_z, :].to(device)
 
-                l2 = torch.linalg.norm(data_batch[:, None] - db_pattern_normed[None, :,  None], dim=-1)
+                l2 = torch.linalg.norm(data_batch[:, None] - db_pattern_normed[None, :, None], dim=-1)
                 vals, indices = torch.min(l2, dim=1)
                 batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
 
-                b1[start:end, :, idx_z, idx_c] = batch_t1t2b1b0_vals[..., 2].cpu()
-                l2_res[start:end, :, idx_z, idx_c] = vals
+                b1_rsos[start:end, :, idx_z] = batch_t1t2b1b0_vals[..., 2].cpu()
+                l2_res_rsos[start:end, :, idx_z] = vals
 
-    log_module.info(f"l2 fit - b1 estimate - rsos")
-    for idx_z in range(data_rsos_normed.shape[2]):
-        for idx_x in range(num_batches):
-            start = idx_x * batch_size
-            end = min((idx_x + 1) * batch_size, data_rsos_normed.shape[0])
-            data_batch = data_rsos_normed[start:end, :, idx_z, :].to(device)
+        log_module.info("B1 smoothing")
+        b1_map = smooth_map(b1, kernel_size=min(b1.shape[:2]) // 32)
+        b1_map_rsos = smooth_map(b1_rsos, kernel_size=min(b1_rsos.shape[:2]) // 32)
 
-            l2 = torch.linalg.norm(data_batch[:, None] - db_pattern_normed[None, :, None], dim=-1)
-            vals, indices = torch.min(l2, dim=1)
-            batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
+        nifti_save(b1, img_aff=affine, path_to_dir=path, file_name="reg_b1_estimate")
+        nifti_save(b1_map, img_aff=affine, path_to_dir=path, file_name="reg_b1_smoothed")
+        nifti_save(b1_rsos, img_aff=affine, path_to_dir=path, file_name="rsos_reg_b1_estimate")
+        nifti_save(b1_map_rsos, img_aff=affine, path_to_dir=path, file_name="rsos_reg_b1_smoothed")
 
-            b1_rsos[start:end, :, idx_z] = batch_t1t2b1b0_vals[..., 2].cpu()
-            l2_res_rsos[start:end, :, idx_z] = vals
+        b1_map = torch.from_numpy(
+            nifti_load(path.joinpath("rsos_reg_b1_smoothed").with_suffix(".nii"))[0]
+        ).unsqueeze(-1).expand(b1.shape)
+    else:
+        b1_map = torch.from_numpy(nifti_load(path_in_b1)[0])
+        if b1_map.max() > 10:
+            b1_map /= 100
+        if settings.process_slice:
+            b1_map = b1_map[:, :, b1_map.shape[2] // 2, None]
+        while b1_map.shape.__len__() < data_normed.shape.__len__() - 1:
+            b1_map = b1_map.unsqueeze(-1)
+        b1_map = b1_map.expand(data_normed.shape[:-1])
+        b1_map_rsos = root_sum_of_squares(b1_map, dim_channel=-1)
 
-    log_module.info("B1 smoothing")
-    b1_map = smooth_map(b1, kernel_size=min(b1.shape[:2]) // 32)
-    b1_map_rsos = smooth_map(b1_rsos, kernel_size=min(b1_rsos.shape[:2]) // 32)
-
-    nifti_save(b1, img_aff=affine, path_to_dir=path, file_name="reg_b1_estimate")
-    nifti_save(b1_map, img_aff=affine, path_to_dir=path, file_name="reg_b1_smoothed")
-    nifti_save(b1_rsos, img_aff=affine, path_to_dir=path, file_name="rsos_reg_b1_estimate")
-    nifti_save(b1_map_rsos, img_aff=affine, path_to_dir=path, file_name="rsos_reg_b1_smoothed")
-
-    b1_map = torch.from_numpy(nifti_load(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/0_phantom_data/2025-05-06/"
-        "estimation/mese_cfa/rsos_reg_b1_smoothed.nii"
-    )[0]).unsqueeze(-1).expand(b1.shape)
     log_module.info("Regularized fit")
     t1t2b0_vals = torch.tensor([
         [t1, t2, b0] for t1 in t1_vals for t2 in t2_vals for b0 in b0_vals
@@ -748,12 +756,11 @@ def main():
     settings.display()
 
     try:
-        fit(settings=settings)
+        fit_mese(settings=settings)
     except Exception as e:
         logging.exception(e)
         parser.print_help()
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    fit_mese()
+    main()
