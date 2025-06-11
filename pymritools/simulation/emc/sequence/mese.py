@@ -35,13 +35,14 @@ class MESE(Simulation):
             kf = self.fig_path.joinpath("kernels")
             kf.mkdir(exist_ok=True)
             for k, v in kernels.items():
-                v.plot(path=kf, name=k, file_suffix="png")
+                v.plot(path=kf, name=k, file_suffix="html")
 
         # excitation
         k = kernels["excitation"]
         # build grad pulse
         self.gp_excitation = GradPulse.prep_from_pulseq_kernel(
-            kernel=k, name="excitation", device=self.device, b1s=self.data.b1_vals, flip_angle_rad=torch.pi/2,
+            kernel=k, name="excitation", device=self.device, b1s=self.data.b1_vals,
+            flip_angle_rad=self.params.excitation_angle / 180 * torch.pi,
         )
         # fill params info
         self.params.duration_excitation = k.rf.t_duration_s * 1e6
@@ -91,8 +92,8 @@ class MESE(Simulation):
         if self.settings.visualize:
             log_module.info("\t - plot grad pulse data")
             self.gp_excitation.plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
-            self.gps_refocus[0].plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
-            self.gps_refocus[1].plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
+            for i in range(min(len(self.gps_refocus), 3)):
+                self.gps_refocus[i].plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
             self.gp_acquisition.plot(b1_vals=self.data.b1_vals, fig_path=self.fig_path)
 
     def _prep_from_params(self):

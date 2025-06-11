@@ -15,6 +15,7 @@ from pymritools.config.rf import RFPulse
 from pymritools.simulation.emc.core import functions
 from pymritools.seqprog.core import Kernel
 from pymritools.utils import plot_gradient_pulse
+
 log_module = logging.getLogger(__name__)
 
 
@@ -40,6 +41,7 @@ class GradPulse:
     """
     Data object to set up RF Pulse (xy axes) and Gradients (along slice dim) and save sampling steps.
     """
+
     def __init__(self,
                  pulse_type: str = 'Excitation',
                  pulse_number: int = 0,
@@ -91,6 +93,7 @@ class GradPulse:
     ):
 
         gamma_pi = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6 * 2 * np.pi
+
         def convert_gradient(grad: torch.Tensor):
             return 1e-3 / physical_constants["proton gyromag. ratio in MHz/T"][0] * grad
 
@@ -108,7 +111,6 @@ class GradPulse:
         num_samples = pulse_shape.shape[0]
         pulse_shape = torch.concatenate((torch.zeros(2, dtype=pulse_shape.dtype), pulse_shape), dim=0)
 
-        rf_duration_us = kernel.rf.t_duration_s * 1e6
         # interpolate the pulse with given sampling steps (should only 0 pad front if sampling steps are equal)
         # rebuild sampling time array with new sampling steps
         t_end_us = np.max([kernel.rf.get_duration(), kernel.grad_slice.get_duration()]) * 1e6
@@ -117,7 +119,6 @@ class GradPulse:
         pulse_shape[t_us > torch.max(pulse_t_us)] = 0.0
         pulse_t_us = t_us
         # normalize pulse shape
-        fa = torch.sum(torch.abs(pulse_shape * gamma_pi)) * dt_set_sampling_steps_us * 1e-6
         pulse = pulse_shape / torch.linalg.norm(torch.abs(pulse_shape))
         # calculate fa of this normed shape
         fa_normed = torch.sum(torch.abs(pulse * gamma_pi)) * dt_set_sampling_steps_us * 1e-6
@@ -134,7 +135,7 @@ class GradPulse:
         instance = cls(
             pulse_type=name, pulse_number=pulse_number, num_sampling_points=num_samples,
             dt_sampling_steps_us=dt_set_sampling_steps_us,
-            duration_us=1e6*np.max([kernel.rf.t_duration_s, kernel.grad_slice.t_duration_s])
+            duration_us=1e6 * np.max([kernel.rf.t_duration_s, kernel.grad_slice.t_duration_s])
         )
         instance.data_grad = gz_amp
         instance.data_pulse_x = pulse.real
@@ -142,7 +143,6 @@ class GradPulse:
         instance._set_float32()
         instance.set_device(device)
         return instance
-
 
     @classmethod
     def prep_grad_pulse_excitation(
@@ -177,7 +177,7 @@ class GradPulse:
                 # when acquiring in k-space along the slice we need to move the k-space start to the corner of k-space
                 # i.e.: prephase half an acquisition gradient moment, put it into the rephase timing
                 gradient_read_pre_phase = params.gradient_acquisition * params.duration_acquisition / \
-                                     (2 * params.duration_excitation_rephase)
+                                          (2 * params.duration_excitation_rephase)
                 # the refocusing will then move to the opposite side of k-space
 
         grad, pulse, duration, area_grad = cls.build_pulse_grad_shapes(
@@ -201,7 +201,7 @@ class GradPulse:
 
     @classmethod
     def prep_grad_pulse_refocus(
-            cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings, b1_vals:torch.Tensor,
+            cls, pulse: RFPulse, params: EmcParameters, settings: EmcSimSettings, b1_vals: torch.Tensor,
             refocus_pulse_number: int, force_sym_spoil: bool = False):
         """
         Prepare a slice selective Refocusing Gradient Pulse
@@ -215,7 +215,7 @@ class GradPulse:
         log_module.debug(f"prep refocusing pulse: {refocus_pulse_number + 1}")
         # -- prep pulse
         # calculate and normalize
-        pulse = cls._set_pulse(pulse,settings=settings, duration_us=params.duration_refocus)
+        pulse = cls._set_pulse(pulse, settings=settings, duration_us=params.duration_refocus)
         rf_pulse = functions.pulse_calibration_integral(
             rf_pulse=pulse,
             flip_angle_deg=params.refocus_angle[refocus_pulse_number], phase=params.refocus_phase[refocus_pulse_number],
