@@ -1,12 +1,17 @@
+import sys
+import pathlib as plib
+path = plib.Path(__name__).absolute().parent
+sys.path.append(path.as_posix())
+
 import json
 import logging
-import pathlib as plib
 
 import torch
 import numpy as np
 import plotly.graph_objects as go
 import plotly.colors as plc
 
+from tests.utils import get_test_result_output_dir, ResultMode
 from pymritools.config.emc import EmcSimSettings, EmcParameters
 from pymritools.simulation.emc.sequence.mese import MESE
 from pymritools.utils.algorithms import DE
@@ -15,46 +20,44 @@ logging.getLogger('pymritools.simulation.emc.core').setLevel(logging.WARNING)
 logging.getLogger('pymritools.simulation.emc.sequence.mese').setLevel(logging.WARNING)
 logging.getLogger('pymritools.simulation.emc.sequence.base_sequence').setLevel(logging.WARNING)
 
+
 def main():
+    # hardcode some of the path and parameters
+    path = plib.Path(__name__).absolute().parent
+    path_out = plib.Path(get_test_result_output_dir("vfa_mese_de", mode=ResultMode.OPTIMIZATION)).joinpath("optim_run")
+    path_out.mkdir(exist_ok=True, parents=True)
     # setup logging
     logging.basicConfig(
         format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
-        datefmt='%I:%M:%S', level=logging.INFO
+        datefmt='%I:%M:%S', level=logging.INFO, filename=path_out.joinpath("log.txt").as_posix(),
+        filemode="w"
     )
-    # hardcode some of the path and parameters
-    path = plib.Path("./optimization/").absolute()
-    path.mkdir(exist_ok=True, parents=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # set some R2s
-    r2 = 3 * torch.exp(0.15 * torch.arange(1, 31))
-    t2 = 1e3 / r2
+    settings_path = path.joinpath("optimization/optim_emc_settings.json")
+    settings = EmcSimSettings.load(settings_path.as_posix())
 
-    # set some params
-    sim_settings = EmcSimSettings(
-        out_path=path.joinpath("optim_sim").as_posix(),
-        t2_list=t2.tolist(),
-        b1_list=[[0.3, 1.7, 0.05]],
-        visualize=False
-    )
-    # sim_settings.display()
+    # we need to fix some path business in the example file
+    for key, val in settings.__dict__.items():
+        if key.endswith("file"):
+            p = path.joinpath(val)
+            settings.__setattr__(key, p.as_posix())
 
-    params = EmcParameters(
-        etl=6, esp=7.37, bw=350, gradient_excitation=-32.21,
-        duration_excitation=2000, gradient_excitation_rephase=-23.324,
-        duration_excitation_rephase=380,
-        gradient_refocus=-17.179, duration_refocus=2500,
-        gradient_crush=-42.274, duration_crush=1000,
-        sample_number=1000
-    )
+    settings.display()
+    # testing: set set to simulate low
+    # settings.t2_list = [35, 45, 55, 65]
+    # settings.b1_list = [0.5, 1.0]
+
+    params = EmcParameters.load(settings.emc_params_file)
 
     # setup fas
-    bounds = torch.tensor([60, 140], device=device)
+    bounds = torch.tensor([85, 140], device=device)
+    lam_snr = 0.98
     de = DE(
-        param_dim=6,
+        param_dim=8,
         data_dim=1,
-        population_size=10,
+        population_size=12,
         p_crossover=0.9,
         differential_weight=0.8,
         max_num_iter=100,
@@ -76,14 +79,15 @@ def main():
             params.refocus_angle = fa.tolist()
 
             # build sim object
-            mese = MESE(params=params, settings=sim_settings)
+            mese = MESE(params=params, settings=settings)
             mese.simulate()
 
             # compute losses
-            sar = torch.sqrt(torch.sum((fa / 180 * torch.pi)**2))
+            sar = torch.sqrt(torch.sum((torch.tensor(fas) / 180 * torch.pi) ** 2))
             snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean()
             # minimize sar, maximize snr, with a minimizing total loss
-            losses[idx_fa] = sar - 5 * snr
+
+            losses[idx_fa] = (1.0 - lam_snr) * sar - lam_snr * snr
         losses = torch.reshape(losses, shape[:-1])
         return losses
 
@@ -91,8 +95,6 @@ def main():
 
     optim_fa, progress = de.optimize()
     optim_fa = bounds[0] + torch.diff(bounds) * optim_fa
-
-    path = plib.Path(__name__).absolute().parent
 
     fig = go.Figure()
     colors = plc.sample_colorscale("viridis", np.linspace(0, 1, len(progress)))
@@ -102,11 +104,11 @@ def main():
         fig.add_trace(
             go.Scattergl(y=f[0].cpu().numpy(), line=dict(width=1), marker=dict(color=colors[idx_f]))
         )
-    fig_path = path.joinpath("de_progress").with_suffix(".html")
+    fig_path = path_out.joinpath("de_progress").with_suffix(".html")
     logging.info(f"Save file: {fig_path}")
     fig.write_html(fig_path.as_posix())
 
-    file_path = path.joinpath("de_optim_fa").with_suffix(".json")
+    file_path = path_out.joinpath("de_optim_fa").with_suffix(".json")
     logging.info(f"optimized fa: {optim_fa}")
     logging.info(f"Save file: {file_path}")
     with open(file_path.as_posix(), "w") as f:
