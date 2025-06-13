@@ -742,7 +742,7 @@ class Kernel:
         )
         return cls(system=system, grad_slice=grad_slice, grad_phase=grad_phase, grad_read=grad_read_spoil)
 
-    def plot(self, path: typing.Union[str, plib.Path], name: str = "", file_suffix: str = "png"):
+    def plot(self, path: typing.Union[str, plib.Path], name: str = "", file_suffix: str = "html"):
         # want to capture all different event data and plot
         fig = psub.make_subplots(
              specs=[[{"secondary_y": True}]]
