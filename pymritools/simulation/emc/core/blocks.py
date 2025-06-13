@@ -121,7 +121,7 @@ class GradPulse:
         # normalize pulse shape
         pulse = pulse_shape / torch.linalg.norm(torch.abs(pulse_shape))
         # calculate fa of this normed shape
-        fa_normed = torch.sum(torch.abs(pulse * gamma_pi)) * dt_set_sampling_steps_us * 1e-6
+        fa_normed = torch.sum(torch.abs(pulse)) * gamma_pi * dt_set_sampling_steps_us * 1e-6
         # adjust to actual fa
         pulse = flip_angle_rad / fa_normed * pulse
 
