@@ -53,14 +53,14 @@ class MESE(Simulation):
         self.gps_refocus = [
             GradPulse.prep_from_pulseq_kernel(
                 kernel=k, name="refocus", pulse_number=0, device=self.device, b1s=self.data.b1_vals,
-                flip_angle_rad=self.params.refocus_angle[0] / 180 * torch.pi
+                flip_angle_rad=self.params.refocus_angle[0] / 180.0 * torch.pi
             )
         ]
         k = kernels["refocus"]
         self.gps_refocus.extend([
             GradPulse.prep_from_pulseq_kernel(
                 kernel=k, name="refocus", pulse_number=rfi+1, device=self.device, b1s=self.data.b1_vals,
-                flip_angle_rad=self.params.refocus_angle[rfi+1] / 180 * torch.pi
+                flip_angle_rad=self.params.refocus_angle[rfi+1] / 180.0 * torch.pi
             ) for rfi in range(self.params.etl-1)
         ])
         # fill params info
@@ -115,7 +115,6 @@ class MESE(Simulation):
                 b1_vals=self.data.b1_vals,
             )
             self.gps_refocus.append(gp_refocus)
-
 
     def _set_device(self):
         # set devices
