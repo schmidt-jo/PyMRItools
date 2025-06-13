@@ -86,6 +86,10 @@ class Simulation(abc.ABC):
         """ sequence specific timing objects """
 
     def set_pulse(self):
+        if plib.Path(self.settings.kernel_file).is_file():
+            msg = f"Kernel file provided, pulse shape deduced from kernels."
+            log_module.info(msg)
+            return NotImplemented
         if not self.settings.pulse_file:
             err = f"provide pulse file or set shape using the RFPulse object in 'pymritools.config.rf'"
             log_module.error(err)
@@ -126,15 +130,14 @@ class Simulation(abc.ABC):
     def save(self):
         db = DB.from_simulation_data(params=self.params, sim_data=self.data)
 
-        if self.settings.config_file:
-            c_name = plib.Path(self.settings.config_file).absolute().stem
-        else:
-            c_name = "emc_config"
-
         save_path = plib.Path(self.settings.out_path).absolute()
-        save_file = save_path.joinpath(c_name).with_suffix(".json")
+        save_file = save_path.joinpath("emc_settnigs").with_suffix(".json")
         logging.info(f"Save Config File: {save_file.as_posix()}")
         self.settings.save_json(save_file.as_posix(), indent=2)
+
+        save_file = save_path.joinpath("emc_params").with_suffix(".json")
+        logging.info(f"Save Params File: {save_file.as_posix()}")
+        self.params.save_json(save_file.as_posix(), indent=2)
 
         # database
         save_file = save_path.joinpath(self.settings.database_name)
