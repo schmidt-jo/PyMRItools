@@ -10,7 +10,7 @@ from scipy.ndimage import binary_erosion
 
 from pymritools.config.processing import DenoiseSettingsMPPCA
 from pymritools.utils import nifti_load, nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load
-from pymritools.recon.loraks_dev.matrix_indexing import get_linear_indices
+from pymritools.recon.loraks.matrix_indexing import get_linear_indices
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from pymritools.config import setup_program_logging, setup_parser
 from autodmri import estimator
