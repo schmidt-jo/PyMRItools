@@ -38,7 +38,6 @@ def main():
         path_in = plib.Path(settings.input_file).absolute()
         input_data, input_img = nifti_load(settings.input_file)
 
-
         data_unring = gibbs_unring_nd(
             image_data_nd=torch.from_numpy(input_data), visualize=False, gpu=True,
             m=settings.num_shifts_per_voxel, k=settings.voxel_neighborhood_size
@@ -46,7 +45,7 @@ def main():
 
         # save data
         nifti_save(
-            data=data_unring, img_aff=input_img,
+            data=data_unring.abs(), img_aff=input_img,
             path_to_dir=settings.out_path, file_name=f"ur_{path_in.stem}"
         )
     except Exception as e:
