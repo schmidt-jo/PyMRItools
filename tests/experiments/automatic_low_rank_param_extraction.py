@@ -6,9 +6,10 @@ import plotly.subplots as psub
 import plotly.colors as plc
 
 from pymritools.utils import Phantom
-from pymritools.recon.loraks_dev.operators import c_operator, s_operator
-from pymritools.recon.loraks_dev.matrix_indexing import get_all_idx_nd_square_patches_in_nd_shape
+from pymritools.recon.loraks.operators import c_operator, s_operator
+from pymritools.recon.loraks.matrix_indexing import get_linear_indices
 from tests.utils import get_test_result_output_dir
+
 
 def test_automatic_low_rank_param_extraction():
     shape = (256, 256, 6, 3)
