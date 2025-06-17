@@ -305,6 +305,10 @@ class DE:
             # get best agents within population
             agents_min = torch.min(fitness_agents, dim=-1)
             best_agent = agents[torch.arange(self.data_dim), agents_min.indices]
+
+            # do a sneaky print to bypass logging (unsure when log file is created.
+            # if it crashes or we interrupt we still can read off the last besst agent
+            print(f"current best agent: {best_agent}")
             # calculate convergence as max difference between best agent to last iteration.
             convergence = torch.linalg.norm(torch.max(fitness_agents, dim=-1).values)
             # ToDo: think about reducing the number of agents to process based on convergence criterion.
