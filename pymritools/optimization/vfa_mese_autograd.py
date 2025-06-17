@@ -13,6 +13,7 @@ import torch
 import tqdm
 from scipy.constants import physical_constants
 import plotly.graph_objects as go
+import plotly.colors as plc
 
 from pymritools.simulation.emc.sequence.mese import MESE
 
@@ -44,7 +45,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    settings_path = path.joinpath("optimization/optim_emc_settings_ag.json")
+    settings_path = path.joinpath("optimization/optim_emc_settings.json")
     settings = EmcSimSettings.load(settings_path.as_posix())
     settings.visualize = False
 
@@ -55,7 +56,7 @@ def main():
             settings.__setattr__(key, p.as_posix())
 
     settings.display()
-    # testing: set set to simulate low
+    # testing: set to simulate low number of vals
     # settings.t2_list = [35, 45, 55, 65]
     # settings.b1_list = [0.5, 1.0]
     params = EmcParameters.load(settings.emc_params_file)
@@ -63,8 +64,8 @@ def main():
     pulse_x = [mese.gps_refocus[i].data_pulse_x for i in range(len(mese.gps_refocus))]
     pulse_y = [mese.gps_refocus[i].data_pulse_y for i in range(len(mese.gps_refocus))]
     # setup fas
-    bounds = torch.tensor([85, 140], device=device)
-    lam_snr = 0.95
+    lam_snr = 0.2
+    # lam_corr = 1e-5
 
     fa_ref = torch.full((params.etl,), fill_value=0.8, device="cpu", requires_grad=True)
     fa_0 = torch.tensor(params.refocus_angle)
@@ -72,16 +73,17 @@ def main():
     losses = []
     losses_snr = []
     losses_sar = []
+    losses_corr = []
     fas = []
 
-    max_num_iter = 100
-    lr = torch.linspace(2, 5e-2, max_num_iter)
+    max_num_iter = 50
+    lr = torch.linspace(1, 5e-2, max_num_iter)
 
     conv_count = 0
     bar = tqdm.trange(max_num_iter)
     for idx in bar:
-        sar = torch.sqrt(torch.sum((fa_ref / 180.0 * torch.pi) ** 2))
-
+        # easy sar loss
+        sar = torch.sum(torch.abs(fa_ref))
         # set up data, carrying through simulation
         mese.data = SimulationData(params=mese.params, settings=mese.settings, device=mese.device)
 
@@ -90,10 +92,19 @@ def main():
             mese.gps_refocus[i].data_pulse_y = pulse_y[i] * fa_ref[i]
         mese.simulate()
         # compute losses
-        snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean()
+        # maximize signal
+        snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean() * 10
+        # minimize correlations between r2 curves
+        curves = torch.squeeze(mese.data.signal_mag)
+        curves = curves / torch.linalg.norm(curves, dim=-1, keepdim=True)
+        curves = curves.view(curves.shape[0], -1)
+        num_c = curves.shape[-1]
+        # corr = torch.corrcoef(curves) / num_c
+        # corr = torch.sum(corr+1)
+        corr = torch.zeros(1)
         # minimize sar, maximize snr, with a minimizing total loss
 
-        loss = (1.0 - lam_snr) * sar - lam_snr * snr
+        loss = lam_snr * snr + (1.0 - lam_snr) * sar
         loss.backward()
         with torch.no_grad():
             fa_ref -= lr[idx] * fa_ref.grad
@@ -102,12 +113,13 @@ def main():
 
         pr = {
             "loss": f"{loss.item():.4f}", "sar": f"{sar.item():.4f}", "snr": f"{snr.item():.4f}",
-            "convergence": f"{convergence:.4f}"
+            "corr": f"{corr.item():.4f}", "convergence": f"{convergence:.4f}"
         }
         bar.postfix = pr
         losses.append(loss.item())
         losses_snr.append(snr.item())
         losses_sar.append(sar.item())
+        losses_corr.append(corr.item())
         if convergence < 1e-5:
             conv_count += 1
             if conv_count > 3:
@@ -137,10 +149,11 @@ def main():
     logging.info(f"Write file: {fn}")
     df_losses.write_json(fn.as_posix())
 
+    cmap = plc.sample_colorscale("Inferno", fas.shape[0], 0.1, 0.9)
     fig = go.Figure()
     for i, fa in enumerate(fas):
         fig.add_trace(
-            go.Scatter(y=fa, showlegend=False)
+            go.Scatter(y=fa, showlegend=False, marker=dict(color=cmap[i]))
         )
     fn = path_out.joinpath("fa_optimization").with_suffix(".html")
     logging.info(f"Write file: {fn}")
