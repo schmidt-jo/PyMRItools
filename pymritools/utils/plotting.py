@@ -2,6 +2,7 @@ import numpy as np
 import polars as pl
 import plotly.graph_objects as go
 import plotly.subplots as psub
+import plotly.colors as plc
 import torch
 import logging
 import pathlib as plib
@@ -17,28 +18,56 @@ def plot_gradient_pulse(
     # calculate complex pulse shape
     p_cplx = pulse_x + 1j * pulse_y
 
-    # get magnitude and phase
-    p_abs = torch.abs(p_cplx)
-    p_phase = torch.angle(p_cplx) / torch.pi
-
     # set up figure
     fig = psub.make_subplots(
         rows=2, cols=1,
         specs=[[{"secondary_y": True}], [{}]]
     )
-    for k in range(pulse_x.shape[0]):
+    if p_cplx.shape.__len__() > 1 and p_cplx.shape[-1] > 1:
+        cmap = plc.sample_colorscale("Inferno", p_cplx.shape[0], 0.1, 0.9)
+    else:
+        cmap = plc.sample_colorscale("Inferno", 2, 0.6, 0.8)
+    for i, p in enumerate(p_cplx):
+        p_abs = torch.abs(p)
         fig.add_trace(
-            go.Scatter(x=x_ax, y=p_abs[k], name=f"p magnitude, b1: {b1_vals[k]:.2f}"),
+            go.Scatter(
+                x=x_ax, y=p_abs,
+                marker=dict(color=cmap[i]),
+                showlegend=False
+            ),
             row=1, col=1,
             secondary_y=False
         )
-        fig.add_trace(
-            go.Scatter(x=x_ax, y=p_phase[k], name=f"p phase [pi], b1: {b1_vals[k]:.2f}"),
-            row=1, col=1,
-            secondary_y=True
-        )
+
     fig.add_trace(
-        go.Scatter(x=x_ax, y=grad_z, name="slice grad", fill="tozeroy"),
+        go.Scatter(
+            x=x_ax, y=p_cplx[0].angle(),
+            showlegend=False, marker=dict(color="cadetblue"),
+        ),
+        row=1, col=1,
+        secondary_y=True
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[None], y=[None], showlegend=False,
+            marker=dict(
+                size=15,
+                cmin=b1_vals.min().item(),
+                cmax=b1_vals.max().item(),
+                colorscale="Inferno",
+                colorbar=dict(title="B1+", thickness=10),
+                showscale=True,
+            )
+        ),
+        row=1, col=1,
+        secondary_y=True
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x_ax, y=grad_z,
+            marker=dict(color="cadetblue"),
+            name="slice grad", fill="tozeroy", showlegend=False
+        ),
         row=2, col=1
     )
     fig['layout']['title']['text'] = "Pulse - Gradient"
