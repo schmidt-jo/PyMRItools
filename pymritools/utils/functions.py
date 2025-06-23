@@ -7,12 +7,12 @@ def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Te
     Interpolates a function fp at points xp in a multidimensional context
 
     Parameters:
-    x (torch.Tensor): Tensor of the new sampling points with shape [batch, a, b]
-    xp (torch.Tensor): 1D Tensor of original sample points with shape [c]
-    fp (torch.Tensor): 2D Tensor of function values at xp with shape [a, c]
+    x: Tensor of the new sampling points with shape [batch, a, b]
+    xp: 1D Tensor of original sample points with shape [c]
+    fp: 2D Tensor of function values at xp with shape [a, c]
 
     Returns:
-    torch.Tensor: Interpolated values with shape [batch, a, b]
+        Interpolated values with shape [batch, a, b]
     """
     while len(x.shape) < 3:
         # in case there is no batch dim we fill
@@ -36,8 +36,7 @@ def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Te
 
 def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.Tensor):
     """
-    Normalizes input tensor along a specified dimension using its L2-norm and handles cases
-    with NaN or infinity values.
+    Normalizes input tensor along a specified dimension using its L2-norm and handles cases with NaN or infinity values.
 
     Args:
         data: Input tensor to be normalized.
@@ -60,20 +59,17 @@ def fft_to_img(
         input_data: np.ndarray | torch.Tensor,
         dims: tuple | int = (-1, -2)) -> (np.ndarray | torch.Tensor):
     """
-    Performs an N-dimensional Fourier transform on the input tensor or array, with appropriate 
-    shifting to move the zero-frequency component to the center. This is useful for converting 
-    frequency domain data to an image representation or for processing data that has been stored 
-    in the Fourier domain.
+    Performs an N-dimensional Fourier transform on the input tensor or array, with appropriate shifting to move the
+    zero-frequency component to the center. This is useful for converting frequency domain data to an image
+    representation or for processing data that has been stored in the Fourier domain.
 
     Args:
         input_data: The input data to be transformed.
-        dims: The dimensions over which the FFT operation should be applied.
-            Defaults to (-1, -2).
+        dims: The dimensions over which the FFT operation should be applied. Defaults to (-1, -2).
 
     Returns:
-        np.ndarray | torch.Tensor: The transformed data with zero-frequency components shifted 
-        to the center. The output format matches the type of the input (`np.ndarray` if input 
-        is a NumPy array, `torch.Tensor` if input is a PyTorch tensor).
+        The transformed data with zero-frequency components shifted to the center.
+        The output matches the type of the input.
     """
     if isinstance(dims, int):
         dims = (dims,)
@@ -148,7 +144,7 @@ def root_sum_of_squares(input_data: np.ndarray | torch.Tensor, dim_channel: int 
 
     Args:
         input_data: The input data to compute the RSS for.
-        dim_channel (int, optional): The dimension along which to compute the RSS. Defaults to -1.
+        dim_channel: The dimension along which to compute the RSS. Defaults to -1.
 
     Returns:
         The computed root sum of squares. The output type is the same as the input type.
@@ -173,9 +169,8 @@ def gaussian_window(size: int, sigma: float, center: int = None) -> torch.Tensor
     """
     Creates a 1-dimensional Gaussian window.
 
-    The function generates a Gaussian window of a given size with a specified
-    standard deviation (sigma). Optionally, the user can provide the center
-    of the Gaussian; if not provided, the center is calculated as the middle
+    The function generates a Gaussian window of a given size with a specified standard deviation (sigma).
+    Optionally, the user can provide the center of the Gaussian; if not provided, the center is calculated as the middle
     of the window.
 
     Args:
@@ -185,10 +180,7 @@ def gaussian_window(size: int, sigma: float, center: int = None) -> torch.Tensor
             on the size.
 
     Returns:
-        torch.Tensor: A 1-dimensional tensor representing the Gaussian window.
-
-    Raises:
-        None
+        A 1-dimensional tensor representing the Gaussian window.
     """
     if center is None:
         center = int(np.round(size / 2))
