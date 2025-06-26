@@ -9,6 +9,7 @@ from .matrix_indexing import (
 )
 from .algorithms import cgd, randomized_svd
 from .phantom import Phantom
+from . import colormaps
 
 __all__ = [
     "root_sum_of_squares", "fft_to_img", "ifft_to_k", "gaussian_2d_kernel",
@@ -22,5 +23,5 @@ __all__ = [
     "get_idx_2d_rectangular_neighborhood_patches_in_shape",
     "get_idx_2d_square_neighborhood_patches_in_shape",
     "get_idx_2d_circular_neighborhood_patches_in_shape",
-    "cgd", "randomized_svd", "Phantom"
+    "cgd", "randomized_svd", "Phantom", "colormaps"
 ]
