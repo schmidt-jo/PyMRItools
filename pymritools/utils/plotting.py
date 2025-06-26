@@ -340,6 +340,7 @@ def animation_volumetric_data(
             yaxis=dict(title=y_ax_title),
             aspectratio=dict(x=1, y=1, z=0.5),
         ),
+        margin=dict(t=50, b=20, l=20, r=20),
         updatemenus=[
             {
                 "buttons": [
