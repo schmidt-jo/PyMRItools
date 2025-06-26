@@ -7,6 +7,7 @@ import torch
 import logging
 import pathlib as plib
 from pymritools.config.emc.params import SimulationData
+from pymritools.utils.colormaps import check_colormap_available, get_colormap, show_available_colormaps
 
 log_module = logging.getLogger(__name__)
 
@@ -255,3 +256,124 @@ def plot_slice_img_tensor(slice_image_tensor: torch.Tensor, sim_data: Simulation
     # fig_file = out_path.joinpath(f"plot_slice_sampling_img_tensor{name}{name_extend}").with_suffix(".html")
     # log_module.info(f"writing file: {fig_file.as_posix()}")
     # fig.write_html(fig_file.as_posix())
+
+
+def animation_volumetric_data(
+        data_xyz: torch.Tensor, cmax: int,
+        path_out: str | plib.Path, file_name: str,
+        cmap: str = "Inferno", title: str = "",
+        cmin: int = 0, width: int = 800, height: int = 800,
+        x_ax_title: str = "A-P", y_ax_title: str = "R-L", z_ax_title: str = "I-S",
+        file_suffix: str = "html"):
+
+    # check colormaps
+    if check_colormap_available(name=cmap):
+        colorscale = get_colormap(name=cmap)
+    elif cmap in plc.named_colorscales():
+        colorscale = plc.get_colorscale(cmap)
+    else:
+        msg = (f"colormap ({cmap}) not available as plotly colorscale or in the ScientificColorMap8 package. "
+               f"Available scales:\nplotly :: {plc.named_colorscales()}\nscientific colorscale ::"
+               f" {show_available_colormaps()}")
+        log_module.error(msg)
+        raise ValueError(msg)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Surface(
+            z=torch.zeros_like(data_xyz[..., 0]),
+            colorscale=colorscale,
+            cmin=cmin, cmax=cmax,
+            colorbar=dict(thickness=20, ticklen=4, title=title)
+        )
+    )
+
+    def frame_args(duration):
+        return {
+            "frame": {"duration": duration},
+            "mode": "immediate",
+            "fromcurrent": True,
+            "transition": {"duration": duration, "easing": "linear"},
+        }
+
+    sliders = [
+        {
+            "pad": {"b": 10, "t": 60},
+            "len": 0.9,
+            "x": 0.1,
+            "y": 0,
+            "steps": [
+                {
+                    "args": [[f.name], frame_args(0)],
+                    "label": str(k),
+                    "method": "animate",
+                }
+                for k, f in enumerate(fig.frames)
+            ],
+        }
+    ]
+
+    nx, ny, nz = data_xyz.shape
+    frames = [
+        go.Frame(
+            data=go.Surface(
+                z=(nz - k) * torch.ones((nx, ny)),
+                surfacecolor=data_xyz[:, :, -(k + 1)],
+                cmin=cmin, cmax=cmax
+            ),
+            name=str(k)  # you need to name the frame for the animation to behave properly
+        ) for k in range(nz)
+    ]
+
+    fig.update(frames=frames)
+    # Layout
+    fig.update_layout(
+        title=title,
+        width=width,
+        height=height,
+        scene=dict(
+            zaxis=dict(
+                range=[-0.1, 1.005 * nz], autorange=False,
+                title=z_ax_title
+            ),
+            xaxis=dict(title=x_ax_title),
+            yaxis=dict(title=y_ax_title),
+            aspectratio=dict(x=1, y=1, z=0.5),
+        ),
+        updatemenus=[
+            {
+                "buttons": [
+                    {
+                        "args": [None, frame_args(50)],
+                        "label": "&#9654;",  # play symbol
+                        "method": "animate",
+                    },
+                    {
+                        "args": [[None], frame_args(0)],
+                        "label": "&#9724;",  # pause symbol
+                        "method": "animate",
+                    },
+                ],
+                "direction": "left",
+                "pad": {"r": 10, "t": 70},
+                "type": "buttons",
+                "x": 0.1,
+                "y": 0,
+            }
+        ],
+        sliders=sliders
+    )
+    if "." not in file_suffix:
+        file_suffix = f".{file_suffix}"
+
+    fn = path_out.joinpath(file_name).with_suffix(file_suffix)
+    log_module.info(f"Write file {fn}")
+
+    if file_suffix == ".html":
+        fig.write_html(fn)
+    elif file_suffix in [".svg", ".png", ".pdf"]:
+        fig.write_image(fn)
+    else:
+        msg = f"file suffix ({file_suffix}) not supported. Choose from (html, svg, png, pdf)"
+        log_module.error(msg)
+        raise ValueError(msg)
