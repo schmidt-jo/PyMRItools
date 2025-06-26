@@ -7,7 +7,7 @@ import numpy as np
 from scipy.ndimage import zoom, gaussian_filter
 import torch
 
-from pymritools.utils import fft_to_img, gaussian_2d_kernel
+from pymritools.utils import fft_to_img, gaussian_2d_kernel, ifft_to_k
 
 log_module = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ class Phantom:
 
     def get_2d_k_space(self) -> torch.Tensor:
         im = self.get_2d_image()
-        return fft_to_img(input_data=im, dims=(0, 1))
+        return ifft_to_k(input_data=im, dims=(0, 1))
 
     # __ subsampling
     def sub_sample_ac_skip_lines(self, acceleration: int, ac_lines: int) -> torch.Tensor:
