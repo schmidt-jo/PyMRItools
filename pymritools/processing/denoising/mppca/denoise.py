@@ -58,7 +58,7 @@ def load_data(settings: DenoiseSettingsMPPCA):
         # if input is k-space data we convert to img space
         # loop over dim slices, batch dim channels
         logging.info(f"fft to image space")
-        input_data = ifft_to_k(input_data, dims=(0, 1))
+        input_data = fft_to_img(input_data, dims=(0, 1))
 
     return input_data, input_img
 
