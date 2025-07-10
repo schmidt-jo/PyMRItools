@@ -259,5 +259,6 @@ def create_phantom(shape_xyct: Tuple, acc: float = 3.0, ac_lines: int = 24):
     phantom = Phantom.get_shepp_logan(
         shape=shape_xyct[:2], num_coils=shape_xyct[-2], num_echoes=shape_xyct[-1]
     )
-    return phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=ac_lines)
-
+    k_us = phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=ac_lines)
+    k = phantom.get_2d_k_space()
+    return k, k_us
