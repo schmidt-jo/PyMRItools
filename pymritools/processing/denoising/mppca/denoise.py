@@ -219,7 +219,7 @@ def core_iteration(data_batch_b_nv_m: torch.Tensor,
     if p > 0:
         # we use the p first singular values
         svs[:, p:] = 0.0
-        num_p = torch.full((b, nv), p, dtype=torch.int)
+        num_p = torch.full((b, nv), p, dtype=torch.int, device=patches.device)
         theta_p = 1 / (1 + num_p)
     else:
         # calculate inequality, 1 batch dimensions!
@@ -246,7 +246,7 @@ def core_iteration(data_batch_b_nv_m: torch.Tensor,
     # patch_sigma *= manjon_corr_model(local_snr)
     # add mean
     d += patches_mean
-    return d, 2 * theta_p, num_p
+    return d, theta_p, num_p
 
 
 def manjon_corr_model(gamma: float):
@@ -306,7 +306,7 @@ def core_fn(
         d, theta_p, num_p = core_iteration(
             data_batch_b_nv_m=data_b_nv_m, p=p, right_a=right_a, left_b=left_b, r_cumsum=r_cumsum
         )
-        data_denoised[si] = data_denoised[si].view(-1).index_add(0, indices, d.view(-1).cpu())
+        data_denoised[si] = data_denoised[si].view(-1).index_add(0, indices, (theta_p.unsqueeze(-1) * d).view(-1).cpu())
         data_access[si] = data_access[si].view(-1).index_add(0, indices_b, theta_p.view(-1).cpu())
         data_p[si] = data_p[si].view(-1).index_add(0, indices_b, num_p.view(-1).cpu())
     # reshape
