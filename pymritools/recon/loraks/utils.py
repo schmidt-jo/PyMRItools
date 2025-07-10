@@ -148,7 +148,7 @@ def unprepare_batches_to_k_space(
     k_batched = k_batched.permute(0, 2, 3, 1, 4, 5)
     # now dims [bc, ns, nt, ncb, np, nr]
     # allocate out data and use same permutation
-    k_data_out = torch.zeros(original_shape, dtype=k_batched.dtype).permute(3, 4, 2, 1, 0)
+    k_data_out = torch.zeros(original_shape, dtype=k_batched.dtype, device=k_batched.device).permute(3, 4, 2, 1, 0)
     # assign
     k_data_out[batch_channel_indices] = k_batched
     # reverse order
