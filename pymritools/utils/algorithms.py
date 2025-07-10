@@ -134,44 +134,46 @@ def rank_estimator_adaptive_rsvd(
     matrix: torch.Tensor,
     energy_threshold: float = 0.95,
     rank_init_fraction: float = 0.2,
-    p=5, rank_steps: int = 10,
-    rank_max=None,
-    max_num_iter=10000,
-    power_projections: int = 2):
+    oversampling: int = 5, rank_steps: int = 10,
+    rank_max: int = None,
+    max_num_iter: int = 10000,
+    power_projections: int = 2
+):
+
     m, n = matrix.shape[-2:]
     k = int(min(m, n) * rank_init_fraction)
+    if rank_max is None:
+        rank_max = int(min(m, n) * 0.5)
     total_energy = None
 
     for n_iter in range(max_num_iter):
         # Random Gaussian matrix for projection
-        omega = torch.randn(n, k + p, device=matrix.device, dtype=matrix.dtype)
+        omega = torch.randn(n, k + oversampling, device=matrix.device, dtype=matrix.dtype)
         y = torch.matmul(matrix, omega)
 
         # Optional: power iterations for better accuracy (especially if singular values decay slowly)
-        for _ in range(n_iter):
+        for _ in range(power_projections):
             y = torch.matmul(matrix, torch.matmul(matrix.mT, y))
 
         # Orthonormalize (QR decomposition)
         q, _ = torch.linalg.qr(y, mode='reduced')
 
         # Project A to lower-dimensional space
-        b = torch.matmul(q.Tm, matrix)
+        b = torch.matmul(q.mT, matrix)
 
         # SVD on small matrix B
         s = torch.linalg.svdvals(b)
 
         if total_energy is None:
             total_energy = torch.sum(s)
-
         cumulative_energy = torch.cumsum(s, dim=-1) / total_energy
-
         # Check if desired energy threshold is reached
         if torch.any(cumulative_energy >= energy_threshold):
             rank_est = torch.nonzero(cumulative_energy >= energy_threshold, as_tuple=False)[0].item() + 1
             return rank_est, s.cpu()
 
         k += rank_steps
-        if rank_max is not None and k > rank_max:
+        if k > rank_max:
             break
 
     return k, s.cpu()
