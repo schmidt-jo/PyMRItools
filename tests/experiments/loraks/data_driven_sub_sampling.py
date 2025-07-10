@@ -2,12 +2,17 @@
 Sketch for optimizing the sampling scheme from torch autograd gradient loraks reconstruction of fully sampled data
 
 """
+import pickle
+import sys
 import logging
 import pathlib as plib
+from enum import Enum, auto
 from typing import Tuple
+import json
 
 import torch
-from pymritools.recon.loraks.loraks import Loraks, OperatorType
+from pymritools.recon.loraks.loraks import Loraks, OperatorType, RankReduction, RankReductionMethod
+from pymritools.recon.loraks.p_loraks import PLoraksOptions, LowRankAlgorithmType
 from pymritools.recon.loraks.utils import (
     prepare_k_space_to_batches, pad_input, unprepare_batches_to_k_space, unpad_output,
     check_channel_batch_size_and_batch_channels
@@ -15,6 +20,8 @@ from pymritools.recon.loraks.utils import (
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, m_op_base
 from pymritools.utils.functions import fft_to_img
 from pymritools.utils import torch_load, Phantom, torch_save
+p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
+sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
 
 import plotly.graph_objects as go
@@ -22,6 +29,24 @@ import plotly.subplots as psub
 import plotly.colors as plc
 
 logger = logging.getLogger(__name__)
+
+
+class TorchEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if torch.is_tensor(obj):
+            return obj.tolist()
+        return super().default(obj)
+
+
+class DataType(Enum):
+    SHEPPLOGAN = auto()
+    PHANTOM = auto()
+    INVIVO = auto()
+
+
+class LoraksType(Enum):
+    P = auto()
+    AC = auto()
 
 
 class AdaptiveSampler:
@@ -81,6 +106,7 @@ class AdaptiveSampler:
         return any(abs(point - ex) < radius for ex in existing_points)
 
 
+#__ methods for autograd LORAKS iteration & prep
 def prep_k_space(k: torch.Tensor, batch_size_channels: int = -1):
     # we need to prepare the k-space
     batch_channel_idx = check_channel_batch_size_and_batch_channels(
@@ -100,27 +126,81 @@ def unprep_k_space(k: torch.Tensor, padding: Tuple[int, int], batch_idx: torch.t
         k_batched=k, batch_channel_indices=batch_idx, original_shape=input_shape
     )
 
+#__ variant specific optimization functions
+def autograd_optimization_p(k: torch.Tensor,
+        rank: int, batch_size_channels: int,
+        max_num_iter=500, regularization_lambda=0.0, operator_type=OperatorType.S,
+        device: torch.device = torch.get_default_device()):
+    # P specific things
+    rank_reduction = RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=rank)
+    options = PLoraksOptions(
+        loraks_matrix_type=operator_type,
+        rank=rank_reduction,
+        regularization_lambda=regularization_lambda, batch_size_channels=batch_size_channels,
+        max_num_iter=max_num_iter, patch_shape=(-1, 5, 5), sample_directions=(0, 1, 1),
+        device=device,
+    )
+    loraks = Loraks.create(options)
+    loraks = (loraks.
+              with_rank_reduction(rank_reduction).
+              with_sv_hard_cutoff(q=None, rank=rank_reduction.value).
+              with_lowrank_algorithm(algorithm_type=LowRankAlgorithmType.TORCH_LOWRANK_SVD, q=rank_reduction.value+2)
+              )
+    # we want to do optimization on the fully sampled data
+    prep_k, in_shape, padding, batch_channel_idx = prep_k_space(
+        k.unsqueeze_(2), batch_size_channels=batch_size_channels
+    )
+    grad_pb = torch.zeros_like(prep_k)
+    loraks._initialize(prep_k)
+    # send into one iteration
+    for b, batch_k in enumerate(prep_k):
+        k = batch_k.clone().to(device).requires_grad_()
 
-def create_phantom_data_fs_ac():
-    nx, ny, nc, ne = (156, 140, 4, 2)
-    phantom = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=1).unsqueeze(2)
-    phantom_ac_reg = create_phantom(shape_xyct=(156, 140, 4, 2), acc=30).unsqueeze(2)
-    return phantom, phantom_ac_reg
+        # compute only LR loss
+        loss, _, _ = loraks.loss_func(
+            k_space_candidate=k,
+            indices=loraks.indices, matrix_shape=loraks.matrix_shape,
+            k_sampled_points=torch.zeros_like(k), sampling_mask=torch.zeros_like(k),
+            lam_s=0.0
+        )
+        loss.backward()
+
+        # get gradient
+        grad_pb[b] = k.grad.clone().cpu()
+
+    prep_k = unprep_k_space(prep_k, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
+    grad_pb = unprep_k_space(grad_pb, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
+    ac_mask = unpad_output(ac_mask, padding=padding[:2 * ac_mask.ndim]).mT
+    return grad_pb, prep_k, ac_mask, loraks
 
 
-def autograd_subsampling_optimization(data: torch.Tensor, data_ac: torch.Tensor, rank: int, batch_size_channels: int = -1,):
+def autograd_optimization_ac(
+        k: torch.Tensor,
+        rank: int, batch_size_channels: int, num_ac_lines: int = 36,
+        max_num_iter=500, regularization_lambda=0.0, operator_type=OperatorType.S,
+        device: torch.device = torch.get_default_device()):
+    # AC specific things
+    # create AC options
     options = AcLoraksOptions(
-        solver_type=SolverType.AUTOGRAD, regularization_lambda=0.0, max_num_iter=500,
-        loraks_matrix_type=OperatorType.S, batch_size_channels=batch_size_channels
+        solver_type=SolverType.AUTOGRAD, regularization_lambda=regularization_lambda, max_num_iter=max_num_iter,
+        loraks_matrix_type=operator_type, batch_size_channels=batch_size_channels
     )
     options.rank.value = rank
     loraks = Loraks.create(options=options)
 
-    # set device
-    device = torch.device("cuda:0")
+    # create subsampling to let the algorithm work on the AC region
+    phantom = Phantom.get_shepp_logan(shape=k.shape[:2], num_coils=k.shape[-2], num_echoes=k.shape[-1])
+    tmp = phantom.sub_sample_ac_random_lines(acceleration=6, ac_lines=num_ac_lines)
+    mask = tmp.abs() > 1e-11
+    del tmp
+
+    k_us = k.clone()
+    k_us[~mask] = 0
 
     # we need to prepare the k-space
-    prep_k_ac, in_shape, padding, batch_channel_idx = prep_k_space(k=data_ac, batch_size_channels=batch_size_channels)
+    prep_k_ac, in_shape, padding, batch_channel_idx = prep_k_space(
+        k=k_us.unsqueeze_(2), batch_size_channels=batch_size_channels
+    )
 
     loraks._initialize(k_space=prep_k_ac)
 
@@ -134,7 +214,9 @@ def autograd_subsampling_optimization(data: torch.Tensor, data_ac: torch.Tensor,
     vc, vs = loraks._prepare_batch(batch=batch_ac)
 
     # we want to do the rest of the optimization on the fully sampled data
-    prep_k, in_shape, padding, batch_channel_idx = prep_k_space(data, batch_size_channels=batch_size_channels)
+    prep_k, in_shape, padding, batch_channel_idx = prep_k_space(
+        k.unsqueeze_(2), batch_size_channels=batch_size_channels
+    )
 
     grad_pb = torch.zeros_like(prep_k)
     # send into one iteration
@@ -154,73 +236,11 @@ def autograd_subsampling_optimization(data: torch.Tensor, data_ac: torch.Tensor,
 
     prep_k = unprep_k_space(prep_k, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
     grad_pb = unprep_k_space(grad_pb, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
-    ac_mask = unpad_output(ac_mask, padding=padding[:2*ac_mask.ndim])
-    return grad_pb, prep_k, ac_mask
+    ac_mask = unpad_output(ac_mask, padding=padding[:2 * ac_mask.ndim]).mT
+    return grad_pb, prep_k, ac_mask, loraks
 
 
-def autograd_subsampling_optimization_sl():
-    path = plib.Path(
-        get_test_result_output_dir(autograd_subsampling_optimization_sl, mode=ResultMode.EXPERIMENT)
-    )
-    data, data_ac = create_phantom_data_fs_ac()
-
-    nx, ny, ns, nc, ne = data.shape
-    grad, k, ac_mask = autograd_subsampling_optimization(data=data, data_ac=data_ac, rank=20)
-
-    fig = psub.make_subplots(
-        rows=3, cols=nc * ne,
-        row_titles=["Img", "K-space", "Grad"],
-        vertical_spacing=0.02, horizontal_spacing=0.02
-    )
-    for i, d in enumerate([k.squeeze(), k.squeeze(), grad]):
-        d = d.detach().cpu()
-        if i == 0:
-            d = fft_to_img(d, dims=(-1, -2)).abs()
-        elif i == 1:
-            d = torch.log(d.abs())
-        else:
-            d = d.abs()
-            d = d > 0.9 * d.mean()
-            d = torch.logical_or(d, ac_mask.unsqueeze(0).expand(d.shape))
-            d = d.to(torch.int)
-        zmax = d.abs().max().item() * 0.5
-        for h, e in enumerate(d.cpu()):
-            fig.add_trace(
-                go.Heatmap(
-                    z=e, transpose=True, showlegend=False, showscale=i == 2 and h == 0,
-                    colorscale="Inferno",
-                    # zmin=0, zmax=zmax if i == 2 else None
-                ),
-                row=1 + i, col=1 + h
-            )
-    fig.update_xaxes(visible=False)
-    fig.update_yaxes(visible=False)
-    fn = path.joinpath("plot").with_suffix(".html")
-    print(f"Write file: {fn}")
-    fig.write_html(fn)
-
-
-def autograd_subsampling_optimization_iv():
-    # load input data fully sampled
-    path = plib.Path(
-        get_test_result_output_dir(subsampling_optimization, mode=ResultMode.EXPERIMENT)
-    )
-
-    k = torch_load(path.joinpath("fs_data_slice.pt"))
-
-    # create sub-sampling schemes
-    nx, ny, nc, ne = k.shape
-    phantom = Phantom.get_shepp_logan(shape=(ny, nx), num_coils=nc, num_echoes=ne)
-    phantom_ac = phantom.sub_sample_ac_random_lines(acceleration=6, ac_lines=36).permute(1, 0, 2, 3)
-    mask = phantom_ac.abs() > 1e-10
-
-    k_us = k.clone()
-    k_us[~mask] = 0
-
-    grad, k, ac_mask = autograd_subsampling_optimization(
-        data=k.unsqueeze_(2), data_ac=k_us.unsqueeze_(2), rank=150, batch_size_channels=8
-    )
-
+def extract_sampling_density(grad: torch.Tensor, ac_mask: torch.Tensor):
     # we now have the gradients for all channels and echoes.
     # we want to compute a sampling scheme per echo in the following way
     # take the AC region per default
@@ -230,7 +250,7 @@ def autograd_subsampling_optimization_iv():
     grad_am_cm = grad.abs().mean(dim=-2).squeeze()
     # we sum across the readout direction - and get rid here of the singular slice.
     # we can take this to a per slice sampling scheme if we wanted to
-    grad_am = torch.sum(grad_am_cm, dim=1)
+    grad_am = torch.sum(grad_am_cm, dim=0)
     # now we have an "importance" score per phase encode point, per echo.
 
     # remove ac indices
@@ -239,7 +259,184 @@ def autograd_subsampling_optimization_iv():
     grad_mac = grad_am.clone()
     grad_mac[indices_ac] = 0
     sampling_density = grad_mac / grad_mac.sum(dim=0)
-    torch_save(sampling_density, path_to_file=path, file_name="sampling_density_data.pt")
+    return sampling_density, grad_mac, indices_ac
+
+
+def built_optimized_sampling_mask(acceleration: int, grad_mac: torch.Tensor, indices_ac: torch.Tensor, shape: tuple):
+    n_phase = grad_mac.shape[0]
+    n_echoes = grad_mac.shape[-1]
+    # calculate how many we want
+    n_sub = (n_phase - len(indices_ac)) // acceleration
+
+    # we now want to draw from the indexes to keep, using the gradient function as sampling distribution per echo.
+    # additionally we want to maximize the distribution to neighboring points across phase encodes and echoes.
+    adaptive_sampler = AdaptiveSampler(p=grad_mac)
+    us_idxs = adaptive_sampler.sample(n_sub, repulsion_radius=acceleration // 2)
+    indices_sub = torch.concatenate((indices_ac[None,].expand(n_echoes, -1), us_idxs), dim=1)
+
+    # reset size
+    mask_sub = torch.zeros(n_phase, n_echoes)
+    for i in range(n_echoes):
+        mask_sub[indices_sub[i], i] = 1
+    mask_sub = mask_sub[None, :, None, :].expand(shape).to(torch.int)
+    return mask_sub
+
+
+#__ misc functionalities
+def load_data(data_type: DataType):
+    match data_type:
+        case DataType.SHEPPLOGAN:
+            # set some shapes
+            nx, ny, nc, ne = (156, 140, 4, 2)
+            k = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=1).unsqueeze(2)
+            bet = None
+        case DataType.PHANTOM:
+            raise NotImplementedError("Phantom data not yet provided")
+        case DataType.INVIVO:
+            # load input data fully sampled
+            path = plib.Path(
+                get_test_result_output_dir(f"data", mode=ResultMode.EXPERIMENT)
+            )
+            k = torch_load(path.joinpath("fs_data_slice.pt"))
+            # ensure read dimension is correct
+            k = torch.swapdims(k, 0, 1)
+            bet = torch_load(path.joinpath("bet.pt"))
+        case _:
+            raise ValueError(f"Data Type {data_type.name} not supported")
+    return k, bet
+
+
+def create_subsampling_masks(shape):
+    # create sub-sampling schemes
+    nx, ny, nc, ne = shape
+    phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
+    masks = []
+    names = ["Fully Sampled", "Pseudo Rand.", "Weighted Rand.", "Skip (Grappa)", "Skip Interl.", "Optimized"]
+    # fnames = ["fs", "pr", "wr", "s", "si", "opt"]
+    for i, f in enumerate([
+        phantom.sub_sample_ac_random_lines,
+        phantom.sub_sample_ac_random_lines, phantom.sub_sample_ac_weighted_lines,
+        phantom.sub_sample_ac_grappa, phantom.sub_sample_ac_skip_lines]):
+        k_us = f(acceleration=6 if i > 0 else 1, ac_lines=36)
+
+        masks.append({"name": names[i], "data": (k_us.abs() > 1e-10).to(torch.int)})
+    return masks
+
+
+def recon_sampling_patterns(k: torch.Tensor, bet: torch.Tensor, masks: list, loraks):
+    options = loraks.options
+    options.solver_type = SolverType.LEASTSQUARES
+    options.max_num_iter = 40
+    loraks.configure(options)
+    loraks._initialize(k)
+    # process sampling schemes
+    results = []
+    gt = 0
+    bet = bet.to(torch.bool)
+
+    # for each sub-sampled dataset
+    for i, m in enumerate(masks):
+        d = m["data"]
+        tmp_dict = {"name": m["name"]}
+
+        # save undersampled masked input
+        # p = path.joinpath(f"k_slice_sub-{fnames[i]}").with_suffix(".pt")
+        # if not p.is_file():
+        km = k.clone().squeeze()
+        km[~d.to(torch.bool)] = 0
+        #     torch_save(data=km, path_to_file=p.parent, file_name=p.name)
+        # else:
+        #     km = torch_load(p)
+
+        # km = km[:, :, :8].clone()
+        im = fft_to_img(km, dims=(0, 1))
+
+        if i > 0:
+            # do recon
+            prep_k, in_shape, padding, batch_idx = prep_k_space(k=km.unsqueeze(2), batch_size_channels=8)
+
+            recon_k = loraks.reconstruct(k_space=prep_k)
+
+            recon_k = unprep_k_space(recon_k, padding=padding, batch_idx=batch_idx, input_shape=in_shape).squeeze()
+        else:
+            recon_k = km.clone()
+        recon_im = fft_to_img(recon_k, dims=(0, 1))
+        rsos_rim = torch.sqrt(torch.sum(torch.square(recon_im.abs()), dim=-2))
+        if i == 0:
+            gt = rsos_rim.clone()
+        delta = rsos_rim - gt
+        delta[~bet[:, :, 0]] = 0
+        tmp_dict["img_us"] = im
+        tmp_dict["norm"] = torch.mean(delta.abs()).item()
+        tmp_dict["rmse"] = torch.sqrt(torch.mean(delta.abs() ** 2))
+        tmp_dict["delta"] = torch.nan_to_num(delta.abs() / gt, nan=0.0, posinf=0.0, neginf=0.0) * 100
+        tmp_dict["k_us"] = km
+        tmp_dict["k_recon"] = recon_k
+        tmp_dict["img_recon"] = recon_im
+        tmp_dict["img_recon_rsos"] = rsos_rim
+        results.append(tmp_dict)
+    return results
+
+
+# __plotting
+def plot_sampling_masks(masks: list, path: plib.Path):
+    # plot sampling schemes
+    fig = psub.make_subplots(
+        rows=1, cols=len(masks),
+        column_titles=[n["name"] for n in masks],
+        vertical_spacing=0.02,
+        y_title="Phase Encode Direction",
+        shared_yaxes=True,
+        x_title="Echo Number"
+    )
+
+    sample_column_width = 70
+    # for each sub-sampled dataset
+    for i, m in enumerate(masks):
+        d = m["data"]
+        n = m["name"]
+        logger.info(f"__ plot sampling: {n} __")
+        nx, ny, nc, ne = d.shape
+        # plot mask
+        m = torch.zeros((ny, ne * sample_column_width))
+        for e in range(ne):
+            m[
+                :, e * sample_column_width:(e + 1) * sample_column_width
+            ] = (e + 3) * d[d.shape[0] // 2, :, 0, e, None].expand(ny, sample_column_width)
+
+        fig.add_trace(
+            go.Heatmap(
+                z=m, showscale=False, transpose=False, showlegend=False, colorscale="Inferno",
+                zmin=0.0, zmax=ne + 2,
+            ),
+            col=1 + i, row=1
+        )
+        fig.update_xaxes(
+            tickmode="array", ticktext=torch.arange(1, 1 + ne).to(torch.int).numpy(),
+            tickvals=(0.5 + torch.arange(ne)) * sample_column_width, row=1, col=1 + i,
+            # title="Echo Number"
+        )
+
+    fig.update_layout(
+        width=1000,
+        height=350,
+        margin=dict(t=25, b=55, l=65, r=5)
+    )
+    fn = path.joinpath(f"sampling_patterns").with_suffix(".html")
+    logger.info(f"write file: {fn}")
+    fig.write_html(fn)
+    for suff in [".pdf", ".png"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"write file: {fn}")
+        fig.write_image(fn)
+
+
+def plot_sampling_density(
+        grad: torch.Tensor, sampling_density: torch.Tensor, ac_mask: torch.Tensor,
+        path: plib.Path):
+    ne = grad.shape[-1]
+    # ensure real valued and magnitude data
+    grad = grad.abs()
     cmap = plc.sample_colorscale("Inferno", ne, 0.1, 0.9)
 
     fig = psub.make_subplots(
@@ -253,7 +450,7 @@ def autograd_subsampling_optimization_iv():
     fig.add_trace(
         go.Scatter(
             x=[p_min, p_max, p_max, p_min, p_min],
-            y=[0, 0, 1.1*torch.log(grad_am).max().item(), 1.1*torch.log(grad_am).max().item(), 0],
+            y=[0, 0, 1.1 * torch.log(grad).max().item(), 1.1 * torch.log(grad).max().item(), 0],
             mode="lines", fill="toself", line=dict(width=0), name="AC Region",
             showlegend=False, marker=dict(color="#B6E880"), opacity=0.8
         ),
@@ -266,20 +463,20 @@ def autograd_subsampling_optimization_iv():
     for i in range(ne):
         # fig.add_trace(
         #     go.Heatmap(
-        #         z=torch.log(grad_am_cm[..., i]), showlegend=False, colorscale="Inferno", showscale=False
+        #         z=torch.log(grad_cm[..., i]), showlegend=False, colorscale="Inferno", showscale=False
         #     ),
         #     row=1, col=1 + i
         # )
         # fig.update_xaxes(visible=False, row=1, col=1 + i)
         # fig.update_yaxes(visible=False, row=1, col=1 + i)
 
-        for h, gg in enumerate([torch.log(grad_am), sampling_density]):
+        for h, gg in enumerate([torch.log(grad), sampling_density]):
             fig.add_trace(
                 go.Scatter(
                     y=gg[..., i], showlegend=False, marker=dict(color=cmap[i]),
                     name=f"Echo {i + 1}", mode="lines", opacity=0.7
                 ),
-                row=1+h, col=1
+                row=1 + h, col=1
             )
     # add colorbar
     fig.add_trace(
@@ -302,7 +499,6 @@ def autograd_subsampling_optimization_iv():
         margin=dict(t=15, b=55, l=65, r=5)
     )
 
-    path = plib.Path(get_test_result_output_dir(autograd_subsampling_optimization_iv, mode=ResultMode.EXPERIMENT))
     fn = path.joinpath("sampling_density").with_suffix(".html")
     logger.info(f"Write file: {fn}")
     fig.write_html(fn)
@@ -310,211 +506,187 @@ def autograd_subsampling_optimization_iv():
         fn = fn.with_suffix(suff)
         logger.info(f"Write file: {fn}")
         fig.write_image(fn)
-    # calculate how many we want
-
-    acceleration = 6
-    n_sub = (nx - len(indices_ac)) // acceleration
-
-    # we now want to draw from the indexes to keep, using the gradient function as sampling distribution per echo.
-    # additionally we want to maximize the distribution to neighboring points across phase encodes and echoes.AvE!!ow92_pHd33
-    adaptive_sampler = AdaptiveSampler(p=grad_mac)
-    us_idxs = adaptive_sampler.sample(n_sub, repulsion_radius=acceleration // 2)
-    indices_sub = torch.concatenate((indices_ac[None, ]. expand(ne, -1), us_idxs), dim=1)
-
-    # reset size
-    mask_sub = torch.zeros(nx, ne)
-    for i in range(ne):
-        mask_sub[indices_sub[i], i] = 1
-    mask_sub = mask_sub[:, None, None, None, :].expand(k.shape).to(torch.int)
-    return mask_sub
 
 
-def subsampling_optimization():
-    # load input data fully sampled
-    path = plib.Path(
-        get_test_result_output_dir(subsampling_optimization, mode=ResultMode.EXPERIMENT)
-    )
-
-    k = torch_load(path.joinpath("fs_data_slice.pt"))
-
-    # create sub-sampling schemes
-    nx, ny, nc, ne = k.shape
-    phantom = Phantom.get_shepp_logan(shape=(ny, nx), num_coils=nc, num_echoes=ne)
-    masks = []
-    names = ["Fully Sampled", "Pseudo Rand.", "Weighted Rand.", "Skip (Grappa)", "Skip Interl.", "Optimized"]
-    # fnames = ["fs", "pr", "wr", "s", "si", "opt"]
-    for i, f in enumerate([
-        phantom.sub_sample_ac_random_lines,
-        phantom.sub_sample_ac_random_lines, phantom.sub_sample_ac_weighted_lines,
-        phantom.sub_sample_ac_grappa, phantom.sub_sample_ac_skip_lines]):
-        k_us = f(acceleration=6 if i > 0 else 1, ac_lines=36).permute(1, 0, 2, 3)
-
-        masks.append((k_us.abs() > 1e-10).to(torch.int))
-
-    # compute optimized sampling scheme
-    m_opt = autograd_subsampling_optimization_iv()
-    masks.append(m_opt.squeeze())
-
-    # plot sampling schemes
-    fig = psub.make_subplots(
-        rows=1, cols=len(names),
-        column_titles=names,
-        vertical_spacing=0.02,
-        y_title="Phase Encode Direction",
-        shared_yaxes=True,
-        x_title="Echo Number"
-    )
-
-    sample_column_width = 70
-    # for each sub-sampled dataset
-    for i, d in enumerate(masks):
-        logger.info(f"__ plot sampling: {names[i]} __")
-        # plot mask
-        m = torch.zeros((nx, ne * sample_column_width))
-        for e in range(ne):
-            m[
-            :, e * sample_column_width:(e + 1) * sample_column_width
-            ] = (e + 3) * d[:, d.shape[1] // 2, 0, e, None].expand(nx, sample_column_width)
-
-        fig.add_trace(
-            go.Heatmap(
-                z=m, showscale=False, transpose=False, showlegend=False, colorscale="Inferno",
-                zmin=0.0, zmax=ne + 2,
-            ),
-            col=1+i, row=1
-        )
-        fig.update_xaxes(
-            tickmode="array", ticktext=torch.arange(1, 1 + ne).to(torch.int).numpy(),
-            tickvals=(0.5 + torch.arange(ne)) * sample_column_width, row=1, col=1 + i,
-            # title="Echo Number"
-        )
-
-    fig.update_layout(
-        width=1000,
-        height=350,
-        margin=dict(t=25, b=55, l=65, r=5)
-    )
-    fn = path.joinpath(f"sampling_patterns").with_suffix(".html")
-    logger.info(f"write file: {fn}")
-    fig.write_html(fn)
-    for suff in [".pdf", ".png"]:
-        fn = fn.with_suffix(suff)
-        logger.info(f"write file: {fn}")
-        fig.write_image(fn)
-
-    # plot and process
-    ac_opts = AcLoraksOptions(
-        loraks_matrix_type=OperatorType.S, regularization_lambda=0.0, batch_size_channels=8, max_num_iter=50,
-        solver_type=SolverType.LEASTSQUARES
-    )
-    ac_opts.rank.value = 150
-    ac_loraks = Loraks.create(ac_opts)
-
+def plot_results(results: list, path: plib.Path):
     # create figure
     fig = psub.make_subplots(
-        rows=5, cols=len(names),
-        column_titles=names,
-        row_titles=["Input K", "Input FFT", "Recon. FFT", "RSOS", "RSOS - GT"],
+        rows=4, cols=len(results),
+        column_titles=[n["name"] for n in results],
+        row_titles=["Input FFT C.", "Recon. FFT C.", "RSOS", "RSOS - GT"],
         vertical_spacing=0.015, horizontal_spacing=0.015,
         x_title="Phase Encode Direction", y_title="Readout Direction", shared_xaxes=True, shared_yaxes=True,
     )
-    gt = 0
-    norms = []
-    rmse = []
+
+    # for plotting
+    channel_no = 2
     plot_err_percentage = 15
-
+    cmin = 0
+    cmax = -1
     # for each sub-sampled dataset
-    for i, d in enumerate(masks):
-        # save undersampled masked input
-        # p = path.joinpath(f"k_slice_sub-{fnames[i]}").with_suffix(".pt")
-        # if not p.is_file():
-        km = k.clone()
-        km[~d.to(torch.bool)] = 0
-        #     torch_save(data=km, path_to_file=p.parent, file_name=p.name)
-        # else:
-        #     km = torch_load(p)
+    for i, r in enumerate(results):
+        km = r["k_us"]
+        im = r["img_us"]
+        recon_im = r["img_recon"]
+        rsos_rim = r["img_recon_rsos"]
+        delta = r["delta"]
 
-        # km = km[:, :, :8].clone()
-        im = fft_to_img(km, dims=(0, 1))
 
-        if i > 0:
-            # do recon
-            prep_k, in_shape, padding, batch_idx = prep_k_space(k=km.unsqueeze(2), batch_size_channels=8)
-
-            recon_k = ac_loraks.reconstruct(k_space=prep_k)
-
-            recon_k = unprep_k_space(recon_k, padding=padding, batch_idx=batch_idx, input_shape=in_shape).squeeze()
-        else:
-            recon_k = km.clone()
-        recon_im = fft_to_img(recon_k, dims=(0, 1))
-        rsos_rim = torch.sqrt(torch.sum(torch.square(recon_im.abs()), dim=-2))
-        if i == 0:
-            gt = rsos_rim.clone()
-        delta = rsos_rim - gt
-        norms.append(torch.mean(delta.abs()).item())
-        rmse.append(torch.sqrt(torch.mean(delta.abs() ** 2)))
-        delta = torch.nan_to_num(delta.abs() / gt, nan=0.0, posinf=0.0, neginf=0.0) * 100
-
-        # for plotting
-        channel_no = 2
-
-        for ki, kk in enumerate([torch.log(km.abs()), im.abs(), recon_im.abs(), rsos_rim, delta]):
-            if ki < 3:
+        for ki, kk in enumerate([im.abs(), recon_im.abs(), rsos_rim, delta]):
+            coloraxis = "coloraxis" if ki == 3 else None
+            if ki < 2:
                 kk = kk[:, :, channel_no]
             pkm = kk[..., 0].clone()
 
-            zmin = [None, 0.0, 0.0, 0, 0]
-            zmax = [None, pkm.max().item() * 0.5, pkm.max().item() * 0.5, pkm.max().item() * 0.5, plot_err_percentage]
-            row = 1 + ki
+            zmin = [0.0, 0.0, 0, 0]
+            zmax = [pkm.max().item() * 0.5, pkm.max().item() * 0.5, pkm.max().item() * 0.5, plot_err_percentage]
+            if max(zmax[1:]) > cmax:
+                cmax = max(zmax[1:])
             fig.add_trace(
                 go.Heatmap(
-                    z=pkm, showscale=True if ki == 4 and i == 2 else False,
-                    showlegend=False, transpose=True, colorscale="Inferno",
-                    zmin=zmin[ki], zmax=zmax[ki]
+                    z=pkm, showscale=True if ki == 3 and i == 2 else False,
+                    showlegend=False, transpose=False, colorscale="Inferno",
+                    zmin=zmin[ki], zmax=zmax[ki], coloraxis=coloraxis,
                 ),
-                row=1+ki, col=1+i
+                row=1 + ki, col=1 + i
             )
 
     fig.update_layout(
         width=1000,
-        height=800,
+        height=700,
+        coloraxis=dict(
+            colorscale="Inferno",
+            cmin=0.0, cmax=plot_err_percentage,
+            colorbar=dict(
+                x=1.01, y=-0.01, len=0.25, thickness=14,
+                title=dict(text="Error vs Fully Sampled [%]", side="right"),
+                xanchor="left", yanchor="bottom",
+            )
+        ),
         margin=dict(t=25, b=55, l=65, r=5)
     )
     fn = path.joinpath("recon_vs_sampling").with_suffix(".html")
-    print(f"Write file: {fn}")
+    logger.info(f"Write file: {fn}")
     fig.write_html(fn)
     for suff in [".png", ".pdf"]:
         fn = fn.with_suffix(suff)
-        print(f"Write file: {fn}")
+        logger.info(f"Write file: {fn}")
         fig.write_image(fn)
 
-    logger.info("Plot Norms")
-    print(norms)
-    print(rmse)
-    # cmap = plc.sample_colorscale("Inferno", len(norms), 0.2, 0.9)
-    # fig = go.Figure()
-    # fig.add_trace(
-    #     go.Scatter(
-    #         y=[None, *norms[1:]], x=names, showlegend=False,
-    #         line=dict(color=cmap[0]),
-    #     ),
-    # )
-    #
-    # fig.update_layout(
-    #     yaxis=dict(title="|| Recon - Ground Truth || [a.u.]"),
-    #     width=800,
-    #     height=250,
-    #     margin=dict(t=5, b=5, l=5, r=5)
-    # )
-    # fn = path.joinpath("recon_norm").with_suffix(".html")
-    # print(f"Write file: {fn}")
-    # fig.write_html(fn)
-    # for suff in [".png", ".pdf"]:
-    #     fn = fn.with_suffix(suff)
-    #     print(f"Write file: {fn}")
-    #     fig.write_image(fn)
+def plot_rmse(results: list, path: plib.Path):
+    # create figure
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=[n["name"] for n in results], y=[n["rmse"] for n in results],
+
+        )
+    )
+
+    fig.update_layout(
+        width=800,
+        height=200,
+        margin=dict(t=10, b=10, l=10, r=10),
+        yaxis=dict(title="RMSE [a.u.]")
+    )
+
+    fn = path.joinpath("recon_vs_sampling_rmse").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Write file: {fn}")
+        fig.write_image(fn)
+
+
+#__ main function call
+def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType, device: torch.device):
+    # get path
+    path_out = plib.Path(
+        get_test_result_output_dir(
+            f"autograd_subsampling_optimization_{loraks_type.name}_{data_type.name}".lower(),
+            mode=ResultMode.EXPERIMENT)
+    )
+    logger.info(f"Set Output Path: {path_out}")
+    # set path for data output
+    path_out_data = path_out.joinpath("data")
+    path_out_data.mkdir(exist_ok=True, parents=True)
+    logger.info(f"Set Data Output Path: {path_out_data}")
+
+    # load data
+    k, bet = load_data(data_type=data_type)
+
+    # Extract sampling density
+    path_tmp = path_out_data.joinpath("sampling_density_data").with_suffix(".pkl")
+    if path_tmp.is_file():
+        logger.info(f"Load data: {path_tmp}")
+        with open(path_tmp, "rb") as f:
+            sd = pickle.load(f)
+        sampling_density = torch.tensor(sd["sampling_density"])
+        grad_mac = torch.tensor(sd["grad_mac"])
+        indices_ac = torch.tensor(sd["indices_ac"])
+        mask = torch.tensor(sd["mask"])
+        loraks = None
+    else:
+        # compute optimized sampling scheme
+        if loraks_type == LoraksType.AC:
+            grad, prep_k, mask, loraks = autograd_optimization_ac(
+                k=k, device=device,
+                batch_size_channels=8, rank=150
+            )
+        else:
+            grad, prep_k, mask, loraks = autograd_optimization_p(
+                k=k, device=device,
+                batch_size_channels=8, rank=150
+            )
+        sampling_density, grad_mac, indices_ac = extract_sampling_density(grad=grad, ac_mask=mask)
+        logger.info(f"Save data: {path_tmp}")
+        sd = {"sampling_density": sampling_density, "grad_mac": grad_mac, "indices_ac": indices_ac, "mask": mask}
+        with open(path_tmp, "wb") as f:
+            pickle.dump(sd, f)
+        plot_sampling_density(grad=grad_mac, sampling_density=sampling_density, ac_mask=mask, path=path_out)
+
+    # create sub-sampling masks for visuals
+    path_tmp = path_out_data.joinpath("masks").with_suffix(".pkl")
+    if path_tmp.is_file():
+        with open(path_tmp.as_posix(), "rb") as  j_file:
+            masks = pickle.load(j_file)
+    else:
+        masks = create_subsampling_masks(k.squeeze().shape)
+        m_opt = built_optimized_sampling_mask(
+            acceleration=6, grad_mac=grad_mac, indices_ac=indices_ac, shape=k.shape
+        )
+        masks.append({"name": "Optimized", "data": m_opt.squeeze()})
+        with open(path_tmp.as_posix(), "wb") as j_file:
+            pickle.dump(masks, j_file)
+        plot_sampling_masks(masks, path=path_out)
+
+    if loraks_type == LoraksType.AC:
+        path_tmp = path_out_data.joinpath("ac_recon_results").with_suffix(".pkl")
+        if path_tmp.is_file():
+            with open(path_tmp.as_posix(), "rb") as  j_file:
+                results = pickle.load(j_file)
+        else:
+            # compare sampling patterns
+            options = AcLoraksOptions(
+                solver_type=SolverType.AUTOGRAD, regularization_lambda=0.0, max_num_iter=500,
+                loraks_matrix_type=OperatorType.S, batch_size_channels=8
+            )
+            options.rank.value = 150
+            loraks = Loraks.create(options=options)
+            results = recon_sampling_patterns(k=k, masks=masks, bet=bet, loraks=loraks)
+            with open(path_tmp.as_posix(), "wb") as j_file:
+                pickle.dump(results, j_file)
+            plot_results(results, path=path_out)
+        plot_rmse(results, path=path_out)
+
+        logger.info(f"RMSE: {[r['rmse'] for r in results]}")
+        logger.info(f"Norm: {[r['norm'] for r in results]}")
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    subsampling_optimization()
+    subsampling_optimization_loraks(
+        loraks_type=LoraksType.AC, data_type=DataType.INVIVO,
+        device=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"),
+    )
