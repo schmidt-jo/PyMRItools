@@ -25,7 +25,7 @@ class LowRankAlgorithmType(Enum):
 @dataclass
 class PLoraksOptions(LoraksOptions):
     patch_shape: Tuple[int,...] = (0, 0, 0, 5, 5)
-    sample_direction: Tuple[int, ...] = (0, 0, 0, 1, 1)
+    sample_directions: Tuple[int, ...] = (0, 0, 0, 1, 1)
     lowrank_algorithm: LowRankAlgorithmType = LowRankAlgorithmType.TORCH_LOWRANK_SVD
 
 def get_lowrank_algorithm_function(algorithm: LowRankAlgorithmType, args: Tuple):
@@ -51,7 +51,7 @@ def get_sv_threshold_function(rank_reduction_method: RankReduction, args: Option
     # noinspection PyUnreachableCode
     # The reason for the "unreachable code" warning is the unnecessary "case _".
     # However, I want this because when someone extends the enums, we want to fail gracefully.
-    match rank_reduction_method.method:
+    match rank_reduction_method:
         case RankReductionMethod.HARD_CUTOFF:
             if args is None or len(args) != 1 or not isinstance(args[0], int):
                 raise ValueError("Hard cutoff method arguments must provide the length of the singular value vector.")
@@ -202,13 +202,13 @@ class PLoraks(LoraksBase):
         return self
 
     def with_sv_hard_cutoff(self, q: int, rank: int) -> "PLoraks":
-        if self.sv_cutoff_method.method != RankReductionMethod.HARD_CUTOFF or self.sv_cutoff_args != (q, rank):
+        if self.sv_cutoff_method != RankReductionMethod.HARD_CUTOFF or self.sv_cutoff_args != (q, rank):
             logger.info(
                 f"Singular values cutoff method changed from {self.sv_cutoff_method} to {RankReductionMethod.HARD_CUTOFF}")
             logger.info(f"Singular values cutoff arguments changed from {self.sv_cutoff_args} to ({q},)")
             self.dirty_config = True
             self.sv_cutoff_method = RankReductionMethod.HARD_CUTOFF
-            self.sv_cutoff_args = (q, rank)
+            self.sv_cutoff_args = (rank,)
         else:
             logger.info(f"Singular values cutoff method unchanged: {self.sv_cutoff_method}")
             logger.info(f"Singular values cutoff arguments unchanged: {self.sv_cutoff_args}")
@@ -376,7 +376,8 @@ class PLoraks(LoraksBase):
                 case "loraks_matrix_type":
                     self.operator_type = options.loraks_matrix_type
                 case "rank":
-                    self.lowrank_algorithm = options.rank
+                    self.with_rank_reduction(options.rank)
+                    # self.sv_cutoff_method = options.rank
                 case "regularization_lambda":
                     self.regularization_lambda = options.regularization_lambda
                 case "max_num_iter":
@@ -388,9 +389,10 @@ class PLoraks(LoraksBase):
                 case "patch_shape":
                     self.patch_shape = options.patch_shape
                 case "sample_directions":
-                    self.sample_directions = options.sample_direction
+                    self.sample_directions = options.sample_directions
                 case _:
-                    raise ValueError(f"Unknown PLoraks option value: {name}")
+                    # raise ValueError(f"Unknown PLoraks option value: {name}")
+                    logger.warning(f"PLoraks option value: {name}; Not recognized for settings")
             self.dirty_config = True
             self.dirty_indices = True
 

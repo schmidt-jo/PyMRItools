@@ -264,7 +264,7 @@ def animation_volumetric_data(
         cmap: str = "Inferno", title: str = "",
         cmin: int = 0, width: int = 800, height: int = 800,
         x_ax_title: str = "A-P", y_ax_title: str = "R-L", z_ax_title: str = "I-S",
-        file_suffix: str = "html"):
+        file_suffix: str = "html", bg_color="#ffffff", template="plotly"):
 
     # check colormaps
     if check_colormap_available(name=cmap):
@@ -296,6 +296,20 @@ def animation_volumetric_data(
             "transition": {"duration": duration, "easing": "linear"},
         }
 
+    nx, ny, nz = data_xyz.shape
+    frames = [
+        go.Frame(
+            data=go.Surface(
+                z=(nz - k) * torch.ones((nx, ny)),
+                surfacecolor=data_xyz[:, :, -(k + 1)],
+                cmin=cmin, cmax=cmax
+            ),
+            name=str(k)  # you need to name the frame for the animation to behave properly
+        ) for k in range(nz)
+    ]
+
+    fig.update(frames=frames)
+
     sliders = [
         {
             "pad": {"b": 10, "t": 60},
@@ -312,20 +326,6 @@ def animation_volumetric_data(
             ],
         }
     ]
-
-    nx, ny, nz = data_xyz.shape
-    frames = [
-        go.Frame(
-            data=go.Surface(
-                z=(nz - k) * torch.ones((nx, ny)),
-                surfacecolor=data_xyz[:, :, -(k + 1)],
-                cmin=cmin, cmax=cmax
-            ),
-            name=str(k)  # you need to name the frame for the animation to behave properly
-        ) for k in range(nz)
-    ]
-
-    fig.update(frames=frames)
     # Layout
     fig.update_layout(
         title=title,
@@ -334,18 +334,20 @@ def animation_volumetric_data(
         scene=dict(
             zaxis=dict(
                 range=[-0.1, 1.005 * nz], autorange=False,
-                title=z_ax_title
+                title=z_ax_title, backgroundcolor="#61615f", linecolor="#b0b0ae", gridcolor="#ccccca"
             ),
-            xaxis=dict(title=x_ax_title),
-            yaxis=dict(title=y_ax_title),
+            xaxis=dict(title=x_ax_title, backgroundcolor="#61615f", linecolor="#b0b0ae", gridcolor="#ccccca"),
+            yaxis=dict(title=y_ax_title, backgroundcolor="#61615f", linecolor="#b0b0ae", gridcolor="#ccccca"),
             aspectratio=dict(x=1, y=1, z=0.5),
         ),
-        margin=dict(t=50, b=20, l=20, r=20),
+        template=template,
+        paper_bgcolor=bg_color,
+        margin=dict(t=50, b=50, l=20, r=20),
         updatemenus=[
             {
                 "buttons": [
                     {
-                        "args": [None, frame_args(50)],
+                        "args": [None, frame_args(10)],
                         "label": "&#9654;",  # play symbol
                         "method": "animate",
                     },
