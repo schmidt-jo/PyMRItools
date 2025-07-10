@@ -3,7 +3,6 @@ import logging
 import pathlib as plib
 import pickle
 from enum import Enum, auto
-from typing import Tuple
 
 import polars as pl
 
@@ -14,70 +13,16 @@ import plotly.colors as plc
 import tqdm
 
 from pymritools.recon.loraks.operators import Operator, OperatorType
-from pymritools.recon.loraks.utils import (
-    prepare_k_space_to_batches, pad_input,
-    check_channel_batch_size_and_batch_channels, unpad_output, unprepare_batches_to_k_space
-)
 from pymritools.utils.algorithms import rank_estimator_adaptive_rsvd
 from pymritools.utils import fft_to_img, torch_load
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
+from tests.experiments.loraks.utils import prep_k_space, DataType, load_data
 
 logger = logging.getLogger(__name__)
 
-
-class DataType(Enum):
-    SHEPPLOGAN = auto()
-    PHANTOM = auto()
-    INVIVO = auto()
-
-
-
-#__ misc functionalities
-def load_data(data_type: DataType):
-    match data_type:
-        case DataType.SHEPPLOGAN:
-            # set some shapes
-            nx, ny, nc, ne = (156, 140, 4, 2)
-            k = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=1).unsqueeze(2)
-            bet = None
-        case DataType.PHANTOM:
-            raise NotImplementedError("Phantom data not yet provided")
-        case DataType.INVIVO:
-            # load input data fully sampled
-            path = plib.Path(
-                get_test_result_output_dir(f"data", mode=ResultMode.EXPERIMENT)
-            )
-            k = torch_load(path.joinpath("fs_data_slice.pt"))
-            # ensure read dimension is correct
-            k = torch.swapdims(k, 0, 1)
-            bet = torch_load(path.joinpath("bet.pt"))
-        case _:
-            raise ValueError(f"Data Type {data_type.name} not supported")
-    return k, bet
-
-
-#__ methods for autograd LORAKS iteration & prep
-def prep_k_space(k: torch.Tensor, batch_size_channels: int = -1):
-    # we need to prepare the k-space
-    batch_channel_idx = check_channel_batch_size_and_batch_channels(
-        k_space_rpsct=k, batch_size_channels=batch_size_channels
-    )
-    prep_k, in_shape = prepare_k_space_to_batches(
-        k_space_rpsct=k, batch_channel_indices=batch_channel_idx
-    )
-    prep_k, padding = pad_input(prep_k, sampling_dims=(-2, -1))
-    return prep_k, in_shape, padding, batch_channel_idx
-
-
-def unprep_k_space(k: torch.Tensor, padding: Tuple[int, int], batch_idx: torch.tensor, input_shape: Tuple):
-    k = unpad_output(k_space=k, padding=padding)
-
-    return unprepare_batches_to_k_space(
-        k_batched=k, batch_channel_indices=batch_idx, original_shape=input_shape
-    )
 
 def estimate_rank(svd_vals: torch.Tensor, area_thr_factor: float = 0.95):
     # calculate area under cumulatively
@@ -206,9 +151,12 @@ def automatic_low_rank_param_extraction(data_type: DataType, force_processing: b
                     })
             plot_results_svals(results, path)
         else:
-            k, bet = load_data(data_type=data_type)
+            k, _, bet = load_data(data_type=data_type)
             nx, ny, nc, ne = k.shape
             for acc in torch.linspace(1, 12, 8):
+                logger.info(f"Process acc: {acc:.2f}")
+                logger.info("_______________________")
+                logger.info("_______________________")
                 # create sampling mask
                 _, k_us = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=acc, ac_lines=32)
                 mask = k_us.abs() > 1e-10
@@ -231,7 +179,7 @@ def automatic_low_rank_param_extraction(data_type: DataType, force_processing: b
                                 op = Operator(
                                     k_space_shape=data_in.shape[1:], nb_side_length=5, device=device, operator_type=OperatorType.S
                                 )
-                                _, th = process_rsvd(data_in.to(device), op)
+                                _, th = process_rsvd(data_in.to(device), op, area_thr_factor=0.9)
                                 # calculate matrix size
                                 mat_size = nb_size * ic * ie
                                 results.append({
@@ -351,9 +299,34 @@ def plot_results_vs_acc_mat_size(results, path):
         vertical_spacing=0.02, horizontal_spacing=0.1,
     )
     ps = 20
+    # get df threshold estimation normalized by acc = 1 threshold
+    # create lookup reference
+    reference_values = (
+        df.filter(pl.col("acc") == 1).group_by(
+            ["nc", "mat_size", "random_c", "random_e"]
+        ).agg(pl.col("thresh").first().alias("ref_thresh"))
+    )
+    df_norm = (
+        df.join(reference_values, on=["nc", "mat_size", "random_c", "random_e"], how="left").
+        with_columns(
+            (pl.col("thresh") / pl.col("ref_thresh")).alias("normalized_thresh")
+        )
+        .drop("ref_thresh")
+    )
+
+    df_norm.write_ndjson(
+        path.joinpath("df_norm").with_suffix(".json")
+    )
+    df_norm.filter(pl.col("mat_size") == df_norm["mat_size"].unique().min()).write_ndjson(
+        path.joinpath("df_norm_mat_sizes").with_suffix(".json")
+    )
+
     for irc in range(3):
         for ire in range(3):
             df_plot = df.filter(
+                (pl.col("random_c") == irc) & (pl.col("random_e") == ire)
+            ).drop(["random_c", "random_e"])
+            df_plot_norm = df_norm.filter(
                 (pl.col("random_c") == irc) & (pl.col("random_e") == ire)
             ).drop(["random_c", "random_e"])
             fig.add_trace(
@@ -370,31 +343,17 @@ def plot_results_vs_acc_mat_size(results, path):
                     x=df_plot["mat_size"] - ps + 2*ps/9 * (3 * irc + ire), y=df_plot["thresh"],
                     mode="markers",
                     showlegend=False,
-                    marker=dict(color=df_plot["acc"], coloraxis="coloraxis2"),
+                    marker=dict(color=df_plot["calc_acc"], coloraxis="coloraxis2"),
                 ),
                 row=2, col=1
-            )
-            # get df threshold estimation normalized by acc = 1 threshold
-            # create lookup reference
-            reference_values = (
-                df_plot.filter(pl.col("acc") == 1).group_by(
-                    ["nc", "mat_size"]
-                ).agg(pl.col("thresh").first().alias("ref_thresh"))
-            )
-            df_norm = (
-                df_plot.join(reference_values, on=["nc", "mat_size"], how="left").
-                with_columns(
-                    (pl.col("thresh") / pl.col("ref_thresh")).alias("normalized_thresh")
-                )
-                .drop("ref_thresh")
             )
 
             fig.add_trace(
                 go.Scatter(
-                    x=df_norm["mat_size"] - ps + 2*ps/9 * (3 * irc + ire), y=df_norm["normalized_thresh"],
+                    x=df_plot_norm["mat_size"] - ps + 2*ps/9 * (3 * irc + ire), y=df_plot_norm["normalized_thresh"],
                     mode="markers",
                     showlegend=False,
-                    marker=dict(color=df_norm["acc"], coloraxis="coloraxis2"),
+                    marker=dict(color=df_plot_norm["calc_acc"], coloraxis="coloraxis2"),
                 ),
                 row=3, col=1
     )
@@ -419,7 +378,7 @@ def plot_results_vs_acc_mat_size(results, path):
         ),
         coloraxis2=dict(
             colorscale="Inferno",
-            cmin=0.0, cmax=df["acc"].max(),
+            cmin=0.0, cmax=df["calc_acc"].max(),
             colorbar=dict(
                 x=1.01, y=0.0, len=0.66, thickness=14,
                 title=dict(text="Acceleration", side="right"),
@@ -438,125 +397,8 @@ def plot_results_vs_acc_mat_size(results, path):
         logger.info(f"Write file: {fn}")
         fig.write_image(fn)
 
-def rank_matrix_completion(data_type: DataType,):
-    # get path
-    path = plib.Path(get_test_result_output_dir(
-        f"rank_matrix_completion/{data_type.name}".lower(),
-        mode=ResultMode.EXPERIMENT)
-    )
-    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-
-
-    if data_type == DataType.SHEPPLOGAN:
-        _, k = create_phantom(shape_xyct=(80, 50, 8, 2), acc=3, ac_lines=16)
-    else:
-        raise NotImplementedError(f"data_type {data_type} is not supported")
-    k_in, in_shape, padding, batch_channel_idx = prep_k_space(k.unsqueeze_(2).to(device), batch_size_channels=-1)
-    batch_channel_idx = batch_channel_idx.to(device)
-
-    op = Operator(
-        k_space_shape=k_in.shape[1:], nb_side_length=5,
-        device=device,
-        operator_type=OperatorType.S
-    )
-
-    matrix = op.forward(k_in)
-
-    completed_matrix, losses, ranks = rank_matrix_completion_minimize_rank(
-        matrix=matrix, max_num_iter=2500, lr_max=1e-4, lr_min=1e-5, device=device,
-    )
-
-    k_recon = op.adjoint(completed_matrix)
-    k_recon = unprep_k_space(k_recon.unsqueeze_(0), padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
-
-    plot_losses(losses, ranks, path)
-    plot_completion(fft_to_img(k.squeeze()[:, :, 0, 0].cpu(), dims=(0, 1)), fft_to_img(k_recon.squeeze()[:, :, 0, 0].cpu(), dims=(0, 1)), path, log=False)
-
-
-def rank_matrix_completion_minimize_rank(matrix: torch.Tensor, max_num_iter: int = 20, lr_max: float = 1e-1, lr_min: float = 1e-3,
-                                         device: torch.device = torch.get_default_device()):
-    mask = matrix.abs() < 1e-10
-    best_candidate = matrix[mask].clone()
-    candidate = torch.zeros_like(best_candidate, requires_grad=True, device=device)
-    losses = []
-    ranks = []
-    lrs = torch.linspace(lr_max, lr_min, max_num_iter)
-    for i in tqdm.trange(max_num_iter):
-        tmp = matrix.clone()
-        tmp[mask] = candidate
-        vals, _ = torch.linalg.eigh(tmp @ tmp.mH)
-        # vals = torch.linalg.svdvals(tmp)
-        loss = torch.sum(torch.square(vals))
-        loss.backward()
-        with torch.no_grad():
-            candidate -= candidate.grad * lrs[i]
-            ranks.append(estimate_rank(vals.__reversed__()))
-            if i > 1:
-                if loss.item() < min(losses):
-                    best_candidate = candidate.detach()
-            losses.append(loss.item())
-
-    result = matrix.clone()
-    result[mask] = best_candidate
-    return result, torch.tensor(losses), torch.tensor(ranks)
-
-def plot_completion(matrix, completed_matrix, path, log: bool = True):
-    fig = psub.make_subplots(
-        rows=1, cols=2
-    )
-    if log:
-        zmax = torch.log(matrix.abs().max()).item()* 1e-1
-    else:
-        zmax = matrix.abs().max().item()* 0.6
-    for i, d in enumerate([matrix, completed_matrix]):
-        if log:
-            d = torch.log(d.abs())
-        else:
-            d = d.abs()
-        fig.add_trace(
-            go.Heatmap(z=d, zmin=0, zmax=zmax, transpose=True),
-            row=1, col=1+i
-        )
-
-    fig.update_layout(
-            width=1000,
-            height=550,
-            margin=dict(t=25, b=55, l=65, r=5)
-        )
-    fn = path.joinpath("matrix_completion").with_suffix(".html")
-    logger.info(f"Write file: {fn}")
-    fig.write_html(fn)
-    for suff in [".png", ".pdf"]:
-        fn = fn.with_suffix(suff)
-        logger.info(f"Write file: {fn}")
-        fig.write_image(fn)
-
-
-def plot_losses(losses, ranks, path):
-    fig = psub.make_subplots(rows=2, cols=1, shared_xaxes=True, row_titles=["Loss", "Rank"])
-    for i, d in enumerate([losses, ranks]):
-        fig.add_trace(
-            go.Scatter(
-                y=d,
-            ),
-            row=1+i, col=1
-        )
-    fig.update_layout(
-        width=1000,
-        height=550,
-        margin=dict(t=25, b=55, l=65, r=5)
-    )
-    fn = path.joinpath("matrix_completion_loss").with_suffix(".html")
-    logger.info(f"Write file: {fn}")
-    fig.write_html(fn)
-    for suff in [".png", ".pdf"]:
-        fn = fn.with_suffix(suff)
-        logger.info(f"Write file: {fn}")
-        fig.write_image(fn)
-
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    automatic_low_rank_param_extraction(data_type=DataType.INVIVO, force_processing=False)
-    # rank_matrix_completion(DataType.SHEPPLOGAN)
+    automatic_low_rank_param_extraction(data_type=DataType.INVIVO, force_processing=True)
     # try_arsvd()

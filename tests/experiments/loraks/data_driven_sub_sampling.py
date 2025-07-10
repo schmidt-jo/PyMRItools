@@ -7,22 +7,21 @@ import sys
 import logging
 import pathlib as plib
 from enum import Enum, auto
-from typing import Tuple
 import json
 
 import torch
 from pymritools.recon.loraks.loraks import Loraks, OperatorType, RankReduction, RankReductionMethod
 from pymritools.recon.loraks.p_loraks import PLoraksOptions, LowRankAlgorithmType
-from pymritools.recon.loraks.utils import (
-    prepare_k_space_to_batches, pad_input, unprepare_batches_to_k_space, unpad_output,
-    check_channel_batch_size_and_batch_channels
-)
+from pymritools.recon.loraks.utils import unpad_output
+
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, m_op_base
 from pymritools.utils.functions import fft_to_img
-from pymritools.utils import torch_load, Phantom, torch_save
+from pymritools.utils import Phantom
+
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
-from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
+from tests.utils import get_test_result_output_dir, ResultMode
+from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, DataType, load_data
 
 import plotly.graph_objects as go
 import plotly.subplots as psub
@@ -36,12 +35,6 @@ class TorchEncoder(json.JSONEncoder):
         if torch.is_tensor(obj):
             return obj.tolist()
         return super().default(obj)
-
-
-class DataType(Enum):
-    SHEPPLOGAN = auto()
-    PHANTOM = auto()
-    INVIVO = auto()
 
 
 class LoraksType(Enum):
@@ -106,72 +99,52 @@ class AdaptiveSampler:
         return any(abs(point - ex) < radius for ex in existing_points)
 
 
-#__ methods for autograd LORAKS iteration & prep
-def prep_k_space(k: torch.Tensor, batch_size_channels: int = -1):
-    # we need to prepare the k-space
-    batch_channel_idx = check_channel_batch_size_and_batch_channels(
-        k_space_rpsct=k, batch_size_channels=batch_size_channels
-    )
-    prep_k, in_shape = prepare_k_space_to_batches(
-        k_space_rpsct=k, batch_channel_indices=batch_channel_idx
-    )
-    prep_k, padding = pad_input(prep_k, sampling_dims=(-2, -1))
-    return prep_k, in_shape, padding, batch_channel_idx
-
-
-def unprep_k_space(k: torch.Tensor, padding: Tuple[int, int], batch_idx: torch.tensor, input_shape: Tuple):
-    k = unpad_output(k_space=k, padding=padding)
-
-    return unprepare_batches_to_k_space(
-        k_batched=k, batch_channel_indices=batch_idx, original_shape=input_shape
-    )
-
 #__ variant specific optimization functions
-def autograd_optimization_p(k: torch.Tensor,
-        rank: int, batch_size_channels: int,
-        max_num_iter=500, regularization_lambda=0.0, operator_type=OperatorType.S,
-        device: torch.device = torch.get_default_device()):
-    # P specific things
-    rank_reduction = RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=rank)
-    options = PLoraksOptions(
-        loraks_matrix_type=operator_type,
-        rank=rank_reduction,
-        regularization_lambda=regularization_lambda, batch_size_channels=batch_size_channels,
-        max_num_iter=max_num_iter, patch_shape=(-1, 5, 5), sample_directions=(0, 1, 1),
-        device=device,
-    )
-    loraks = Loraks.create(options)
-    loraks = (loraks.
-              with_rank_reduction(rank_reduction).
-              with_sv_hard_cutoff(q=None, rank=rank_reduction.value).
-              with_lowrank_algorithm(algorithm_type=LowRankAlgorithmType.TORCH_LOWRANK_SVD, q=rank_reduction.value+2)
-              )
-    # we want to do optimization on the fully sampled data
-    prep_k, in_shape, padding, batch_channel_idx = prep_k_space(
-        k.unsqueeze_(2), batch_size_channels=batch_size_channels
-    )
-    grad_pb = torch.zeros_like(prep_k)
-    loraks._initialize(prep_k)
-    # send into one iteration
-    for b, batch_k in enumerate(prep_k):
-        k = batch_k.clone().to(device).requires_grad_()
-
-        # compute only LR loss
-        loss, _, _ = loraks.loss_func(
-            k_space_candidate=k,
-            indices=loraks.indices, matrix_shape=loraks.matrix_shape,
-            k_sampled_points=torch.zeros_like(k), sampling_mask=torch.zeros_like(k),
-            lam_s=0.0
-        )
-        loss.backward()
-
-        # get gradient
-        grad_pb[b] = k.grad.clone().cpu()
-
-    prep_k = unprep_k_space(prep_k, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
-    grad_pb = unprep_k_space(grad_pb, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
-    ac_mask = unpad_output(ac_mask, padding=padding[:2 * ac_mask.ndim]).mT
-    return grad_pb, prep_k, ac_mask, loraks
+# def autograd_optimization_p(k: torch.Tensor,
+#         rank: int, batch_size_channels: int,
+#         max_num_iter=500, regularization_lambda=0.0, operator_type=OperatorType.S,
+#         device: torch.device = torch.get_default_device()):
+#     # P specific things
+#     rank_reduction = RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=rank)
+#     options = PLoraksOptions(
+#         loraks_matrix_type=operator_type,
+#         rank=rank_reduction,
+#         regularization_lambda=regularization_lambda, batch_size_channels=batch_size_channels,
+#         max_num_iter=max_num_iter, patch_shape=(-1, 5, 5), sample_directions=(0, 1, 1),
+#         device=device,
+#     )
+#     loraks = Loraks.create(options)
+#     loraks = (loraks.
+#               with_rank_reduction(rank_reduction).
+#               with_sv_hard_cutoff(q=None, rank=rank_reduction.value).
+#               with_lowrank_algorithm(algorithm_type=LowRankAlgorithmType.TORCH_LOWRANK_SVD, q=rank_reduction.value+2)
+#               )
+#     # we want to do optimization on the fully sampled data
+#     prep_k, in_shape, padding, batch_channel_idx = prep_k_space(
+#         k.unsqueeze_(2), batch_size_channels=batch_size_channels
+#     )
+#     grad_pb = torch.zeros_like(prep_k)
+#     loraks._initialize(prep_k)
+#     # send into one iteration
+#     for b, batch_k in enumerate(prep_k):
+#         k = batch_k.clone().to(device).requires_grad_()
+#
+#         # compute only LR loss
+#         loss, _, _ = loraks.loss_func(
+#             k_space_candidate=k,
+#             indices=loraks.indices, matrix_shape=loraks.matrix_shape,
+#             k_sampled_points=torch.zeros_like(k), sampling_mask=torch.zeros_like(k),
+#             lam_s=0.0
+#         )
+#         loss.backward()
+#
+#         # get gradient
+#         grad_pb[b] = k.grad.clone().cpu()
+#
+#     prep_k = unprep_k_space(prep_k, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
+#     grad_pb = unprep_k_space(grad_pb, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
+#     ac_mask = unpad_output(ac_mask, padding=padding[:2 * ac_mask.ndim]).mT
+#     return grad_pb, prep_k, ac_mask, loraks
 
 
 def autograd_optimization_ac(
@@ -280,30 +253,6 @@ def built_optimized_sampling_mask(acceleration: int, grad_mac: torch.Tensor, ind
         mask_sub[indices_sub[i], i] = 1
     mask_sub = mask_sub[None, :, None, :].expand(shape).to(torch.int)
     return mask_sub
-
-
-#__ misc functionalities
-def load_data(data_type: DataType):
-    match data_type:
-        case DataType.SHEPPLOGAN:
-            # set some shapes
-            nx, ny, nc, ne = (156, 140, 4, 2)
-            k = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=1).unsqueeze(2)
-            bet = None
-        case DataType.PHANTOM:
-            raise NotImplementedError("Phantom data not yet provided")
-        case DataType.INVIVO:
-            # load input data fully sampled
-            path = plib.Path(
-                get_test_result_output_dir(f"data", mode=ResultMode.EXPERIMENT)
-            )
-            k = torch_load(path.joinpath("fs_data_slice.pt"))
-            # ensure read dimension is correct
-            k = torch.swapdims(k, 0, 1)
-            bet = torch_load(path.joinpath("bet.pt"))
-        case _:
-            raise ValueError(f"Data Type {data_type.name} not supported")
-    return k, bet
 
 
 def create_subsampling_masks(shape):
@@ -604,17 +553,19 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
     # get path
     path_out = plib.Path(
         get_test_result_output_dir(
-            f"autograd_subsampling_optimization_{loraks_type.name}_{data_type.name}".lower(),
+            f"autograd_subsampling_optimization",
             mode=ResultMode.EXPERIMENT)
     )
+    path_out = path_out.joinpath(f"{loraks_type.name}".lower()).joinpath(f"{data_type.name}".lower())
     logger.info(f"Set Output Path: {path_out}")
     # set path for data output
     path_out_data = path_out.joinpath("data")
     path_out_data.mkdir(exist_ok=True, parents=True)
+
     logger.info(f"Set Data Output Path: {path_out_data}")
 
     # load data
-    k, bet = load_data(data_type=data_type)
+    k, _, bet = load_data(data_type=data_type)
 
     # Extract sampling density
     path_tmp = path_out_data.joinpath("sampling_density_data").with_suffix(".pkl")
@@ -635,10 +586,11 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
                 batch_size_channels=8, rank=150
             )
         else:
-            grad, prep_k, mask, loraks = autograd_optimization_p(
-                k=k, device=device,
-                batch_size_channels=8, rank=150
-            )
+            # grad, prep_k, mask, loraks = autograd_optimization_p(
+            #     k=k, device=device,
+            #     batch_size_channels=8, rank=150
+            # )
+            raise NotImplementedError(f"Loraks type {loraks_type} not implemented")
         sampling_density, grad_mac, indices_ac = extract_sampling_density(grad=grad, ac_mask=mask)
         logger.info(f"Save data: {path_tmp}")
         sd = {"sampling_density": sampling_density, "grad_mac": grad_mac, "indices_ac": indices_ac, "mask": mask}
