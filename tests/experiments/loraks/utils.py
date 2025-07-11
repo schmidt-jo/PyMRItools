@@ -13,6 +13,8 @@ from pymritools.recon.loraks.utils import (
 )
 from typing import Tuple
 import subprocess
+import os
+import tracemalloc
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
@@ -160,3 +162,81 @@ def run_matlab_script(script_name, script_args=None, script_dir=None, capture_ou
 
     memory_usage = max(memory_usage)
     return memory_usage
+
+
+class TorchMemoryTracker:
+    def __init__(self, device: torch.device):
+        self.memory_allocated = 0
+        self.memory_reserved = 0
+        if device.type not in ['cpu', 'cuda']:
+            raise ValueError(f"Device type {device.type} not supported")
+        self.device = device
+        self.memory_info = {}
+
+        if self.device.type == 'cuda':
+            torch.cuda.reset_peak_memory_stats(self.device)
+            torch.cuda.reset_accumulated_memory_stats(self.device)
+            torch.cuda.synchronize(self.device)
+            self.process = None
+        else:
+            # Start tracemalloc for detailed memory tracking
+            tracemalloc.start()
+
+            # Get initial process memory
+            self.process = psutil.Process(os.getpid())
+
+    def start_tracking(self):
+        if self.device.type == 'cuda':
+            self.memory_info = {
+                "start": {
+                    'memory_allocated': torch.cuda.max_memory_allocated(self.device),
+                    'memory_reserved': torch.cuda.max_memory_reserved(self.device),
+                    'memory_allocated_mb': self.memory_info['memory_allocated'] / (1024 * 1024),
+                    'memory_reserved_mb': self.memory_info['memory_reserved'] / (1024 * 1024)
+                }
+            }
+        else:
+            # CPU memory tracking
+            mem_before = self.process.memory_info().rss
+
+            # Get tracemalloc stats
+            current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            self.memory_info = {
+                "start": {
+                    'memory_used': mem_before,  # Memory used during the operation
+                    'memory_used_mb': mem_before / (1024 * 1024),
+                    'tracemalloc_current': current,
+                    'tracemalloc_peak': peak,
+                    'tracemalloc_current_mb': current / (1024 * 1024),
+                    'tracemalloc_peak_mb': peak / (1024 * 1024)
+                }
+            }
+    def end_tracking(self):
+        if self.device.type == 'cuda':
+            self.memory_info["end"] = {
+                'memory_allocated': torch.cuda.max_memory_allocated(self.device),
+                'memory_reserved': torch.cuda.max_memory_reserved(self.device),
+                'memory_allocated_mb': self.memory_info['end']['memory_allocated'] / (1024 * 1024),
+                'memory_reserved_mb': self.memory_info['end']['memory_reserved'] / (1024 * 1024)
+            }
+        else:
+            # CPU memory tracking
+            mem_after = self.process.memory_info().rss
+
+            # Get tracemalloc stats
+            current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            self.memory_info = {
+                "start": {
+                    'memory_used': mem_after,  # Memory used during the operation
+                    'memory_used_mb': mem_after / (1024 * 1024),
+                    'tracemalloc_current': current,
+                    'tracemalloc_peak': peak,
+                    'tracemalloc_current_mb': current / (1024 * 1024),
+                    'tracemalloc_peak_mb': peak / (1024 * 1024)
+                }
+            }
+    def get_memory_info(self):
+        pass
+

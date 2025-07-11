@@ -12,7 +12,7 @@ from scipy.io import loadmat, savemat
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, ResultMode
-from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, DataType, create_phantom, run_matlab_script
+from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_matlab_script, TorchMemoryTracker
 
 logger = logging.getLogger(__name__)
 
@@ -95,12 +95,14 @@ def recon_ac_loraks_matlab(
 
     # load in results
     logger.info("Fetch results")
-    results = loadmat(path.joinpath("output.mat"))
+    results = loadmat(path.joinpath("output.mat").as_posix())
 
     times = torch.from_numpy(results["t"][0])
     k_recon = torch.from_numpy(results["k_recon"][0])
     t = torch.sum(times) / times.shape[0]
-    return k_recon, t_processing, memory
+    return k_recon, t, memory
+
+
 
 
 def recon_ac_loraks(
@@ -130,10 +132,15 @@ def recon_ac_loraks(
         globals={"ac_loraks": ac_loraks, "k_in": k_in}
     )
     # warmup & result
-    recon = ac_loraks.reconstruct(k_in)
     _ = t.timeit(max(1, num_warmup_runs - 1))
+    # memory
+    mem_track = TorchMemoryTracker(device=device)
 
-    # measurement
+    # Mem Measurement
+    mem_track.start_tracking()
+    recon = ac_loraks.reconstruct(k_in)
+    mem_track.end_tracking()
+    # Time Measurement
     t_processing = t.timeit(num_timer_runs) / num_timer_runs
 
     # unprep
