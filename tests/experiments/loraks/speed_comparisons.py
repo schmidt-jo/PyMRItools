@@ -56,7 +56,6 @@ def main():
                 _, k_us = create_phantom(shape_xyct=(nx.item(), ny.item(), nc.item(), ne.item()), acc=3, ac_lines=ny.item() // 6.5)
                 mem_track_load.end_tracking()
                 mem_load = mem_track_load.get_memory_usage()
-
                 tmp = loop(
                     k_us=k_us, mxy=mxy.item(), mce=mce.item(), nc=nc.item(), ne=ne.item(), batch_size_channels=-1,
                     rank=max(15, min(mce.item(), mxy.item()) // 10), regularization_lambda=0.0, max_num_iter=20, num_warmup_runs=2,
@@ -77,32 +76,44 @@ def loop(k_us: torch.Tensor, mxy, mce, nc, ne, batch_size_channels: int = -1,
         msg = "No GPU device available, skipping GPU benchmark"
         logger.warning(msg)
     else:
-        k_re_gpu, time_gpu, mem_gpu = recon_ac_loraks(
-            k=k_us.clone(), device=torch.device("cuda:0"),
+        try:
+            k_re_gpu, time_gpu, mem_gpu = recon_ac_loraks(
+                k=k_us.clone(), device=torch.device("cuda:0"),
+                rank=rank, regularization_lambda=regularization_lambda,
+                max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
+            )
+            tmp.append({
+                "Mode": "torch", "Device": "GPU", "Time": time_gpu, "Memory": mem_gpu,
+                "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
+            })
+            del k_re_gpu, time_gpu, mem_gpu
+        except Exception as e:
+            tmp.append({
+                "Mode": "torch", "Device": "GPU", "Time": None, "Memory": "Maxed Out",
+                "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
+            })
+
+
+    logger.info(f"__ Processing Torch CPU\n")
+    try:
+        k_re_cpu, time_cpu, mem_cpu = recon_ac_loraks(
+            k=k_us.clone(), device=torch.device("cpu"),
             rank=rank, regularization_lambda=regularization_lambda,
             max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
         )
+        # for all but torch cpu the tensor is in ram (GPU) or the loading is tracked in memory (matlab),
+        # hence we need to add this here
+        mem_cpu += mem_load
         tmp.append({
-            "Mode": "torch", "Device": "GPU", "Time": time_gpu, "Memory": mem_gpu,
+            "Mode": "torch", "Device": "CPU", "Time": time_cpu, "Memory": mem_cpu,
             "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
-
         })
-        del k_re_gpu, time_gpu, mem_gpu
-
-    logger.info(f"__ Processing Torch CPU\n")
-    k_re_cpu, time_cpu, mem_cpu = recon_ac_loraks(
-        k=k_us.clone(), device=torch.device("cpu"),
-        rank=rank, regularization_lambda=regularization_lambda,
-        max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
-    )
-    # for all but torch cpu the tensor is in ram (GPU) or the loading is tracked in memory (matlab),
-    # hence we need to add this here
-    mem_cpu += mem_load
-    tmp.append({
-        "Mode": "torch", "Device": "CPU", "Time": time_cpu, "Memory": mem_cpu,
-        "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
-    })
-    del k_re_cpu, time_cpu, mem_cpu
+        del k_re_cpu, time_cpu, mem_cpu
+    except Exception as e:
+        tmp.append({
+            "Mode": "torch", "Device": "CPU", "Time": None, "Memory": "Maxed Out",
+            "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
+        })
 
     logger.info(f"__ Processing Matlab CPU\n")
     k_re_mat, time_mat, mem_mat = recon_ac_loraks_matlab(
