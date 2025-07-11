@@ -1,6 +1,10 @@
 import torch
+import logging
 import pathlib as plib
 import sys
+import threading
+import time
+import psutil
 from enum import Enum, auto
 from pymritools.utils import torch_load
 from pymritools.recon.loraks.utils import (
@@ -8,13 +12,13 @@ from pymritools.recon.loraks.utils import (
     check_channel_batch_size_and_batch_channels, unpad_output, unprepare_batches_to_k_space
 )
 from typing import Tuple
-import os
 import subprocess
-import scipy.io as sio
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
+
+logger = logging.getLogger(__name__)
 
 
 class DataType(Enum):
@@ -101,33 +105,58 @@ def run_matlab_script(script_name, script_args=None, script_dir=None, capture_ou
 
     # Default script directory is 'matlab' subdirectory of current file's directory
     if script_dir is None:
-        script_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "matlab")
+        script_dir = plib.Path(__name__).absolute().parent.joinpath("matlab")
+    # ensure Path object
+    script_dir = plib.Path(script_dir)
 
     # Full path to the script
-    script_path = os.path.join(script_dir, script_name)
+    script_path = script_dir.joinpath(script_name)
 
     # Construct the MATLAB command
     matlab_cmd = f"matlab -nodisplay -nosplash -nodesktop -r \"addpath('{script_dir}'); "
 
     # Extract script name without extension for the function call
-    script_func = os.path.splitext(script_name)[0]
+    script_func = script_path.as_posix()
 
     # Add function call with arguments if provided
     if script_args:
-        matlab_cmd += f"{script_func}({script_args}); "
+        matlab_cmd += f"run('{script_func}({script_args})'); "
     else:
-        matlab_cmd += f"{script_func}; "
+        matlab_cmd += f"run('{script_func}'); "
 
     # Add an exit command to close MATLAB after execution
     matlab_cmd += "exit;\""
 
+    logger.debug(f"CMD:: {matlab_cmd}")
     # Run the MATLAB command
-    result = subprocess.run(matlab_cmd, shell=True, capture_output=capture_output, text=True)
+    # process = subprocess.run(matlab_cmd, shell=True, capture_output=capture_output, text=True)
+    process = subprocess.Popen(matlab_cmd, shell=True, text=True)
 
-    # Check for errors
-    if result.returncode != 0:
-        if capture_output:
-            print(f"MATLAB error: {result.stderr}")
-        raise RuntimeError(f"MATLAB script '{script_name}' execution failed")
+    # Get the process object of the subprocess
+    subprocess_process = psutil.Process(process.pid)
 
-    return result
+    memory_usage = []
+    memory_usage.append(subprocess_process.memory_info().rss / (1024 * 1024))
+    # Track the memory usage during the process
+    # Function to track the memory usage of the subprocess
+    def track_memory_usage():
+        while subprocess_process.is_running():
+            mem = subprocess_process.memory_info().rss
+            memory_usage.append(mem / (1024 * 1024))
+            time.sleep(0.5)
+
+    # Create a thread to track the memory usage of the subprocess
+    thread = threading.Thread(target=track_memory_usage)
+    thread.start()
+
+    # Wait for the subprocess to finish
+    process.wait()
+    #
+    # # Check for errors
+    # if result.returncode != 0:
+    #     if capture_output:
+    #         print(f"MATLAB error: {result.stderr}")
+    #     raise RuntimeError(f"MATLAB script '{script_name}' execution failed")
+
+    memory_usage = max(memory_usage)
+    return memory_usage
