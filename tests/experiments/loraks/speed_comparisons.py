@@ -5,6 +5,10 @@ from timeit import Timer
 import polars as pl
 
 import torch
+import plotly.graph_objects as go
+import plotly.subplots as psub
+import plotly.colors as plc
+
 from pymritools.recon.loraks.loraks import Loraks
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, ComputationType, SolverType
 from pymritools.recon.loraks.loraks import LoraksImplementation, OperatorType, RankReduction, RankReductionMethod
@@ -26,9 +30,28 @@ logger = logging.getLogger(__name__)
 ## 5) Time computations
 
 
-def main():
+def test_memory_tracking():
+    nx, ny, nc, ne = (140, 120, 4, 2)
+    mem_track_load = TorchMemoryTracker(torch.device("cpu"))
+    mem_track_load.start_tracking()
+    # get the data
+    _, k_us = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=3, ac_lines=ny // 6.5)
+    mem_track_load.end_tracking()
+    mem_load = mem_track_load.get_memory_usage()
+    mxy = nx * ny
+    mce = 5**2 * nc * ne
+    meas = loop(
+        k_us=k_us, mxy=mxy, mce=mce, nc=nc, ne=ne, batch_size_channels=-1,
+        rank=max(15, min(mce, mxy) // 10), regularization_lambda=0.0, max_num_iter=20, num_warmup_runs=2,
+        num_timer_runs=3, mem_load=mem_load
+    )
+    logger.info(meas)
+
+
+def compute():
     # get path
     path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
+    # path_out.mkdir(parents=True, exist_ok=True)
 
     # do loops for different data sizes
     ms_xy = torch.linspace(100*100, 280*280, 10)
@@ -224,7 +247,147 @@ def recon_ac_loraks(
     return k_recon, t_processing, memory
 
 
+def plot():
+    path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
+    fn = path_out.joinpath("results_df").with_suffix(".json")
+    logger.info(f"Loading from {fn}")
+
+    df = pl.read_ndjson(fn)
+    df = df.with_columns(pl.col('mxy').cast(pl.Int32))
+
+    df_plot = df.with_columns(
+        pl.concat_str(
+            [pl.col("Mode"), pl.col("Device")],
+            separator=" - "
+        ).alias("plot_mode")
+    )
+    df_plot = df_plot.sort(by="mxy", descending=False)
+
+    df_plot = df_plot.with_columns(
+        pl.concat_str(
+            [pl.col("mxy"), pl.col("mce")],
+            separator=" x "
+        ).alias("plot_size")
+    )
+    # average across same matrix sizes but different nc / ne parameters
+    df_plot = df_plot.group_by(["Mode", "Device", "mxy", "mce", "plot_mode", "plot_size"]).agg([
+        pl.col("Memory").mean().alias("Memory"),
+        pl.col("Time").mean().alias("Time")
+    ])
+    df_plot = df_plot.sort(by=["mxy", "plot_mode"], descending=False)
+
+    mxyces = df_plot["plot_size"].unique()
+    mces = df["mce"].unique().sort(descending=False)
+    mxys = df["mxy"].unique().sort(descending=False)
+    ncs = df["nc"].unique().sort(descending=False)
+    nes = df["ne"].unique().sort(descending=False)
+
+    fig = psub.make_subplots(
+        rows=2, cols=2,
+        vertical_spacing=0.05, horizontal_spacing=0.12,
+        x_title="Implementation",
+        shared_xaxes=True,
+    )
+    # we want to plot time and memory against the implementation type
+    # and color code either spatial matrix sizes for a fixed neighborhood matrix size or vice versa
+    data = [
+        {"fixed": "mxy", "colors": "mce", "data": "Time"}, {"fixed": "mce", "colors": "mxy", "data": "Time"}
+    ]
+    for i, d in enumerate(data):
+        # fix one of the two matrix dims
+        fixed_value = df_plot[d["fixed"]].unique().sort(descending=False)
+        df_tmp = df_plot.filter(pl.col(d["fixed"]) == fixed_value[-2])
+        # extract all matrix sizes for the unfixed dim
+        unfixed_values = df_tmp[d["colors"]].unique()
+        cmap = plc.sample_colorscale("Inferno", len(unfixed_values))
+
+        # set coloraxis to either of the two depending on the input
+        c_ax = "coloraxis" if i < 1 else f"coloraxis2"
+
+        # iterate through unfixed matrix dim
+        for g, m in enumerate(unfixed_values):
+            df_tmptmp = df_tmp.filter((pl.col(d["colors"]) == m))
+
+            # now we want to plot time and memory consumption in different columns
+            units = ["[s]", "[MB]"]
+            for it, t in enumerate(["Time", "Memory"]):
+                fig.add_trace(
+                    go.Bar(
+                        x=[s[0].capitalize() + s[1:] for s in df_tmptmp["plot_mode"]], y=df_tmptmp[t],
+                        marker=dict(
+                            color=cmap[g],
+                            coloraxis=c_ax,
+                            showscale=i == 0
+                        ),
+                        showlegend=(i > 0) & (it == 0),
+                        legendgroup=g, name=f"M. size - Nx Ny: {m}"
+                    ),
+                    row=1+i, col=1+it
+                )
+                fig.update_yaxes(title=f"{t} {units[it]}", row=1+i, col=1+it)
+        if i == 0:
+            fig.update_layout(
+                {c_ax: dict(
+                colorscale="Inferno",
+                cmin=0.0, cmax=[mces, mxys][i].max(),
+                colorbar=dict(
+                    x=1.01, y=0.5 - i*0.5, len=0.5, thickness=14,
+                    title=dict(text=f"Matrix size - {['Nc Ne Nb', 'Nx Ny'][i]}", side="right"),
+                    xanchor="left", yanchor="bottom",
+                    )
+                )
+                }
+            )
+    fig.update_layout(
+        width=1000,
+        height=500,
+        margin=dict(t=25, b=55, l=65, r=5),
+        legend=dict(
+            yanchor="bottom",
+            y=0.0,
+            xanchor="left",
+            x=1.01
+        )
+    )
+    fn = path_out.joinpath(f"comparisons").with_suffix(".html")
+    logger.info(f"write file: {fn}")
+    fig.write_html(fn)
+    for suff in [".pdf", ".png"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"write file: {fn}")
+        fig.write_image(fn)
+
+    # modes = df_plot["plot_mode"].unique().sort(descending=False)
+    # cmap = plc.sample_colorscale("Inferno", len(modes), 0.1, 0.9)
+    # fig = go.Figure()
+    #
+    # for g, mxy in enumerate(mxys):
+    #     for i, m in enumerate(modes):
+    #         df_tmp = df_plot.filter((pl.col("mxy") == mxy) & (pl.col("plot_mode") == m))
+    #         fig.add_trace(
+    #             go.Bar(
+    #                 x=df_tmp["mce"], y=df_tmp["Time"],
+    #                 marker=dict(color=cmap[i]),
+    #                 legendgroup=i, name=m, showlegend=g == 0
+    #             )
+    #         )
+    # fig.update_layout(
+    #     width=1000,
+    #     height=550,
+    #     margin=dict(t=25, b=55, l=65, r=5),
+    #     xaxis=dict(title="Matrix size - Nc Ne Nb"),
+    #     yaxis=dict(title="Computation Time [s]")
+    # )
+    # fn = path_out.joinpath(f"comparisons").with_suffix(".html")
+    # logger.info(f"write file: {fn}")
+    # fig.write_html(fn)
+    # for suff in [".pdf", ".png"]:
+    #     fn = fn.with_suffix(suff)
+    #     logger.info(f"write file: {fn}")
+    #     fig.write_image(fn)
+
+
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
-    main()
+    test_memory_tracking()

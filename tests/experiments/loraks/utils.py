@@ -189,16 +189,18 @@ class TorchMemoryTracker:
 
     def _get_cpu_mem_dict(self):
         # CPU memory tracking
-        mem_before = self.process.memory_info().rss
+        mem_info = self.process.memory_full_info()
+        mem_used = mem_info.rss + mem_info.vms
         # Get tracemalloc stats
         current, peak = tracemalloc.get_traced_memory()
         d = {
-            'memory_used': mem_before,  # Memory used during the operation
-            'memory_used_mb': mem_before / (1024 * 1024),
+            'memory_used': mem_used,  # Memory used during the operation
+            'memory_used_mb': mem_used / (1024 * 1024),
             'tracemalloc_current': current,
             'tracemalloc_peak': peak,
             'tracemalloc_current_mb': current / (1024 * 1024),
-            'tracemalloc_peak_mb': peak / (1024 * 1024)
+            'tracemalloc_peak_mb': peak / (1024 * 1024),
+            "mem_info": mem_info
         }
         return d
 
