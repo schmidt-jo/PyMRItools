@@ -114,78 +114,77 @@ def automatic_low_rank_param_extraction(data_type: DataType, force_processing: b
             results = pickle.load(f)
     else:
         results = []
-        if data_type == DataType.SHEPPLOGAN:
-            for i, c in enumerate(torch.arange(4, 36, 3)):
-                k, _ = create_phantom(shape_xyct=(192, 168, c, 4), acc=3, ac_lines=32)
-                # calculate matrix size
-                mat_size = nb_size * c * 4
-                # first for fully sampled input
-                # prep / batch input k-space
-                k_in_fs, _, _, _ = prep_k_space(k.unsqueeze_(2).to(device), batch_size_channels=-1)
-                # we want to build the operators from fully sampled and undersampled k-space
-                op = Operator(
-                    k_space_shape=k_in_fs.shape, nb_side_length=5,
-                    device=device,
-                    operator_type=OperatorType.S
-                )
-                # iterate through for fs data
-                svd_vals, th = process_rsvd(k_in_fs, op)
-                # calculate acc - factor from data
-                results.append({
-                    "name": "Fully-Sampled", "acc": 1, "calc_acc": 1,
-                    "svd_vals": svd_vals.cpu(), "thresh": th.item(),
-                    "nc": c, "ne": 4, "mat_size": mat_size.item()
-                })
-                # iterate for some acceleration factors, i.e. subsampled k-space
-                for i, acc in enumerate(torch.linspace(2, 12, 8)):
-                    logger.info(f"Processing Acc. {acc:.2f}")
-                    _, k_us = create_phantom(shape_xyct=k.shape, acc=acc.item(), ac_lines=32)
-                    # calc acc from input
-                    calc_acc = torch.prod(torch.tensor(k_us.shape[:2])) / torch.count_nonzero(k_us[..., 0, 0])
-                    # prep / batch input k-space
-                    k_in, _, _, _ = prep_k_space(k_us.unsqueeze_(2).to(device), batch_size_channels=-1)
-                    svd_vals, th = process_rsvd(k_in, op)
-                    results.append({
-                        "name": f"Sub-Sampled", "acc": acc.item(), "svd_vals": svd_vals.cpu(), "thresh": th.item(),
-                        "nc": c.item(), "ne": 4, "mat_size": mat_size.item(), "calc_acc": calc_acc
-                    })
-            plot_results_svals(results, path)
-        else:
-            k, _, bet = load_data(data_type=data_type)
-            nx, ny, nc, ne = k.shape
-            for acc in torch.linspace(1, 12, 8):
-                logger.info(f"Process acc: {acc:.2f}")
-                logger.info("_______________________")
-                logger.info("_______________________")
-                # create sampling mask
-                _, k_us = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=acc, ac_lines=32)
-                mask = k_us.abs() > 1e-10
-                k_in = k.clone()
-                k_in[~mask] = 0
-                calc_acc = torch.prod(torch.tensor(mask.shape)) / torch.count_nonzero(mask)
-                # reduce available data
-                for ic in tqdm.tqdm(torch.arange(4, nc+1, 4)):
-                    # some randomization runs
-                    for rc in range(3):
-                        idx_c = torch.randint(low=0, high=nc, size=(ic,))
-                        for ie in torch.arange(2, ne+1, 2):
-                            if ic * ie > 32*6:
-                                break
-                            # some randomization runs
-                            for re in range(3):
-                                idx_e = torch.randint(low=0, high=ne, size=(ie,))
-                                data = k_in[:, :, idx_c, :][..., idx_e]
-                                data_in, _, _, _ = prep_k_space(data.unsqueeze_(2), batch_size_channels=-1)
-                                op = Operator(
-                                    k_space_shape=data_in.shape[1:], nb_side_length=5, device=device, operator_type=OperatorType.S
-                                )
-                                _, th = process_rsvd(data_in.to(device), op, area_thr_factor=0.9)
-                                # calculate matrix size
-                                mat_size = nb_size * ic * ie
-                                results.append({
-                                    "name": f"Sub-Sampled", "acc": acc.item(), "thresh": th, "random_c": rc, "random_e": re,
-                                    "nc": ic.item(), "ne": ie.item(), "mat_size": mat_size.item(), "calc_acc": calc_acc.item()
-                                })
+        # if data_type == DataType.SHEPPLOGAN:
+            # for i, c in enumerate(torch.arange(4, 36, 3)):
+            #     k, _ = create_phantom(shape_xyct=(192, 168, c, 4), acc=3, ac_lines=32)
+                # # calculate matrix size
+                # mat_size = nb_size * c * 4
+                # # first for fully sampled input
+                # # prep / batch input k-space
+                # k_in_fs, _, _, _ = prep_k_space(k.unsqueeze_(2).to(device), batch_size_channels=-1)
+                # # we want to build the operators from fully sampled and undersampled k-space
+                # op = Operator(
+                #     k_space_shape=k_in_fs.shape, nb_side_length=5,
+                #     device=device,
+                #     operator_type=OperatorType.S
+                # )
+                # # iterate through for fs data
+                # svd_vals, th = process_rsvd(k_in_fs, op)
+                # # calculate acc - factor from data
+                # results.append({
+                #     "name": "Fully-Sampled", "acc": 1, "calc_acc": 1,
+                #     "svd_vals": svd_vals.cpu(), "thresh": th.item(),
+                #     "nc": c, "ne": 4, "mat_size": mat_size.item()
+                # })
+                # # iterate for some acceleration factors, i.e. subsampled k-space
+                # for i, acc in enumerate(torch.linspace(2, 12, 8)):
+                #     logger.info(f"Processing Acc. {acc.item():.2f}")
+                #     _, k_us = create_phantom(shape_xyct=k.shape, acc=acc.item(), ac_lines=32)
+                #     # calc acc from input
+                #     calc_acc = torch.prod(torch.tensor(k_us.shape[:2])) / torch.count_nonzero(k_us[..., 0, 0])
+                #     # prep / batch input k-space
+                #     k_in, _, _, _ = prep_k_space(k_us.unsqueeze_(2).to(device), batch_size_channels=-1)
+                #     svd_vals, th = process_rsvd(k_in, op)
+                #     results.append({
+                #         "name": f"Sub-Sampled", "acc": acc.item(), "svd_vals": svd_vals.cpu(), "thresh": th.item(),
+                #         "nc": c.item(), "ne": 4, "mat_size": mat_size.item(), "calc_acc": calc_acc
+                #     })
+        # else:
+        k, _, bet = load_data(data_type=data_type)
+        nx, ny, nc, ne = k.shape
+        for acc in torch.linspace(1, 12, 8):
+            logger.info(f"Process acc: {acc:.2f}")
+            logger.info("_______________________")
+            logger.info("_______________________")
+            # create sampling mask
+            _, k_us = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=acc, ac_lines=32)
+            mask = k_us.abs() > 1e-10
+            k_in = k.clone()
+            k_in[~mask] = 0
+            calc_acc = torch.prod(torch.tensor(mask.shape)) / torch.count_nonzero(mask)
+            # reduce available data
+            for ic in tqdm.tqdm(torch.arange(4, nc+1, 4)):
+                # some randomization runs
+                for rc in range(3):
+                    idx_c = torch.randint(low=0, high=nc, size=(ic,))
+                    for ie in torch.arange(2, ne+1, 2):
+                        if ic * ie > 32*6:
+                            break
+                        # some randomization runs
+                        for re in range(3):
+                            idx_e = torch.randint(low=0, high=ne, size=(ie,))
+                            data = k_in[:, :, idx_c, :][..., idx_e]
+                            data_in, _, _, _ = prep_k_space(data.unsqueeze_(2), batch_size_channels=-1)
+                            op = Operator(
+                                k_space_shape=data_in.shape[1:], nb_side_length=5, device=device, operator_type=OperatorType.S
+                            )
+                            _, th = process_rsvd(data_in.to(device), op, area_thr_factor=0.9)
+                            # calculate matrix size
+                            mat_size = nb_size * ic * ie
+                            results.append({
+                                "name": f"Sub-Sampled", "acc": acc.item(), "thresh": th, "random_c": rc, "random_e": re,
+                                "nc": ic.item(), "ne": ie.item(), "mat_size": mat_size.item(), "calc_acc": calc_acc.item()
+                            })
 
         logger.info(f"Write file: {path_out}")
         with open(path_out.as_posix(), "wb") as f:
@@ -400,5 +399,5 @@ def plot_results_vs_acc_mat_size(results, path):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    automatic_low_rank_param_extraction(data_type=DataType.INVIVO, force_processing=True)
+    automatic_low_rank_param_extraction(data_type=DataType.SHEPPLOGAN, force_processing=True)
     # try_arsvd()

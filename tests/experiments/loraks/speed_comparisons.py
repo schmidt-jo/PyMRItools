@@ -78,15 +78,15 @@ def compute():
                 # get the data
                 _, k_us = create_phantom(shape_xyct=(nx.item(), ny.item(), nc.item(), ne.item()), acc=3, ac_lines=ny.item() // 6.5)
                 mem_track_load.end_tracking()
-                mem_load = mem_track_load.get_memory_usage()
+                mem_load = sum(mem_track_load.get_memory_usage())
                 tmp = loop(
                     k_us=k_us, mxy=mxy.item(), mce=mce.item(), nc=nc.item(), ne=ne.item(), batch_size_channels=-1,
-                    rank=max(15, min(mce.item(), mxy.item()) // 10), regularization_lambda=0.0, max_num_iter=20, num_warmup_runs=2,
+                    rank=max(15, min(mce.item(), mxy.item()) // 10), regularization_lambda=0.0, max_num_iter=10, num_warmup_runs=2,
                     num_timer_runs=3, mem_load=mem_load
                 )
                 meas.extend(tmp)
         df = pl.DataFrame(meas)
-        fn = path_out.joinpath("results_df").with_suffix(".json")
+        fn = path_out.joinpath("results_df_latest").with_suffix(".json")
         logger.info(f"Writing to {fn}")
         df.write_ndjson(fn)
 
@@ -100,13 +100,13 @@ def loop(k_us: torch.Tensor, mxy, mce, nc, ne, batch_size_channels: int = -1,
         logger.warning(msg)
     else:
         try:
-            k_re_gpu, time_gpu, mem_gpu = recon_ac_loraks(
+            k_re_gpu, time_gpu, mem_gpu, _, _ = recon_ac_loraks(
                 k=k_us.clone(), device=torch.device("cuda:0"),
                 rank=rank, regularization_lambda=regularization_lambda,
                 max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
             )
             tmp.append({
-                "Mode": "torch", "Device": "GPU", "Time": time_gpu, "Memory": mem_gpu,
+                "Mode": "torch", "Device": "GPU", "Time": time_gpu, "Memory": mem_gpu, "Memory_tm": 0, "Memory_shared": 0,
                 "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
             })
             del k_re_gpu, time_gpu, mem_gpu
@@ -119,7 +119,7 @@ def loop(k_us: torch.Tensor, mxy, mce, nc, ne, batch_size_channels: int = -1,
 
     logger.info(f"__ Processing Torch CPU\n")
     try:
-        k_re_cpu, time_cpu, mem_cpu = recon_ac_loraks(
+        k_re_cpu, time_cpu, mem_cpu, tm, shared = recon_ac_loraks(
             k=k_us.clone(), device=torch.device("cpu"),
             rank=rank, regularization_lambda=regularization_lambda,
             max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
@@ -128,7 +128,7 @@ def loop(k_us: torch.Tensor, mxy, mce, nc, ne, batch_size_channels: int = -1,
         # hence we need to add this here
         mem_cpu += mem_load
         tmp.append({
-            "Mode": "torch", "Device": "CPU", "Time": time_cpu, "Memory": mem_cpu,
+            "Mode": "torch", "Device": "CPU", "Time": time_cpu, "Memory": mem_cpu, "Memory_tm": tm, "Memory_shared": shared,
             "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
         })
         del k_re_cpu, time_cpu, mem_cpu
@@ -139,12 +139,12 @@ def loop(k_us: torch.Tensor, mxy, mce, nc, ne, batch_size_channels: int = -1,
         })
 
     logger.info(f"__ Processing Matlab CPU\n")
-    k_re_mat, time_mat, mem_mat = recon_ac_loraks_matlab(
+    k_re_mat, time_mat, mem_mat, mem_shared_mat = recon_ac_loraks_matlab(
         k=k_us, rank=rank, regularization_lambda=regularization_lambda,
         max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
     )
     tmp.append({
-        "Mode": "matlab", "Device": "CPU", "Time": time_mat, "Memory": mem_mat,
+        "Mode": "matlab", "Device": "CPU", "Time": time_mat, "Memory": mem_mat, "Memory_tm": 0, "Memory_shared": mem_shared_mat,
         "mxy": mxy, "mce": mce, "nc": nc, "ne": ne
     })
     del k_re_mat, time_mat, mem_mat
@@ -178,7 +178,7 @@ def recon_ac_loraks_matlab(
 
     logger.info("Call matlab routine")
     # we could provide the data path as script parameters or just stick to always using "data.mat"
-    memory = run_matlab_script("ac_loraks")
+    memory, shared = run_matlab_script("ac_loraks")
 
     # load in results
     logger.info("Fetch results")
@@ -187,7 +187,7 @@ def recon_ac_loraks_matlab(
     times = torch.from_numpy(results["t"][0])
     k_recon = torch.from_numpy(results["k_recon"][0])
     t = torch.sum(times) / times.shape[0]
-    return k_recon, t.item(), memory
+    return k_recon, t.item(), memory, shared
 
 
 def loraks_init_run(
@@ -243,13 +243,12 @@ def recon_ac_loraks(
     # Time Measurement
     t_processing = t.timeit(num_timer_runs) / num_timer_runs
 
-    memory = mem_track.get_memory_usage()
-    return k_recon, t_processing, memory
+    memory, tracem, shared = mem_track.get_memory_usage()
+    return k_recon, t_processing, memory, tracem, shared
 
 
-def plot():
-    path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
-    fn = path_out.joinpath("results_df").with_suffix(".json")
+def load_df_for_plotting(path: plib.Path):
+    fn = path.joinpath("results_df").with_suffix(".json")
     logger.info(f"Loading from {fn}")
 
     df = pl.read_ndjson(fn)
@@ -274,13 +273,15 @@ def plot():
         pl.col("Memory").mean().alias("Memory"),
         pl.col("Time").mean().alias("Time")
     ])
-    df_plot = df_plot.sort(by=["mxy", "plot_mode"], descending=False)
+    return df_plot.sort(by=["mxy", "plot_mode"], descending=False)
 
-    mxyces = df_plot["plot_size"].unique()
-    mces = df["mce"].unique().sort(descending=False)
-    mxys = df["mxy"].unique().sort(descending=False)
-    ncs = df["nc"].unique().sort(descending=False)
-    nes = df["ne"].unique().sort(descending=False)
+
+def plot_per_mode():
+    path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
+    df_plot = load_df_for_plotting(path=path_out)
+
+    mces = df_plot["mce"].unique().sort(descending=False)
+    mxys = df_plot["mxy"].unique().sort(descending=False)
 
     fig = psub.make_subplots(
         rows=2, cols=2,
@@ -288,6 +289,7 @@ def plot():
         x_title="Implementation",
         shared_xaxes=True,
     )
+
     # we want to plot time and memory against the implementation type
     # and color code either spatial matrix sizes for a fixed neighborhood matrix size or vice versa
     data = [
@@ -317,17 +319,16 @@ def plot():
                         marker=dict(
                             color=cmap[g],
                             coloraxis=c_ax,
-                            showscale=i == 0
+                            showscale=True
                         ),
-                        showlegend=(i > 0) & (it == 0),
+                        showlegend=False,
                         legendgroup=g, name=f"M. size - Nx Ny: {m}"
                     ),
                     row=1+i, col=1+it
                 )
                 fig.update_yaxes(title=f"{t} {units[it]}", row=1+i, col=1+it)
-        if i == 0:
-            fig.update_layout(
-                {c_ax: dict(
+        fig.update_layout(
+            {c_ax: dict(
                 colorscale="Inferno",
                 cmin=0.0, cmax=[mces, mxys][i].max(),
                 colorbar=dict(
@@ -336,20 +337,20 @@ def plot():
                     xanchor="left", yanchor="bottom",
                     )
                 )
-                }
-            )
+            }
+        )
     fig.update_layout(
         width=1000,
         height=500,
         margin=dict(t=25, b=55, l=65, r=5),
-        legend=dict(
-            yanchor="bottom",
-            y=0.0,
-            xanchor="left",
-            x=1.01
-        )
+        # legend=dict(
+        #     yanchor="bottom",
+        #     y=0.0,
+        #     xanchor="left",
+        #     x=1.01
+        # )
     )
-    fn = path_out.joinpath(f"comparisons").with_suffix(".html")
+    fn = path_out.joinpath(f"comparisons_per_mode").with_suffix(".html")
     logger.info(f"write file: {fn}")
     fig.write_html(fn)
     for suff in [".pdf", ".png"]:
@@ -357,37 +358,97 @@ def plot():
         logger.info(f"write file: {fn}")
         fig.write_image(fn)
 
-    # modes = df_plot["plot_mode"].unique().sort(descending=False)
-    # cmap = plc.sample_colorscale("Inferno", len(modes), 0.1, 0.9)
-    # fig = go.Figure()
-    #
-    # for g, mxy in enumerate(mxys):
-    #     for i, m in enumerate(modes):
-    #         df_tmp = df_plot.filter((pl.col("mxy") == mxy) & (pl.col("plot_mode") == m))
-    #         fig.add_trace(
-    #             go.Bar(
-    #                 x=df_tmp["mce"], y=df_tmp["Time"],
-    #                 marker=dict(color=cmap[i]),
-    #                 legendgroup=i, name=m, showlegend=g == 0
-    #             )
-    #         )
-    # fig.update_layout(
-    #     width=1000,
-    #     height=550,
-    #     margin=dict(t=25, b=55, l=65, r=5),
-    #     xaxis=dict(title="Matrix size - Nc Ne Nb"),
-    #     yaxis=dict(title="Computation Time [s]")
-    # )
-    # fn = path_out.joinpath(f"comparisons").with_suffix(".html")
-    # logger.info(f"write file: {fn}")
-    # fig.write_html(fn)
-    # for suff in [".pdf", ".png"]:
-    #     fn = fn.with_suffix(suff)
-    #     logger.info(f"write file: {fn}")
-    #     fig.write_image(fn)
+
+def plot_per_size():
+    path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
+
+    df_plot = load_df_for_plotting(path=path_out)
+
+    mces = df_plot["mce"].unique().sort(descending=False)
+    mxys = df_plot["mxy"].unique().sort(descending=False)
+    modes = df_plot["plot_mode"].unique().sort(descending=False).to_list()
+    mode_names = [s[0].capitalize() + s[1:] for s in modes]
+
+    df_plot = df_plot.with_columns(
+        pl.col('plot_mode').replace(
+            dict(zip(
+                sorted(df_plot["plot_mode"].unique()),
+                range(0, len(df_plot["plot_mode"].unique()))
+            ))
+        ).cast(pl.Int32).alias("plot_mode_int")
+    )
+
+    fig = psub.make_subplots(
+        rows=2, cols=2,
+        vertical_spacing=0.05, horizontal_spacing=0.02,
+        shared_xaxes=True, shared_yaxes=True
+    )
+
+    # we want to plot time and memory against the matrix size
+    # and color code either spatial matrix sizes for a fixed neighborhood matrix size or vice versa
+    data = [
+        {"fixed": "mxy", "unfixed": "mce"}, {"fixed": "mce", "unfixed": "mxy"}
+    ]
+
+    cmap = plc.sample_colorscale("Inferno", len(modes) + 1, 0.15, 0.95)
+    units = ["[s]", "[GB]"]
+
+    for i, d in enumerate(data):
+        # fix one of the two matrix dims
+        fixed_value = df_plot[d["fixed"]].unique().sort(descending=False)
+        df_tmp = df_plot.filter(pl.col(d["fixed"]) == fixed_value[-2])
+        for im, m in enumerate(modes):
+            for it, t in enumerate(["Time", "Memory"]):
+                if it > 0:
+                    if im < 2:
+                        continue
+                    c = 1
+                    f = 1e-3
+                else:
+                    c = 0
+                    f = 1
+                df_tmptmp = df_tmp.filter(pl.col("plot_mode") == m)
+                # plot for unfixed matrix dim, iterate through mode
+                fig.add_trace(
+                    go.Bar(
+                        x=df_tmptmp[d["unfixed"]], y=df_tmptmp[t] * f,
+                        marker=dict(
+                            color=[cmap[l + c] for l in df_tmptmp["plot_mode_int"]],
+                        ),
+                        # offsetgroup=df_tmp["plot_mode_int"],
+                        showlegend=(i == 0) & (it == 0),
+                        legendgroup=im, name=mode_names[im]
+                    ),
+                    col=1 + i, row=1 + it
+                )
+                if i == 0:
+                    fig.update_yaxes(title=f"{t} {units[it]}", col=1 + i, row=1+ it)
+                if it == 1:
+                    fig.update_xaxes(title=f"Matrix size - {['N<sub>c</sub> x N<sub>e</sub> x N<sub>b</sub>', 'N<sub>x</sub> N<sub>y</sub>'][i]}", col=1 + i, row=1 + it)
+
+    fig.update_layout(
+        width=1000,
+        height=500,
+        margin=dict(t=25, b=55, l=65, r=5),
+        barmode="group"
+        # legend=dict(
+        #     yanchor="bottom",
+        #     y=0.0,
+        #     xanchor="left",
+        #     x=1.01
+        # )
+    )
+    fn = path_out.joinpath(f"comparisons_per_size").with_suffix(".html")
+    logger.info(f"write file: {fn}")
+    fig.write_html(fn)
+    for suff in [".pdf", ".png"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"write file: {fn}")
+        fig.write_image(fn)
+
 
 
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
-    test_memory_tracking()
+    compute()

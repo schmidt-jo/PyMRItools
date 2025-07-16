@@ -35,8 +35,8 @@ def load_data(data_type: DataType):
     match data_type:
         case DataType.SHEPPLOGAN:
             # set some shapes
-            nx, ny, nc, ne = (156, 140, 4, 2)
-            k, k_us = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=1).unsqueeze(2)
+            nx, ny, nc, ne = (286, 256, 48, 8)
+            k, k_us = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=1)
             bet = None
         case DataType.PHANTOM:
             raise NotImplementedError("Phantom data not yet provided")
@@ -138,12 +138,15 @@ def run_matlab_script(script_name, script_args=None, script_dir=None, capture_ou
     subprocess_process = psutil.Process(process.pid)
 
     memory_usage = []
+    shared = []
     memory_usage.append(subprocess_process.memory_info().rss / (1024 * 1024))
     # Track the memory usage during the process
     # Function to track the memory usage of the subprocess
     def track_memory_usage():
         while subprocess_process.is_running():
-            mem = subprocess_process.memory_info().rss
+            mfi = subprocess_process.memory_full_info()
+            mem = mfi.rss + mfi.vms
+            shared.append(mfi.shared / (1024 * 1024))
             memory_usage.append(mem / (1024 * 1024))
             time.sleep(0.5)
 
@@ -161,7 +164,8 @@ def run_matlab_script(script_name, script_args=None, script_dir=None, capture_ou
     #     raise RuntimeError(f"MATLAB script '{script_name}' execution failed")
 
     memory_usage = max(memory_usage)
-    return memory_usage
+    shared_usage = max(shared)
+    return memory_usage, shared_usage
 
 
 class TorchMemoryTracker:
@@ -212,6 +216,7 @@ class TorchMemoryTracker:
             self.memory_info["start"] = self._get_cuda_mem_dict()
         else:
             tracemalloc.start()
+            tracemalloc.reset_peak()
             self.memory_info["start"] = self._get_cpu_mem_dict()
 
     def end_tracking(self):
@@ -225,8 +230,12 @@ class TorchMemoryTracker:
         if self.device.type == 'cuda':
             mem_after = self.memory_info["end"]["memory_allocated_mb"]
             mem_before = self.memory_info["start"]["memory_allocated_mb"]
+            tm = None
+            shared = None
         else:
             mem_after = self.memory_info["end"]["memory_used_mb"]
             mem_before = self.memory_info["start"]["memory_used_mb"]
-        return mem_after - mem_before
+            tm = self.memory_info["end"]["tracemalloc_peak_mb"] - self.memory_info["start"]["tracemalloc_peak_mb"]
+            shared = (self.memory_info["end"]["mem_info"].shared - self.memory_info["start"]["mem_info"].shared) / 1024 / 1024
+        return mem_after - mem_before, tm, shared
 
