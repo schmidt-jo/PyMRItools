@@ -51,7 +51,6 @@ class LoraksImplementation(Enum):
     AC_LORAKS = auto()
 
 
-@dataclass
 class RankReductionMethod(Enum):
     """
     Specifies the method used for cutting of ranks to calculate a low-rank representation.
@@ -65,9 +64,23 @@ class RankReductionMethod(Enum):
 class RankReduction(Serializable):
     """
     Specifies the method and value used for cutting of ranks to calculate a low-rank representation.
+    See also `recon.loraks.p_loraks.get_sv_threshold_function`
     """
     method: RankReductionMethod
     value: Optional[float | int] = None
+    """
+    Different methods require values with different meaning.
+    For HARD_CUTOFF: value is an int parameter specifying the rank cutoff value. This cutoff is essentially the position
+    in the singular value vector after which all singular values are set to zero.
+    For RELU_SHIFT: value is a float parameter specifying the shift value by which the singular values are lowered.
+    All singular values that are then below zero will be set to zero by RELU(singular_values - shift).
+    The difference between this method is that while the first method cuts at a certain rank position, this method
+    cuts off singular values depending on their value.
+    For RELU_SHIFT_AUTOMATIC: value is a float parameter in the range (0, 1) and specifies a percentage. The sum of all
+    singular values is calculated calculated and, e.g. a value of 0.9 indicates that all singular values that fall under
+    the first 90% of this sum will NOT be cut off. Note that this approach leads to different cutoffs for different 
+    iterations during the optimization.
+    """
 
 
 class OperatorType(Enum):
@@ -136,8 +149,9 @@ class LoraksBase(ABC):
 
     @abstractmethod
     def _initialize(self, k_space: torch.Tensor) -> None:
-        """ method to setup everything k-space dependent, e.g. indices, matrix shapes etc. """
+        """ method to set up everything k-space dependent, e.g. indices, matrix shapes etc. """
         raise NotImplementedError("Subclasses must implement this method")
+
     @final
     def reconstruct(self, k_space: torch.Tensor) -> torch.Tensor:
         """
@@ -151,7 +165,7 @@ class LoraksBase(ABC):
         # allocate output
         k_space_recon = torch.zeros_like(k_space)
         n_batches = k_space.shape[0]
-        for i in tqdm.tqdm(range(n_batches), desc="Reconstructing batches"):
+        for i in range(n_batches):
             logger.debug(f"Reconstructing batch {i+1} / {n_batches}")
             # put on device - device management, thus _reconstruct_batch to be a device-agnostic function?
             # batch = batch.to(self.device)
@@ -160,8 +174,7 @@ class LoraksBase(ABC):
             # Here is an idea: We already allocated k_space_recon at this place. At least in P-Loraks, I will
             # allocate another batch-sized tensor for the candidate. AFAIK it's all just C pointers and it should
             # be possible to assign this directly.
-
-        return k_space_recon
+        return k_space_recon.detach().cpu()
 
 
 class Loraks:
