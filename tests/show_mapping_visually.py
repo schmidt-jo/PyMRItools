@@ -3,9 +3,9 @@ import torch
 import plotly.io as pio
 import numpy as np
 
-from tests.utils import get_test_result_output_dir
-from pymritools.recon.loraks_dev_cleanup.matrix_indexing import get_circular_nb_indices_in_2d_shape, get_linear_indices
-from pymritools.recon.loraks_dev_cleanup.operators import c_operator, c_adjoint_operator, s_operator, s_adjoint_operator
+from tests.utils import get_test_result_output_dir, ResultMode
+from pymritools.recon.loraks.matrix_indexing import get_circular_nb_indices_in_2d_shape, get_linear_indices
+from pymritools.recon.loraks.operators import c_operator, c_adjoint_operator, s_operator, s_adjoint_operator
 from pymritools.utils import Phantom
 
 import plotly.subplots as psub
@@ -45,27 +45,41 @@ def test_mapping_visually():
     (nx, ny, nz, ...).
     Output files will be stored in the test_output directory.
     """
-    nxy = 8
-    nz = 1
-    k_space = torch.zeros((nxy,))[None, :] + torch.arange(nxy)[:, None]
-    k_space = k_space[:, :, None] + torch.zeros((nz,))[None, None, :]
+    nx = 23
+    ny = 7
+    nc = 2
+    line = torch.zeros((ny,))
+    line[ny // 2] = 1
+    k_space = torch.zeros((nx,))[None, :] + line[:, None]
+    k_space = k_space[None, :, :] + torch.zeros((nc,))[:, None, None]
 
     c_indices, c_shape = get_linear_indices(
         k_space_shape=k_space.shape,
-        patch_shape=(3, 3, -1),
-        sample_directions=(1, 1, 0)
+        patch_shape=(-1, 3, 3),
+        sample_directions=(1, 1, 1)
     )
     count_matrix = torch.bincount(c_indices)
     count_matrix[count_matrix == 0] = 1
 
-    mapped_k_space = c_operator(k_space=k_space, indices=c_indices, matrix_shape=c_shape)
-    recon_k_space = c_adjoint_operator(mapped_k_space, c_indices, k_space.shape)
+    # mapped_k_space = c_operator(k_space=k_space, indices=c_indices, matrix_shape=c_shape)
+    mapped_k_space = k_space.view(-1)[c_indices].view(c_shape)
+
+    # recon_k_space = c_adjoint_operator(mapped_k_space, c_indices, k_space.shape)
+
+    adj_c_matrix = torch.zeros(k_space.shape, dtype=k_space.dtype, device=k_space.device).view(-1)
+    # we need to unfold the neighborhood / channel dimension into neighborhood and channels and transpose to fit indices
+    # c_matrix = mapped_k_space.view(*k_space_dims[:-2], -1, c_matrix.shape[-1]).mT.contiguous()
+    # Here is the crucial step - eliminate loops in the adjoint operation by using 1D linear indexing and
+    # torch index_add
+    recon_k_space = adj_c_matrix.index_add(-1, c_indices.view(-1), mapped_k_space.view(-1)).view(k_space.shape)
+
+
     recon_k_space /= count_matrix.view(k_space.shape)
 
-    output_dir = get_test_result_output_dir(test_mapping_visually)
-    save_image(k_space[:, :, 0].numpy(), os.path.join(output_dir, "kspace_slice.png"))
-    save_image(mapped_k_space.numpy(), os.path.join(output_dir, "mapped_slice.png"))
-    save_image(recon_k_space[:, :, 0].numpy(), os.path.join(output_dir, "recon_kspace_slice.png"))
+    output_dir = get_test_result_output_dir(test_mapping_visually, mode=ResultMode.VISUAL)
+    save_image(k_space[0].numpy(), os.path.join(output_dir, "kspace_slice.png"))
+    save_image(mapped_k_space.mT.numpy(), os.path.join(output_dir, "mapped_slice.png"))
+    save_image(recon_k_space[0].numpy(), os.path.join(output_dir, "recon_kspace_slice.png"))
 
 
 def test_k_space_to_c_matrix_and_back():
@@ -115,11 +129,12 @@ def test_k_space_to_c_matrix_and_back():
     )
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
-    output_dir = get_test_result_output_dir("k_space_to_c_matrix_and_back_visualization")
+    output_dir = get_test_result_output_dir("k_space_to_c_matrix_and_back_visualization", mode=ResultMode.VISUAL)
     pio.write_html(fig, os.path.join(output_dir, "k_space_to_c_matrix_and_back_visualization.html"))
 
 
 def test_k_space_to_s_matrix_and_back():
+    # TODO: Fix S operator
     # set shape
     nx = 256
     ny = 240
@@ -188,5 +203,5 @@ def test_k_space_to_s_matrix_and_back():
     )
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
-    output_dir = get_test_result_output_dir("k_space_to_s_matrix_and_back_visualization")
+    output_dir = get_test_result_output_dir("k_space_to_s_matrix_and_back_visualization", mode=ResultMode.VISUAL)
     fig.write_html(os.path.join(output_dir, "k_space_to_s_matrix_and_back_visualization.html"))

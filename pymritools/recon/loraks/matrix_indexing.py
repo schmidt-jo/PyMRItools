@@ -81,7 +81,7 @@ def get_circular_nb_indices_in_2d_shape(k_space_2d_shape: tuple, nb_radius: int,
 def get_linear_indices(
         k_space_shape: tuple[int, ...],
         patch_shape: tuple[int, ...],
-        sample_directions: tuple[int, ...]) -> tuple[torch.Tensor, tuple[int, ...]]:
+        sample_directions: tuple[int, ...]) -> tuple[torch.Tensor, tuple[int, int]]:
     """Computes linear indices for multidimensional k-space sampling.
 
     This function calculates the linear indices needed for sampling patches in a
