@@ -3,6 +3,7 @@ import sys
 import logging
 from timeit import Timer
 import polars as pl
+import numpy as np
 
 import torch
 import plotly.graph_objects as go
@@ -55,7 +56,7 @@ def compute():
 
     # do loops for different data sizes
     ms_xy = torch.linspace(100*100, 280*280, 10)
-    ncs = torch.arange(4, 24, 4)
+    ncs = torch.arange(4, 37, 4)
     nes = torch.arange(2, 6, 1)
     # ms_xy = torch.tensor([10000])
     # ncs = torch.tensor([4])
@@ -247,8 +248,10 @@ def recon_ac_loraks(
     return k_recon, t_processing, memory, tracem, shared
 
 
-def load_df_for_plotting(path: plib.Path):
-    fn = path.joinpath("results_df").with_suffix(".json")
+def load_df(path: plib.Path, name: str = ""):
+    if name and not name.startswith("_"):
+        name=f"_{name}"
+    fn = path.joinpath(f"results_df{name}").with_suffix(".json")
     logger.info(f"Loading from {fn}")
 
     df = pl.read_ndjson(fn)
@@ -276,9 +279,9 @@ def load_df_for_plotting(path: plib.Path):
     return df_plot.sort(by=["mxy", "plot_mode"], descending=False)
 
 
-def plot_per_mode():
+def plot_per_mode(name: str = ""):
     path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
-    df_plot = load_df_for_plotting(path=path_out)
+    df_plot = load_df(path=path_out, name=name)
 
     mces = df_plot["mce"].unique().sort(descending=False)
     mxys = df_plot["mxy"].unique().sort(descending=False)
@@ -359,10 +362,10 @@ def plot_per_mode():
         fig.write_image(fn)
 
 
-def plot_per_size():
+def plot_per_size(name: str = ""):
     path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
 
-    df_plot = load_df_for_plotting(path=path_out)
+    df_plot = load_df(path=path_out, name=name)
 
     mces = df_plot["mce"].unique().sort(descending=False)
     mxys = df_plot["mxy"].unique().sort(descending=False)
@@ -447,8 +450,162 @@ def plot_per_size():
         fig.write_image(fn)
 
 
+def table_per_mode(name: str = ""):
+    path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
+
+    df = load_df(path=path_out, name=name)
+    # get df time normalized by matlab time
+    # create lookup reference
+    reference_values = (
+        df.filter(pl.col("Mode") == "matlab").group_by(
+            ["mxy", "mce", "plot_size"]
+        ).agg(pl.col("Time").first().alias("ref_time"))
+    )
+    df_norm = (
+        df.join(reference_values, on=["mxy", "mce", "plot_size"], how="left").
+        with_columns(
+            (pl.col("ref_time") / pl.col("Time")).alias("Acceleration")
+        )
+        .drop("ref_time")
+    )
+
+    df_norm.write_ndjson(
+        path_out.joinpath("df_performance_benchmark").with_suffix(".json")
+    )
+
+    # plot this quickly
+    fig = go.Figure()
+    fig2 = go.Figure()
+
+    cm = "Inferno"
+    text_cmap = plc.sample_colorscale(cm, [0.8, 0.7, 0.1])
+    ann_a = []
+    ann_m = []
+    zmin=0
+    zmax=df_norm["Acceleration"].max() * 0.85
+    mmax=df_norm["Memory"].max() * 0.85 *1e-3
+    mxys = df_norm["mxy"].unique().sort(descending=False).to_numpy()
+    mces = df_norm["mce"].unique().sort(descending=False).to_numpy()
+    for i, m in enumerate(df_norm["plot_mode"].unique().sort()):
+        # build tensor to ensure order
+        acc = torch.zeros((mxys.shape[0], mces.shape[0]))
+        mem = torch.zeros((mxys.shape[0], mces.shape[0]))
+        for g, mxy in enumerate(mxys):
+            for h, mce in enumerate(mces):
+                df_tmp = df_norm.filter(
+                    (pl.col("plot_mode") == m) & (pl.col("mxy") == mxy) & (pl.col("mce") == mce)
+                )
+                za = df_tmp["Acceleration"]
+                zm = df_tmp["Memory"]
+                if len(za) > 1:
+                    logger.warning("Found more than one acceleration value for mode, mxy, mce combination!")
+                acc[g, h] = za[0]
+                mem[g, h] = zm[0]
+        fig.add_trace(
+            go.Surface(
+                x=mxys*2, y=mces*2,
+                z=acc.mT.numpy(), opacity=0.82,
+                cmin=zmin, cmax=zmax,
+                colorscale=cm,
+                showscale=i == 0,
+                colorbar=dict(
+                    titleside="right",
+                    title="",
+                    # title="Acceleration",
+                    thickness=20,
+                )
+            )
+        )
+        ann_a.append(dict(
+            text=m[0].capitalize() + m[1:], font=dict(color=text_cmap[i]),
+            showarrow=False, textangle=-18,
+            x=2*mxys[0], y=2*(mces[-3] + np.diff(mces)[-2] / 2), z=acc[0, -2] + [3, 5, 5][i]
+        ))
+        if i == 2:
+            fig2.add_trace(
+                go.Surface(
+                    x=mxys*2, y=mces*2,
+                    z=mem.mT.numpy() * 1e-3, opacity=0.82,
+                    cmin=zmin, cmax=mmax,
+                    colorscale=cm, showscale=True,
+                    colorbar=dict(
+                        titleside="right",
+                        # title="Memory [GB]",
+                        title="",
+                        thickness=20,
+                    )
+                )
+            )
+    # add a point for a modern scan sizes
+    df_pts = df_norm.filter(
+            (pl.col("mxy") == 70800) & (pl.col("mce") == 1600)
+        ).drop(["Mode", "plot_mode", "plot_size", "Time"])
+
+    for i, t in enumerate(["Acceleration", "Memory"]):
+        df_pt = df_pts.filter(pl.col("Device").is_in(["GPU"]))
+        if i == 1:
+            f = 1e-3
+            ff = 0
+        else:
+            f = 1
+            ff = 0
+        fff = fig if i == 0 else fig2
+        fff.add_trace(
+            go.Scatter3d(
+                x=df_pt["mxy"]*2, y=df_pt["mce"]*2, z=df_pt[t]*f, marker=dict(color="red", symbol="x", size=3),
+                showlegend=False
+            )
+        )
+        val = df_pt[t].unique().sort(descending=True)[ff] * f
+        d = dict(
+                text=f"{val:.1f} {['', 'GB'][i]}", x=70800*2, y=1400*2, z=val*1.5, showarrow=False, yanchor="bottom",
+                font=dict(color="red")
+            )
+        if i == 0:
+            ann_a.append(d)
+        else:
+            ann_m.append(d)
+        scene = dict(
+            camera=dict(
+                up=dict(x=0, y=0, z=1),
+                center=dict(x=0, y=0, z=-0.2),
+                eye=dict(x=-2.1, y=1.05, z=0.8)
+            ),
+            annotations=ann_a if i == 0 else ann_m,
+            xaxis=dict(
+                # title="Matrix size N<sub>x</sub> x N<sub>y</sub>",
+                title="",
+                tickmode="array",
+                tickvals=np.arange(40000, 121000, 40000),
+                ticktext=[f"{val}k" for val in np.arange(40, 121, 40)]
+            ),
+            # yaxis=dict(title="Matrix size N<sub>c</sub> x N<sub>e</sub> x N<sub>b</sub>",),
+            yaxis=dict(title="",),
+            # zaxis=dict(title="Acceleration     " if i==0 else "Memory [GB]     ")
+            zaxis=dict(title="")
+        )
+
+        fff.update_scenes(
+            scene
+        )
+        fff.update_layout(
+            width=450, height=450,
+            margin=dict(t=20, b=20, l=0, r=0)
+
+        )
+        fn = path_out.joinpath(f"performance_benchmark_{t}".lower()).with_suffix(".html")
+        logger.info(f"write file: {fn}")
+        fff.write_html(fn)
+        for suff in [".pdf", ".png"]:
+            fn = fn.with_suffix(suff)
+            logger.info(f"write file: {fn}")
+            fff.write_image(fn)
+
+
+
+
 
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
-    compute()
+    table_per_mode("2025-07-16")
