@@ -2,11 +2,11 @@ import sys
 import logging
 import pathlib as plib
 import pickle
-from enum import Enum, auto
 
 import polars as pl
 
 import torch
+from scipy.ndimage import zoom
 import plotly.graph_objects as go
 import plotly.subplots as psub
 import plotly.colors as plc
@@ -14,7 +14,7 @@ import tqdm
 
 from pymritools.recon.loraks.operators import Operator, OperatorType
 from pymritools.utils.algorithms import rank_estimator_adaptive_rsvd
-from pymritools.utils import fft_to_img, torch_load
+from pymritools.utils import fft_to_img, torch_load, Phantom, ifft_to_k
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
@@ -22,6 +22,8 @@ from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
 from tests.experiments.loraks.utils import prep_k_space, DataType, load_data
 
 logger = logging.getLogger(__name__)
+logger.manager.loggerDict["tests.experiments.loraks.utils"].setLevel(logging.DEBUG)
+logger.manager.loggerDict["pymritools.recon.loraks.utils"].setLevel(logging.DEBUG)
 
 
 def estimate_rank(svd_vals: torch.Tensor, area_thr_factor: float = 0.95):
@@ -44,6 +46,7 @@ def process_svd(k: torch.Tensor, op: Operator, area_thr_factor: float = 0.95):
 
     th = estimate_rank(svd_vals, area_thr_factor=area_thr_factor)
     return svd_vals, th
+
 
 def process_rsvd(k: torch.Tensor, op: Operator, area_thr_factor: float = 0.95):
     # build s-matrix
@@ -114,62 +117,45 @@ def automatic_low_rank_param_extraction(data_type: DataType, force_processing: b
             results = pickle.load(f)
     else:
         results = []
-        # if data_type == DataType.SHEPPLOGAN:
-            # for i, c in enumerate(torch.arange(4, 36, 3)):
-            #     k, _ = create_phantom(shape_xyct=(192, 168, c, 4), acc=3, ac_lines=32)
-                # # calculate matrix size
-                # mat_size = nb_size * c * 4
-                # # first for fully sampled input
-                # # prep / batch input k-space
-                # k_in_fs, _, _, _ = prep_k_space(k.unsqueeze_(2).to(device), batch_size_channels=-1)
-                # # we want to build the operators from fully sampled and undersampled k-space
-                # op = Operator(
-                #     k_space_shape=k_in_fs.shape, nb_side_length=5,
-                #     device=device,
-                #     operator_type=OperatorType.S
-                # )
-                # # iterate through for fs data
-                # svd_vals, th = process_rsvd(k_in_fs, op)
-                # # calculate acc - factor from data
-                # results.append({
-                #     "name": "Fully-Sampled", "acc": 1, "calc_acc": 1,
-                #     "svd_vals": svd_vals.cpu(), "thresh": th.item(),
-                #     "nc": c, "ne": 4, "mat_size": mat_size.item()
-                # })
-                # # iterate for some acceleration factors, i.e. subsampled k-space
-                # for i, acc in enumerate(torch.linspace(2, 12, 8)):
-                #     logger.info(f"Processing Acc. {acc.item():.2f}")
-                #     _, k_us = create_phantom(shape_xyct=k.shape, acc=acc.item(), ac_lines=32)
-                #     # calc acc from input
-                #     calc_acc = torch.prod(torch.tensor(k_us.shape[:2])) / torch.count_nonzero(k_us[..., 0, 0])
-                #     # prep / batch input k-space
-                #     k_in, _, _, _ = prep_k_space(k_us.unsqueeze_(2).to(device), batch_size_channels=-1)
-                #     svd_vals, th = process_rsvd(k_in, op)
-                #     results.append({
-                #         "name": f"Sub-Sampled", "acc": acc.item(), "svd_vals": svd_vals.cpu(), "thresh": th.item(),
-                #         "nc": c.item(), "ne": 4, "mat_size": mat_size.item(), "calc_acc": calc_acc
-                #     })
-        # else:
+
         k, _, bet = load_data(data_type=data_type)
+        shape = k.shape
+        k = torch.reshape(k, (*shape[:2], -1))
+        k_zoom = None
+        for idx_m in tqdm.trange(k.shape[-1], desc="adjust shape"):
+            img = fft_to_img(k[..., idx_m], dims=(0, 1)).numpy()
+            img = torch.from_numpy(
+                zoom(img, zoom=(0.6, 0.6), )
+            )
+            ifft = ifft_to_k(img, dims=(0, 1)).unsqueeze(-1)
+            if idx_m == 0:
+                k_zoom = ifft
+            else:
+                k_zoom = torch.concatenate([k_zoom, ifft], dim=-1)
+        k = torch.reshape(k_zoom, (*k_zoom.shape[:2], *shape[-2:]))
         nx, ny, nc, ne = k.shape
-        for acc in torch.linspace(1, 12, 8):
+        logger.info(f"Shape in: {shape}, shape interp.: {k.shape}")
+        phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
+        for acc in torch.linspace(1, 10, 8):
             logger.info(f"Process acc: {acc:.2f}")
             logger.info("_______________________")
             logger.info("_______________________")
             # create sampling mask
-            _, k_us = create_phantom(shape_xyct=(nx, ny, nc, ne), acc=acc, ac_lines=32)
+            k_us = phantom.sub_sample_random(acceleration=acc, ac_central_radius=20)
             mask = k_us.abs() > 1e-10
             k_in = k.clone()
             k_in[~mask] = 0
             calc_acc = torch.prod(torch.tensor(mask.shape)) / torch.count_nonzero(mask)
             # reduce available data
-            for ic in tqdm.tqdm(torch.arange(4, nc+1, 4)):
-                # some randomization runs
-                for rc in range(3):
-                    idx_c = torch.randint(low=0, high=nc, size=(ic,))
-                    for ie in torch.arange(2, ne+1, 2):
-                        if ic * ie > 32*6:
-                            break
+            bar = tqdm.tqdm(torch.arange(4, nc+1, 4), desc="Processing Channels")
+            for ic in bar:
+                for ie in torch.arange(2, ne+1, 2):
+                    bar.set_postfix({"nc": nc, "ne": ne})
+                    if ic * ie > 32*6:
+                        break
+                    # some randomization runs
+                    for rc in range(3):
+                        idx_c = torch.randint(low=0, high=nc, size=(ic,))
                         # some randomization runs
                         for re in range(3):
                             idx_e = torch.randint(low=0, high=ne, size=(ie,))
@@ -397,7 +383,62 @@ def plot_results_vs_acc_mat_size(results, path):
         fig.write_image(fn)
 
 
+def mask_rank(data_type: DataType):
+    # get path
+    path = plib.Path(get_test_result_output_dir(
+        f"automatic_low_rank_param_extraction/{data_type.name}".lower(),
+        mode=ResultMode.EXPERIMENT)
+    )
+    path_out = path.joinpath("result_data").with_suffix(".pkl")
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
+    k, _, bet = load_data(data_type=DataType.INVIVO)
+    nx, ny, nc, ne = k.shape
+    nb_size = 5**2
+    phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
+    results = []
+    for acc in torch.linspace(1, 10, 6):
+        logger.info(f"Process acc: {acc:.2f}")
+        logger.info("_______________________")
+        logger.info("_______________________")
+        # create sampling mask
+        k_us = phantom.sub_sample_random(acceleration=acc, ac_central_radius=20)
+        mask = (k_us.abs() > 1e-10).to(torch.int)
+        calc_acc = torch.prod(torch.tensor(mask.shape)) / torch.count_nonzero(mask)
+        # reduce available data
+        for ic in tqdm.tqdm(torch.arange(4, nc + 1, 6)):
+        # for ic in tqdm.tqdm(torch.arange(4, 4 + 1, 4)):
+            # some randomization runs
+            for rc in range(3):
+                idx_c = torch.randint(low=0, high=nc, size=(ic,))
+                for ie in torch.arange(1, ne + 1, 3):
+                # for ie in torch.arange(2, 2 + 1, 2):
+                    if ic * ie > 32 * 6:
+                        break
+                    # some randomization runs
+                    for re in range(3):
+                        idx_e = torch.randint(low=0, high=ne, size=(ie,))
+                        data = mask[:, :, idx_c, :][..., idx_e]
+                        data_in, _, _, _ = prep_k_space(data.unsqueeze_(2), batch_size_channels=-1)
+                        op = Operator(
+                            k_space_shape=data_in.shape[1:], nb_side_length=5, device=device,
+                            operator_type=OperatorType.S
+                        )
+                        _, th = process_rsvd(data_in.to(device), op, area_thr_factor=0.9)
+                        mat_size = nb_size * ic * ie
+                        results.append({
+                            "name": f"Sub-Sampled", "acc": acc.item(), "thresh": th, "random_c": rc, "random_e": re,
+                            "nc": ic.item(), "ne": ie.item(), "mat_size": mat_size.item(), "calc_acc": calc_acc.item()
+                        })
+
+        logger.info(f"Write file: {path_out}")
+        with open(path_out.as_posix(), "wb") as f:
+            pickle.dump(results, f)
+
+        plot_results_vs_acc_mat_size(results, path)
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    automatic_low_rank_param_extraction(data_type=DataType.SHEPPLOGAN, force_processing=True)
+    automatic_low_rank_param_extraction(data_type=DataType.INVIVO, force_processing=True)
     # try_arsvd()
+    # mask_rank(data_type=DataType.MASK)
