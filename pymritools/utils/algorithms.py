@@ -256,8 +256,6 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projec
     return a_1, s_k, a_2
 
 
-import torch
-
 def rand_qlp(matrix: torch.Tensor):
     """
     Randomized QLP decomposition A ≈ Q L P^T
@@ -295,6 +293,69 @@ def rand_qlp(matrix: torch.Tensor):
     l = torch.diag(r)
 
     return proj, l, p
+
+
+import torch
+
+def randomized_nullspace(matrix, nullity=None, oversample=10):
+    """
+    Fast randomized algorithm for finding an approximate null space basis of A (Park & Nakatsukasa 2023).
+
+    Args:
+        matrix (Tensor):    m x n matrix (m >= n preferred)
+        nullity (int): Expected numerical nullity, if known. If not, use oversampling to get candidates.
+        oversample (int): Number of extra vectors for better coverage (default 10).
+
+    Returns:
+        V_null (Tensor): n x nullity orthonormal matrix (approximate right nullspace basis).
+    """
+
+    # Example Usage:
+    # A = torch.randn(100, 50, device='cuda')
+    # V_null = randomized_nullspace(A, nullity=3)
+    # Residuals: torch.norm(A @ V_null, dim=0)
+    m, n = matrix.shape
+    device = matrix.device
+
+    # 1. Choose target dimension: how many nullspace vectors do we expect?
+    # Use provided nullity, else get maximal candidates (user can refine below)
+    if nullity is None:
+        # Conservative: guess via SVD first, or set nullity = oversample
+        nullity = oversample
+
+    l = nullity + oversample
+
+    # 2. Draw Gaussian random test matrix
+    G = torch.randn(n, l, dtype=matrix.dtype, device=device)
+
+    # 3. Form Y = A @ G    (m x l)
+    Y = matrix @ G
+
+    # 4. Orthonormalize columns of Y              (Q: m x l)
+    Q, _ = torch.linalg.qr(Y, mode="reduced")
+    # Note: If Y is rank-deficient, adjust l or use numerical rank determination
+
+    # 5. Orthonormal basis of the range: Q (m x l)
+    # Compute orthonormal basis for the orthogonal complement in R^n
+    #    i.e., the nullspace of Q^T @ A, but we approximate by using
+    #    the orthonormal complement of A^T Q in R^n
+
+    # 5a. Map Q back to R^n: K = A^T Q      (n x l)
+    K = matrix.T @ Q
+
+    # 5b. Take full QR of K: first k columns span range, the rest span nullspace candidates
+    # If rank(A) is full, nullspace will be empty!
+    QK, _ = torch.linalg.qr(K, mode="complete")    # QK: n x n
+
+    # 6. For a true nullspace basis, take the trailing (n-l) columns
+    #    If nullity is known, take exactly nullity columns; otherwise, select trailing columns
+    V_null = QK[:, -l+oversample:]  # n x (n-l)
+
+    # 7. Optionally, check residuals to pick best "numerical" nullspace vectors.
+    #    (A @ V_null should be small)
+    # You can also do a small SVD on A @ QK[:, l:] to refine further.
+
+    return V_null.mH
 
 
 
