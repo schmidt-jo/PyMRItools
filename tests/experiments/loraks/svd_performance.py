@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class SVDType(Enum):
+    EIGH = auto()
     SVD = auto()
     LRSVD = auto()
     RSVD = auto()
@@ -35,6 +36,8 @@ def process_svd(matrix: torch.Tensor, svd_type: SVDType, rank: int, oversampling
             _, _, _ = subspace_orbit_randomized_svd(matrix=matrix, q=rank+oversampling, power_projections=power_iterations)
         case SVDType.RSVD:
             _, _, _ = randomized_svd(matrix=matrix, q=rank+oversampling, power_projections=power_iterations)
+        case SVDType.EIGH:
+            _, _ = torch.linalg.eigh(matrix.mH @ matrix)
 
 
 def compute():
@@ -46,7 +49,7 @@ def compute():
     mxy = torch.tensor([300 * 240])
     logger.info(f"Set Spatial dimension size: {mxy[0]}")
 
-    ms_ce = torch.linspace(100, 6000, 40).to(torch.int)
+    ms_ce = torch.linspace(100, 10000, 40).to(torch.int)
     oversampling = 10
     num_timer_runs = 3
 
@@ -89,21 +92,21 @@ def compute():
     df.write_ndjson(fn)
 
 
-def plot():
+def plot(colorscale: str = "Inferno", cmin: float = 0.1, cmax: float = 0.9):
     path = plib.Path(get_test_result_output_dir("svd_performance", mode=ResultMode.EXPERIMENT))
     fn = path.joinpath("results_df").with_suffix(".json")
     logger.info(f"Loading {fn}")
     df = pl.read_ndjson(fn)
-    df = df.filter(pl.col("mce") <= 5500)
+    df = df.filter((pl.col("mce") != 7969) & (pl.col("mce") != 9238) & (pl.col("mce") != 7715) & (pl.col("mce") != 9492))
 
     fig = psub.make_subplots(
         rows=2, cols=2,
         shared_xaxes=True, shared_yaxes=False,
         x_title=f"Matrix Size (short axis)",
-        vertical_spacing=0.03
+        vertical_spacing=0.03, horizontal_spacing=0.05
     )
 
-    cmap = plc.sample_colorscale("Inferno", len(list(SVDType)), 0.1, 0.9)
+    cmap = plc.sample_colorscale(colorscale, len(list(SVDType)), cmin, cmax)
     units = ["[s]", "[MB]"]
 
     for si, svd_type in enumerate(list(SVDType)):
@@ -116,7 +119,7 @@ def plot():
                     go.Scatter(
                         x=df_tmp["mce"], y=df_tmp[t],
                         marker=dict(color=cmap[si]),
-                        name=svd_type.name,
+                        name=svd_type.name if svd_type != SVDType.SORSVD else "SOR-SVD",
                         legendgroup=si,
                         showlegend=it == 0 and c == 0
                     ),
@@ -125,8 +128,8 @@ def plot():
                 if si == 0:
                     fig.update_yaxes(row=1 + it, col=1 + c, title=f"{t} {units[it]}")
     fig.update_layout(
-        width=1000,
-        height=500,
+        width=900,
+        height=400,
         margin=dict(t=25, b=55, l=65, r=5),
         barmode="group"
 
@@ -143,4 +146,5 @@ def plot():
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
-    plot()
+    plot(colorscale="Turbo", cmin=0.0, cmax=1.0)
+    # compute()
