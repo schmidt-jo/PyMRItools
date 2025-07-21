@@ -256,6 +256,48 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projec
     return a_1, s_k, a_2
 
 
+import torch
+
+def rand_qlp(matrix: torch.Tensor):
+    """
+    Randomized QLP decomposition A ≈ Q L P^T
+
+    Args:
+        matrix (torch.Tensor): Input matrix of size (m, n).
+        q (int, optional): Target rank approximation plus oversampling
+
+    Returns:
+        Q (torch.Tensor): Orthonormal matrix (m, k).
+        L (torch.Tensor): Lower-triangular matrix (k, k).
+        P (torch.Tensor): Orthonormal matrix (n, k).
+    """
+
+    # Example of usage:
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # A = torch.randn(1000, 500, device=device)
+    # Q, L, P = rand_qlp(A, k=50)
+    # Reconstruction: approx_A = Q @ L @ P.T
+
+    m, n = matrix.shape[-2:]
+    device = matrix.device
+
+    # if q is None:
+    #     q = min(m, n)
+
+    sample_matrix = torch.randn(m, n, device=device, dtype=matrix.dtype)
+
+    proj_t, _ = torch.linalg.qr(matrix.mT @ sample_matrix, mode='reduced')  # Q: (m, k+p)
+    proj, _ = torch.linalg.qr(matrix @ proj_t, mode='reduced')
+
+    p, r = torch.linalg.qr((proj.mT @ matrix).mT, mode='reduced')  # P: (n, k+p), R: (k+p, k+p)
+
+    # Step 6: Form L = R^T, which is lower-triangular
+    l = torch.diag(r)
+
+    return proj, l, p
+
+
+
 class DE:
     """ Differential evolution """
     def __init__(self, param_dim: int, data_dim: int, population_size: int = 10,
