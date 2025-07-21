@@ -10,7 +10,7 @@ from typing import Tuple, Callable
 from pymritools.recon.loraks.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
 from pymritools.recon.loraks.matrix_indexing import get_circular_nb_indices
 from pymritools.recon.loraks.operators import Operator
-from pymritools.utils.algorithms import cgd, AdaptiveLearningRateEstimator
+from pymritools.utils.algorithms import cgd, AdaptiveLearningRateEstimator, randomized_nullspace
 from pymritools.utils.functions import SimpleKalmanFilter
 
 log_module = logging.getLogger(__name__)
@@ -69,13 +69,18 @@ def get_count_matrix(shape_batch: Tuple, indices: torch.Tensor,
     return count_matrix
 
 
-def get_nullspace(m_ac: torch.Tensor, rank: int = 150):
+def get_nullspace_eigh(m_ac: torch.Tensor, rank: int = 150):
     mmh = m_ac @ m_ac.mH
     e_vals, e_vecs = torch.linalg.eigh(mmh, UPLO="U")
     idx = torch.argsort(torch.abs(e_vals), descending=True)
     um = e_vecs[:, idx]
     e_vals = e_vals[idx]
     return um[:, rank:].mH, e_vals
+
+
+def get_nullspace_rn(m_ac: torch.Tensor, rank: int = 150):
+    n = randomized_nullspace(matrix=m_ac.mT, nullity=min(m_ac.shape[-2:])-rank)
+    return n
 
 
 def complex_subspace_representation(v: torch.Tensor, matrix_nb_size: int):
@@ -494,7 +499,8 @@ class AcLoraks(LoraksBase):
             batch=batch,
         )
         # 2) extract nullspace based on rank
-        v, _ = get_nullspace(m_ac, rank=self.rank)
+        v, _ = get_nullspace_eigh(m_ac, rank=self.rank)
+        # v = get_nullspace_rn(m_ac, rank=self.rank)
         # 3) compute filtered nullspace kernel to reduce memory demands -> v
         # complexify nullspace
         v = self._complex_subspace_representation(v)
