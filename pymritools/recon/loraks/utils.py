@@ -40,7 +40,9 @@ def validate_input_shape(k_space_rpsct: torch.Tensor):
     return k_space_rpsct
 
 
-def check_channel_batch_size_and_batch_channels(k_space_rpsct: torch.Tensor, batch_size_channels: int):
+def check_channel_batch_size_and_batch_channels(
+        k_space_rpsct: torch.Tensor, batch_size_channels: int,
+        use_correlation_clustering: bool = True):
     """
     Check and prepare channel batching for the input tensor.
 
@@ -65,9 +67,15 @@ def check_channel_batch_size_and_batch_channels(k_space_rpsct: torch.Tensor, bat
 
     # batch channels
     if batching and batch_size_channels > 1:
-        batch_channel_indices = extract_channel_batch_indices(
-            k_data_nrps_c=k_space_rpsct[..., 0], batch_size_channels=batch_size_channels
-        )
+        if use_correlation_clustering:
+            batch_channel_indices = extract_channel_batch_indices(
+                k_data_nrps_c=k_space_rpsct[..., 0], batch_size_channels=batch_size_channels
+            )
+        else:
+            batch_channel_indices = torch.stack(
+                torch.tensor_split(torch.arange(n_channels), num_channel_batches),
+                dim=0
+            )
     elif batching and batch_size_channels == 1:
         batch_channel_indices = torch.arange(n_channels)[:, None]
     else:
