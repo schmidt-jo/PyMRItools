@@ -10,10 +10,18 @@ from typing import Tuple, Callable
 from pymritools.recon.loraks.loraks import LoraksBase, LoraksOptions, OperatorType, LoraksImplementation
 from pymritools.recon.loraks.matrix_indexing import get_circular_nb_indices
 from pymritools.recon.loraks.operators import Operator
-from pymritools.utils.algorithms import cgd, AdaptiveLearningRateEstimator, randomized_nullspace
+from pymritools.utils.algorithms import cgd, AdaptiveLearningRateEstimator, randomized_nullspace, randomized_svd, subspace_orbit_randomized_svd
 from pymritools.utils.functions import SimpleKalmanFilter
 
 log_module = logging.getLogger(__name__)
+
+
+class NullspaceAlgorithm(Enum):
+    RANDOM_NS = auto()
+    EIGH = auto()
+    TORCH_LR = auto()
+    RSVD = auto()
+    SOR_SVD = auto()
 
 
 class SolverType(Enum):
@@ -69,17 +77,37 @@ def get_count_matrix(shape_batch: Tuple, indices: torch.Tensor,
     return count_matrix
 
 
-def get_nullspace_eigh(m_ac: torch.Tensor, rank: int = 150):
-    mmh = m_ac @ m_ac.mH
-    e_vals, e_vecs = torch.linalg.eigh(mmh, UPLO="U")
-    idx = torch.argsort(torch.abs(e_vals), descending=True)
-    um = e_vecs[:, idx]
-    e_vals = e_vals[idx]
-    return um[:, rank:].mH, e_vals
-
-
-def get_nullspace_rn(m_ac: torch.Tensor, rank: int = 150):
-    n = randomized_nullspace(matrix=m_ac.mT, nullity=min(m_ac.shape[-2:])-rank)
+def get_nullspace(m_ac: torch.Tensor, rank: int = 150, nullspace_alg: NullspaceAlgorithm = NullspaceAlgorithm.EIGH):
+    match nullspace_alg:
+        case NullspaceAlgorithm.EIGH:
+            mmh = m_ac @ m_ac.mH
+            e_vals, e_vecs = torch.linalg.eigh(mmh, UPLO="U")
+            idx = torch.argsort(torch.abs(e_vals), descending=True)
+            um = e_vecs[:, idx]
+            # e_vals = e_vals[idx]
+            n = um[:, rank:].mH
+        case NullspaceAlgorithm.RANDOM_NS:
+            n = randomized_nullspace(matrix=m_ac.mT, nullity=min(m_ac.shape[-2:])-rank)
+        case NullspaceAlgorithm.TORCH_LR:
+            # get singular values from torch low rank svd with multiples of the rank parameter
+            q = min(min(m_ac.shape[-2:]), 5 * rank)
+            u, _, _ = torch.svd_lowrank(A=m_ac, q=q, niter=2)
+            # take trailing space
+            n = u[..., rank:].mH
+        case NullspaceAlgorithm.RSVD:
+            q = min(min(m_ac.shape[-2:]), 5 * rank)
+            _, _, vh = randomized_svd(matrix=m_ac.mT, q=q, power_projections=2)
+            # take trailing space
+            n = vh[..., rank:, :]
+        case NullspaceAlgorithm.SOR_SVD:
+            q = min(min(m_ac.shape[-2:]), 5 * rank)
+            _, _, vh = subspace_orbit_randomized_svd(matrix=m_ac.mT, q=q, power_projections=2)
+            # take trailing space
+            n = vh[..., rank:, :]
+        case _:
+            msg = f"Invalid nullspace algorithm: {nullspace_alg}"
+            log_module.error(msg)
+            raise ValueError(msg)
     return n
 
 
@@ -427,6 +455,7 @@ class AcLoraksOptions(LoraksOptions):
     loraks_type: LoraksImplementation = LoraksImplementation.AC_LORAKS
     computation_type: ComputationType = ComputationType.FFT
     solver_type: SolverType = SolverType.LEASTSQUARES
+    nullspace_algorithm: NullspaceAlgorithm = NullspaceAlgorithm.EIGH
 
 
 class AcLoraks(LoraksBase):
@@ -437,6 +466,7 @@ class AcLoraks(LoraksBase):
         self.rank: int = NotImplemented
         self.solver_type: SolverType = NotImplemented
         self.computation_type: ComputationType = NotImplemented
+        self.nullspacee_algorithm: NullspaceAlgorithm = NotImplemented
         self.max_num_iter: int = NotImplemented
         self.loraks_matrix_type: OperatorType = NotImplemented
         self.loraks_neighborhood_size: int = NotImplemented
@@ -455,6 +485,7 @@ class AcLoraks(LoraksBase):
         self.max_num_iter = options.max_num_iter
         self.computation_type = options.computation_type
         self.solver_type = options.solver_type
+        self.nullspacee_algorithm = options.nullspace_algorithm
         self.rank = options.rank.value
         self.tol = 1e-5
 
@@ -499,8 +530,7 @@ class AcLoraks(LoraksBase):
             batch=batch,
         )
         # 2) extract nullspace based on rank
-        v, _ = get_nullspace_eigh(m_ac, rank=self.rank)
-        # v = get_nullspace_rn(m_ac, rank=self.rank)
+        v = get_nullspace(m_ac, rank=self.rank, nullspace_alg=self.nullspacee_algorithm)
         # 3) compute filtered nullspace kernel to reduce memory demands -> v
         # complexify nullspace
         v = self._complex_subspace_representation(v)
