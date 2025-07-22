@@ -2,6 +2,7 @@ import logging
 import pathlib as plib
 from enum import Enum, auto
 from timeit import Timer
+import sys
 
 import torch
 import polars as pl
@@ -11,9 +12,13 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 import plotly.colors as plc
 
-from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd
-from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
-from tests.experiments.loraks.utils import prep_k_space, TorchMemoryTracker
+from pymritools.utils.algorithms import randomized_svd, subspace_orbit_randomized_svd, rand_qlp, randomized_nullspace
+
+p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
+sys.path.append(p_tests.as_posix())
+
+from tests.utils import get_test_result_output_dir, ResultMode
+from tests.experiments.loraks.utils import TorchMemoryTracker
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,8 @@ class SVDType(Enum):
     LRSVD = auto()
     RSVD = auto()
     SORSVD = auto()
+    RANDQLP = auto()
+    RANDNS = auto()
 
 
 def process_svd(matrix: torch.Tensor, svd_type: SVDType, rank: int, oversampling: int = 10, power_iterations: int = 2):
@@ -38,6 +45,11 @@ def process_svd(matrix: torch.Tensor, svd_type: SVDType, rank: int, oversampling
             _, _, _ = randomized_svd(matrix=matrix, q=rank+oversampling, power_projections=power_iterations)
         case SVDType.EIGH:
             _, _ = torch.linalg.eigh(matrix.mH @ matrix)
+        case SVDType.RANDQLP:
+            _, _, _ = rand_qlp(matrix=matrix)
+        case SVDType.RANDNS:
+            m_dim = min(matrix.shape[-2:])
+            _ = randomized_nullspace(matrix=matrix, nullity=m_dim - rank, oversample=oversampling)
 
 
 def compute():
@@ -45,11 +57,13 @@ def compute():
 
     # do loops for different data sizes
     # ms_xy = torch.linspace(50 * 50, 100 * 100, 2).to(torch.int)
-    nb = 5
-    mxy = torch.tensor([300 * 240])
+    nb = 5**2
+    nc = 32
+    ne = 4
+    mxy = torch.tensor([224 * 192]) * 2
     logger.info(f"Set Spatial dimension size: {mxy[0]}")
 
-    ms_ce = torch.linspace(100, 10000, 40).to(torch.int)
+    ms_ce = torch.linspace(200, 15000, 20).to(torch.int)
     oversampling = 10
     num_timer_runs = 3
 
@@ -60,7 +74,7 @@ def compute():
     #     logger.info(f"Processing Matrix Size XY : {i+1} / {ms_xy.shape[0]}")
 
     for g in tqdm.trange(ms_ce.shape[0], desc="Processing Matrix sizes"):
-        mce = ms_ce[g]
+        mce = ms_ce[g] * 2
         # logger.info(f"\t\tProcessing Matrix Size CE : {g+1} / {ms_ce.shape[0]}")
         m = min(mxy.item(), mce)
         rank = max(m // 10, 10)
@@ -69,6 +83,12 @@ def compute():
 
         # SVDS
         for svd_type in list(SVDType):
+            if svd_type == SVDType.SVD:
+                if g % 2 == 0 or g > 10:
+                    continue
+            elif svd_type == SVDType.RANDQLP:
+                if g > 15:
+                    continue
             # init run and measure memory
             mem_track = TorchMemoryTracker(device=device)
             mem_track.start_tracking()
@@ -97,7 +117,7 @@ def plot(colorscale: str = "Inferno", cmin: float = 0.1, cmax: float = 0.9):
     fn = path.joinpath("results_df").with_suffix(".json")
     logger.info(f"Loading {fn}")
     df = pl.read_ndjson(fn)
-    df = df.filter((pl.col("mce") != 7969) & (pl.col("mce") != 9238) & (pl.col("mce") != 7715) & (pl.col("mce") != 9492))
+    # df = df.filter((pl.col("mce") != 7969) & (pl.col("mce") != 9238) & (pl.col("mce") != 7715) & (pl.col("mce") != 9492))
 
     fig = psub.make_subplots(
         rows=2, cols=2,
@@ -113,7 +133,7 @@ def plot(colorscale: str = "Inferno", cmin: float = 0.1, cmax: float = 0.9):
         for it, t in enumerate(["Time", "Memory"]):
             df_tmp = df.filter(pl.col("Mode") == svd_type.name)
             for c in range(2):
-                if svd_type == SVDType.SVD and c > 0:
+                if (svd_type == SVDType.SVD or svd_type == SVDType.RANDQLP or svd_type == SVDType.RANDNS) and c > 0:
                     continue
                 fig.add_trace(
                     go.Scatter(
@@ -121,7 +141,8 @@ def plot(colorscale: str = "Inferno", cmin: float = 0.1, cmax: float = 0.9):
                         marker=dict(color=cmap[si]),
                         name=svd_type.name if svd_type != SVDType.SORSVD else "SOR-SVD",
                         legendgroup=si,
-                        showlegend=it == 0 and c == 0
+                        showlegend=it == 0 and c == 0,
+                        mode="markers+lines"
                     ),
                     row=1 + it, col=1 + c
                 )
@@ -132,7 +153,6 @@ def plot(colorscale: str = "Inferno", cmin: float = 0.1, cmax: float = 0.9):
         height=400,
         margin=dict(t=25, b=55, l=65, r=5),
         barmode="group"
-
     )
     fn = path.joinpath(f"comparison_memory_time").with_suffix(".html")
     logger.info(f"write file: {fn}")
