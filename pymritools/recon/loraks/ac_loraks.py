@@ -78,6 +78,7 @@ def get_count_matrix(shape_batch: Tuple, indices: torch.Tensor,
 
 
 def get_nullspace(m_ac: torch.Tensor, rank: int = 150, nullspace_alg: NullspaceAlgorithm = NullspaceAlgorithm.EIGH):
+    q = min(min(m_ac.shape[-2:]), int(4 * rank))
     match nullspace_alg:
         case NullspaceAlgorithm.EIGH:
             mmh = m_ac @ m_ac.mH
@@ -90,17 +91,14 @@ def get_nullspace(m_ac: torch.Tensor, rank: int = 150, nullspace_alg: NullspaceA
             n = randomized_nullspace(matrix=m_ac.mT, nullity=min(m_ac.shape[-2:])-rank)
         case NullspaceAlgorithm.TORCH_LR:
             # get singular values from torch low rank svd with multiples of the rank parameter
-            q = min(min(m_ac.shape[-2:]), 5 * rank)
-            u, _, _ = torch.svd_lowrank(A=m_ac, q=q, niter=2)
+            _, _, vh = torch.svd_lowrank(A=m_ac.mT, q=q, niter=2)
             # take trailing space
-            n = u[..., rank:].mH
+            n = vh.mT[..., rank:, :]
         case NullspaceAlgorithm.RSVD:
-            q = min(min(m_ac.shape[-2:]), 5 * rank)
             _, _, vh = randomized_svd(matrix=m_ac.mT, q=q, power_projections=2)
             # take trailing space
             n = vh[..., rank:, :]
         case NullspaceAlgorithm.SOR_SVD:
-            q = min(min(m_ac.shape[-2:]), 5 * rank)
             _, _, vh = subspace_orbit_randomized_svd(matrix=m_ac.mT, q=q, power_projections=2)
             # take trailing space
             n = vh[..., rank:, :]
