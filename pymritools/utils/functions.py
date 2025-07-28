@@ -1,5 +1,10 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 
 def interpolate(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Tensor:
@@ -278,54 +283,54 @@ def exponential_moving_average(new_value: float, previous_smoothed: float, alpha
     """
     return alpha * new_value + (1 - alpha) * previous_smoothed
 
-
-def unwrap_phase(phase_data: torch.Tensor) -> torch.Tensor:
-    log_module.info("Unwrapping phase image.")
-    if phase_data.max() > 3.15:
-        if phase_data.min() >= 0:
-            norm_phase = ((phase_data / phase_data.max()) * 2 * np.pi) - np.pi
-        else:
-            norm_phase = (phase_data / phase_data.max()) * np.pi
-    else:
-        norm_phase = phase_data
-
-    dim = norm_phase.shape
-
-    tmp = torch.tensor(
-        np.array(range(int(np.floor(-dim[1] / 2)), int(np.floor(dim[1] / 2)))) / float(dim[1])
-    )
-    tmp = tmp.reshape((1, dim[1]))
-    uu = np.ones((1, dim[0]))
-    xx = np.dot(tmp.conj().T, uu).conj().T
-    tmp = np.array(
-        np.array(range(int(np.floor(-dim[0] / 2)), int(np.floor(dim[0] / 2)))) / float(dim[0])
-    )
-    tmp = tmp.reshape((1, dim[0]))
-    uu = np.ones((dim[1], 1))
-    yy = np.dot(uu, tmp).conj().T
-    kk2 = xx**2 + yy**2
-    hp1 = gauss_filter(dim[0], GAUSS_STDEV, dim[1], GAUSS_STDEV)
-
-    filter_phase = np.zeros_like(norm_phase)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        for i in range(dim[2]):
-            z_slice = norm_phase[:, :, i]
-            lap_sin = -4.0 * (np.pi**2) * icfft(kk2 * cfft(np.sin(z_slice)))
-            lap_cos = -4.0 * (np.pi**2) * icfft(kk2 * cfft(np.cos(z_slice)))
-            lap_theta = np.cos(z_slice) * lap_sin - np.sin(z_slice) * lap_cos
-            tmp = np.array(-cfft(lap_theta) / (4.0 * (np.pi**2) * kk2))
-            tmp[np.isnan(tmp)] = 1.0
-            tmp[np.isinf(tmp)] = 1.0
-            kx2 = tmp * (1 - hp1)
-            filter_phase[:, :, i] = np.real(icfft(kx2))
-
-    filter_phase[filter_phase > np.pi] = np.pi
-    filter_phase[filter_phase < -np.pi] = -np.pi
-    filter_phase *= -1.0
-
-    filter_obj = nib.Nifti1Image(filter_phase, phase_obj.affine, phase_obj.header)
-    filter_obj.set_data_dtype(np.float32)
-    return filter_obj
+#
+# def unwrap_phase(phase_data: torch.Tensor) -> torch.Tensor:
+#     logger.info("Unwrapping phase image.")
+#     if phase_data.max() > 3.15:
+#         if phase_data.min() >= 0:
+#             norm_phase = ((phase_data / phase_data.max()) * 2 * np.pi) - np.pi
+#         else:
+#             norm_phase = (phase_data / phase_data.max()) * np.pi
+#     else:
+#         norm_phase = phase_data
+#
+#     dim = norm_phase.shape
+#
+#     tmp = torch.tensor(
+#         np.array(range(int(np.floor(-dim[1] / 2)), int(np.floor(dim[1] / 2)))) / float(dim[1])
+#     )
+#     tmp = tmp.reshape((1, dim[1]))
+#     uu = np.ones((1, dim[0]))
+#     xx = np.dot(tmp.conj().T, uu).conj().T
+#     tmp = np.array(
+#         np.array(range(int(np.floor(-dim[0] / 2)), int(np.floor(dim[0] / 2)))) / float(dim[0])
+#     )
+#     tmp = tmp.reshape((1, dim[0]))
+#     uu = np.ones((dim[1], 1))
+#     yy = np.dot(uu, tmp).conj().T
+#     kk2 = xx**2 + yy**2
+#     hp1 = gauss_filter(dim[0], GAUSS_STDEV, dim[1], GAUSS_STDEV)
+#
+#     filter_phase = np.zeros_like(norm_phase)
+#     with np.errstate(divide="ignore", invalid="ignore"):
+#         for i in range(dim[2]):
+#             z_slice = norm_phase[:, :, i]
+#             lap_sin = -4.0 * (np.pi**2) * icfft(kk2 * cfft(np.sin(z_slice)))
+#             lap_cos = -4.0 * (np.pi**2) * icfft(kk2 * cfft(np.cos(z_slice)))
+#             lap_theta = np.cos(z_slice) * lap_sin - np.sin(z_slice) * lap_cos
+#             tmp = np.array(-cfft(lap_theta) / (4.0 * (np.pi**2) * kk2))
+#             tmp[np.isnan(tmp)] = 1.0
+#             tmp[np.isinf(tmp)] = 1.0
+#             kx2 = tmp * (1 - hp1)
+#             filter_phase[:, :, i] = np.real(icfft(kx2))
+#
+#     filter_phase[filter_phase > np.pi] = np.pi
+#     filter_phase[filter_phase < -np.pi] = -np.pi
+#     filter_phase *= -1.0
+#
+#     filter_obj = nib.Nifti1Image(filter_phase, phase_obj.affine, phase_obj.header)
+#     filter_obj.set_data_dtype(np.float32)
+#     return filter_obj
 
 
 class SimpleKalmanFilter:
@@ -375,8 +380,103 @@ def calc_nmse(original_input: torch.Tensor, compressed_input: torch.Tensor) -> f
     mse = torch.mean((original_input - compressed_input) ** 2)
     n = torch.clip(torch.var(original_input), min=1e-11)
     return mse / n
-#
-#
-# def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor) -> float:
-#
+
+
+def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor,
+              window_size=11, size_average=True, full=False, val_range=None) -> float:
+        """
+        Compute Structural Similarity Index (SSIM) using direct formula.
+
+        Parameters:
+        -----------
+        img1 : torch.Tensor
+            First input image tensor
+        img2 : torch.Tensor
+            Second input image tensor
+        C1 : float, optional
+            Stabilization constant for luminance comparison (default: 1e-4)
+        C2 : float, optional
+            Stabilization constant for contrast comparison (default: 1e-4)
+        window_size : int, optional
+            Size of the local window (default: 11)
+
+        Returns:
+        --------
+        ssim_value : torch.Tensor
+            SSIM similarity score
+        """
+        # Ensure inputs are tensors and float
+        img1 = original_input.float()
+        img2 = compressed_input.float()
+
+        # Flatten images if they are 2D
+        if img1.dim() == 2:
+            img1 = img1.unsqueeze(0).unsqueeze(0)
+        if img2.dim() == 2:
+            img2 = img2.unsqueeze(0).unsqueeze(0)
+
+        # Validate input shapes
+        if img1.shape != img2.shape:
+            raise ValueError(f"Input shapes must match: {img1.shape} vs {img2.shape}")
+
+        # Compute local statistics in a sliding window
+        def local_statistics(img, window_size):
+            # Pad the image
+            pad = window_size // 2
+            img_pad = F.pad(img, (pad, pad, pad, pad), mode='reflect')
+
+            # Create sliding windows
+            patches = img_pad.unfold(2, window_size, 1).unfold(3, window_size, 1)
+            patches = patches.contiguous().view(
+                img.size(0), img.size(1), -1, window_size, window_size
+            )
+
+            # Compute local statistics
+            local_mean = patches.mean(dim=[-1, -2])
+            local_var = patches.var(dim=[-1, -2])
+
+            return local_mean, local_var
+
+        # Compute local means and variances
+        mu1, var1 = local_statistics(img1, window_size)
+        mu2, var2 = local_statistics(img2, window_size)
+
+        # Compute cross-correlation in local windows
+        def cross_correlation(img1, img2, window_size):
+            pad = window_size // 2
+            img1_pad = F.pad(img1, (pad, pad, pad, pad), mode='reflect')
+            img2_pad = F.pad(img2, (pad, pad, pad, pad), mode='reflect')
+
+            patches1 = img1_pad.unfold(2, window_size, 1).unfold(3, window_size, 1)
+            patches2 = img2_pad.unfold(2, window_size, 1).unfold(3, window_size, 1)
+
+            patches1 = patches1.contiguous().view(
+                img1.size(0), img1.size(1), -1, window_size, window_size
+            )
+            patches2 = patches2.contiguous().view(
+                img2.size(0), img2.size(1), -1, window_size, window_size
+            )
+
+            # Compute local cross-correlation
+            cross_corr = (patches1 * patches2).mean(dim=[-1, -2])
+            return cross_corr
+
+        cross_corr = cross_correlation(img1, img2, window_size)
+
+        # SSIM constants
+        C1 = (0.01 * val_range) ** 2
+        C2 = (0.03 * val_range) ** 2
+
+        # SSIM formula components
+        luminance = (2 * mu1 * mu2 + C1) / (mu1 ** 2 + mu2 ** 2 + C1)
+        contrast = (2 * torch.sqrt(var1) * torch.sqrt(var2) + C2) / (var1 + var2 + C2)
+        structure = (cross_corr - mu1 * mu2 + C2 / 2) / (torch.sqrt(var1) * torch.sqrt(var2) + C2 / 2)
+
+        # Combine components (multiplicative form)
+        ssim_map = luminance * contrast * structure
+
+        # Return average SSIM
+        return ssim_map.mean().item()
+
+
 
