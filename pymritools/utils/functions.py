@@ -279,10 +279,104 @@ def exponential_moving_average(new_value: float, previous_smoothed: float, alpha
     return alpha * new_value + (1 - alpha) * previous_smoothed
 
 
-def psnr(original_input: torch.Tensor, compressed_input: torch.Tensor) -> float:
+def unwrap_phase(phase_data: torch.Tensor) -> torch.Tensor:
+    log_module.info("Unwrapping phase image.")
+    if phase_data.max() > 3.15:
+        if phase_data.min() >= 0:
+            norm_phase = ((phase_data / phase_data.max()) * 2 * np.pi) - np.pi
+        else:
+            norm_phase = (phase_data / phase_data.max()) * np.pi
+    else:
+        norm_phase = phase_data
+
+    dim = norm_phase.shape
+
+    tmp = torch.tensor(
+        np.array(range(int(np.floor(-dim[1] / 2)), int(np.floor(dim[1] / 2)))) / float(dim[1])
+    )
+    tmp = tmp.reshape((1, dim[1]))
+    uu = np.ones((1, dim[0]))
+    xx = np.dot(tmp.conj().T, uu).conj().T
+    tmp = np.array(
+        np.array(range(int(np.floor(-dim[0] / 2)), int(np.floor(dim[0] / 2)))) / float(dim[0])
+    )
+    tmp = tmp.reshape((1, dim[0]))
+    uu = np.ones((dim[1], 1))
+    yy = np.dot(uu, tmp).conj().T
+    kk2 = xx**2 + yy**2
+    hp1 = gauss_filter(dim[0], GAUSS_STDEV, dim[1], GAUSS_STDEV)
+
+    filter_phase = np.zeros_like(norm_phase)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for i in range(dim[2]):
+            z_slice = norm_phase[:, :, i]
+            lap_sin = -4.0 * (np.pi**2) * icfft(kk2 * cfft(np.sin(z_slice)))
+            lap_cos = -4.0 * (np.pi**2) * icfft(kk2 * cfft(np.cos(z_slice)))
+            lap_theta = np.cos(z_slice) * lap_sin - np.sin(z_slice) * lap_cos
+            tmp = np.array(-cfft(lap_theta) / (4.0 * (np.pi**2) * kk2))
+            tmp[np.isnan(tmp)] = 1.0
+            tmp[np.isinf(tmp)] = 1.0
+            kx2 = tmp * (1 - hp1)
+            filter_phase[:, :, i] = np.real(icfft(kx2))
+
+    filter_phase[filter_phase > np.pi] = np.pi
+    filter_phase[filter_phase < -np.pi] = -np.pi
+    filter_phase *= -1.0
+
+    filter_obj = nib.Nifti1Image(filter_phase, phase_obj.affine, phase_obj.header)
+    filter_obj.set_data_dtype(np.float32)
+    return filter_obj
+
+
+class SimpleKalmanFilter:
+    def __init__(self, process_variance=1e-5, measurement_variance=1e-3):
+        self.process_variance = process_variance
+        self.measurement_variance = measurement_variance
+        self.estimate = None
+        self.error_estimate = 1
+
+    def update(self, measurement):
+        if self.estimate is None:
+            self.estimate = measurement
+            return self.estimate
+
+        # Kalman gain calculation
+        kalman_gain = self.error_estimate / (self.error_estimate + self.measurement_variance)
+
+        # Estimate update
+        self.estimate = self.estimate + kalman_gain * (measurement - self.estimate)
+
+        # Error estimate update
+        self.error_estimate = (1 - kalman_gain) * self.error_estimate + abs(
+            measurement - self.estimate) * self.process_variance
+
+        return self.estimate
+
+
+def exponential_moving_average(new_value, previous_smoothed, alpha=0.1):
+    """
+    Exponential Moving Average smoothing
+    - alpha controls the smoothing (0 < alpha < 1)
+    - Lower alpha = more smoothing, higher alpha = less smoothing
+    """
+    return alpha * new_value + (1 - alpha) * previous_smoothed
+
+
+def calc_psnr(original_input: torch.Tensor, compressed_input: torch.Tensor) -> float:
     mse = torch.mean((original_input - compressed_input) ** 2)
     if mse == 0:
         return float('inf')
     max_pixel = torch.max(torch.abs(original_input))
     val = 20 * torch.log10(max_pixel / torch.sqrt(mse)).item()
     return val
+
+
+def calc_nmse(original_input: torch.Tensor, compressed_input: torch.Tensor) -> float:
+    mse = torch.mean((original_input - compressed_input) ** 2)
+    n = torch.clip(torch.var(original_input), min=1e-11)
+    return mse / n
+#
+#
+# def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor) -> float:
+#
+
