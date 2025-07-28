@@ -409,6 +409,11 @@ def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor,
         img1 = original_input.float()
         img2 = compressed_input.float()
 
+        if val_range is None:
+            min_val = torch.min(torch.min(img1), torch.min(img2))
+            max_val = torch.max(torch.max(img1), torch.max(img2))
+            val_range = max_val - min_val
+
         # Flatten images if they are 2D
         if img1.dim() == 2:
             img1 = img1.unsqueeze(0).unsqueeze(0)
@@ -419,6 +424,10 @@ def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor,
         if img1.shape != img2.shape:
             raise ValueError(f"Input shapes must match: {img1.shape} vs {img2.shape}")
 
+        # get batch size
+        if img1.ndim > 2:
+            n_batch_dims = img1.ndim - 2
+
         # Compute local statistics in a sliding window
         def local_statistics(img, window_size):
             # Pad the image
@@ -426,9 +435,9 @@ def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor,
             img_pad = F.pad(img, (pad, pad, pad, pad), mode='reflect')
 
             # Create sliding windows
-            patches = img_pad.unfold(2, window_size, 1).unfold(3, window_size, 1)
+            patches = img_pad.unfold(n_batch_dims, window_size, 1).unfold(n_batch_dims+1, window_size, 1)
             patches = patches.contiguous().view(
-                img.size(0), img.size(1), -1, window_size, window_size
+                *img.shape[:n_batch_dims], -1, window_size, window_size
             )
 
             # Compute local statistics
@@ -447,14 +456,14 @@ def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor,
             img1_pad = F.pad(img1, (pad, pad, pad, pad), mode='reflect')
             img2_pad = F.pad(img2, (pad, pad, pad, pad), mode='reflect')
 
-            patches1 = img1_pad.unfold(2, window_size, 1).unfold(3, window_size, 1)
-            patches2 = img2_pad.unfold(2, window_size, 1).unfold(3, window_size, 1)
+            patches1 = img1_pad.unfold(n_batch_dims, window_size, 1).unfold(n_batch_dims+1, window_size, 1)
+            patches2 = img2_pad.unfold(n_batch_dims, window_size, 1).unfold(n_batch_dims+1, window_size, 1)
 
             patches1 = patches1.contiguous().view(
-                img1.size(0), img1.size(1), -1, window_size, window_size
+                *img1_pad.shape[:n_batch_dims], -1, window_size, window_size
             )
             patches2 = patches2.contiguous().view(
-                img2.size(0), img2.size(1), -1, window_size, window_size
+                *img1_pad.shape[:n_batch_dims], -1, window_size, window_size
             )
 
             # Compute local cross-correlation
