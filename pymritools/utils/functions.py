@@ -277,3 +277,12 @@ def exponential_moving_average(new_value: float, previous_smoothed: float, alpha
         The updated smoothed value calculated as the exponential moving average.
     """
     return alpha * new_value + (1 - alpha) * previous_smoothed
+
+
+def psnr(original_input: torch.Tensor, compressed_input: torch.Tensor) -> float:
+    mse = torch.mean((original_input - compressed_input) ** 2)
+    if mse == 0:
+        return float('inf')
+    max_pixel = torch.max(torch.abs(original_input))
+    val = 20 * torch.log10(max_pixel / torch.sqrt(mse)).item()
+    return val
