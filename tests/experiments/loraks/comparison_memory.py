@@ -12,8 +12,7 @@ from pymritools.recon.loraks.loraks import LoraksImplementation, OperatorType, R
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, ResultMode
-from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_matlab_script, TorchMemoryTracker
-
+from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_matlab_script
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ def recon_ac_loraks_gpu(
 ):
     logger.info(f"Set device: {device}")
 
-    if not torch.device.type == "cuda":
+    if not device.type == "cuda":
         msg = f"called GPU run with wrong device: {device}"
         logger.error(msg)
         raise AttributeError(msg)
@@ -74,7 +73,7 @@ def recon_ac_loraks_cpu(
 ):
     logger.info(f"Set device: {device}")
 
-    if torch.device.type == "cuda":
+    if device.type == "cuda":
         msg = f"called CPU run with wrong device: {device}"
         logger.error(msg)
         raise AttributeError(msg)
@@ -168,7 +167,8 @@ def compute():
                             rank=rank, regularization_lambda=regularization_lambda,
                             max_num_iter=max_num_iter
                         )
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(e)
                         mem_usage = "Maxed Out"
                     meas.append({
                         "Mode": "torch", "Device": "GPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
@@ -181,7 +181,8 @@ def compute():
                         rank=rank, regularization_lambda=regularization_lambda,
                         max_num_iter=max_num_iter
                     )
-                except Exception:
+                except Exception as e:
+                    logger.warning(e)
                     mem_usage = "Maxed Out"
                 meas.append({
                     "Mode": "torch", "Device": "CPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
@@ -202,3 +203,9 @@ def compute():
         fn = path_out.joinpath("results_df_latest").with_suffix(".json")
         logger.info(f"Writing to {fn}")
         df.write_ndjson(fn)
+
+
+if __name__ == '__main__':
+    logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
+                        datefmt='%I:%M:%S', level=logging.INFO)
+    compute()
