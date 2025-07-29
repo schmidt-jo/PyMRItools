@@ -83,7 +83,8 @@ def compute():
                             "Mode": "torch", "Device": "GPU", "Time": time,
                             "mxy": mxy, "mce": mce
                         })
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(e)
                         meas.append({
                             "Mode": "torch", "Device": "GPU", "Time": None,
                             "mxy": mxy, "mce": mce
@@ -100,7 +101,8 @@ def compute():
                         "Mode": "torch", "Device": "CPU", "Time": time,
                         "mxy": mxy, "mce": mce
                     })
-                except Exception:
+                except Exception as e:
+                    logger.warning(e)
                     meas.append({
                         "Mode": "torch", "Device": "CPU", "Time": None,
                         "mxy": mxy, "mce": mce
