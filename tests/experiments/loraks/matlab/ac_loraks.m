@@ -1,7 +1,7 @@
 function ac_loraks()
 
 % setup
-addpath("/data/u_jschmidt_software/matlab/LORAKS_V2.1/");
+addpath("/data/pt_np-jschmidt/code/PyMRItools/tests/experiments/loraks/matlab/");
 % load data - hardcoded path
 
 mat_vars = load("/data/pt_np-jschmidt/code/PyMRItools/tests/experiments/loraks/data/input.mat");

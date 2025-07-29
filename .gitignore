@@ -93,3 +93,5 @@ cython_debug/
 /resources/
 /pymritools/optimization/
 /pex_output/
+/tests/experiments/loraks/data/
+/tests/experiments/loraks/matlab/AC_LORAKS.m
