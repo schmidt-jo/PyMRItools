@@ -10,10 +10,12 @@ import plotly.graph_objects as go
 import plotly.subplots as psub
 import plotly.colors as plc
 
+import polars as pl
 import nibabel as nib
 import tqdm
 
-from pymritools.utils import torch_load, nifti_load, Phantom, fft_to_img, torch_save, root_sum_of_squares
+from pymritools.utils import torch_load, nifti_load, Phantom, fft_to_img, torch_save, root_sum_of_squares, calc_nmse, \
+    calc_psnr, calc_ssim
 from pymritools.recon.loraks.loraks import Loraks, OperatorType, RankReduction, RankReductionMethod
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, NullspaceAlgorithm
 
@@ -49,7 +51,7 @@ def compare_batching():
     # set subsampling - use phantom implementation to create the subsampling scheme
     nx, ny, ns, nc, ne = k_fs.shape
     phantom = Phantom.get_shepp_logan(shape=(nx, ny), num_coils=nc, num_echoes=ne)
-    pk_us = phantom.sub_sample_ac_random_lines(acceleration=3.5, ac_lines=36)
+    pk_us = phantom.sub_sample_ac_random_lines(acceleration=3.0, ac_lines=36)
     # extract the mask
     mask = pk_us.abs() > 1e-10
     mask = mask.unsqueeze(2).expand_as(k_fs)
@@ -181,77 +183,89 @@ def plot_batching_comp():
         imgs.append({"name": t, "data": d})
     bet = bet.unsqueeze(-1).unsqueeze(-1).expand_as(imgs[-1]["data"])
 
-    channel_idx = [20, 30]
+    channel_idx = 20
 
-    plots = []
     gt = imgs[0]["data"]
-    gt_rsos = root_sum_of_squares(gt, dim_channel=-2)
+    gt_rsos = root_sum_of_squares(gt, dim_channel=-2) / 2
     gt_rsos = gt_rsos[:, :, gt_rsos.shape[2] // 2, 0].clone()
     gt_rsos[~bet[:, :, bet.shape[2] // 2, 0, 0]] = 0
-    gt_max = gt_rsos.abs().max().item() * 0.6
+    # gt_max = gt_rsos.abs().max().item() * 0.6
 
-    c_max = gt[:, :, gt.shape[2] // 2, channel_idx, 0].abs().max().item() * 0.6
+    c_max = gt[:, :, gt.shape[2] // 2, channel_idx, 0].abs().max().item() * 0.5
+
+    # we want to build a list of lists for columns and rows
+    # first row: channel and rsos data of each input img, second row, difference to ground truth channel and rsos
+    names = []
+    tmp_first = []
+    tmp_second = []
     for i, d in enumerate(imgs):
         data = d["data"].abs()
-        logger.info(f"add: {d['name']}")
-        plots.append(data)
-        if i > 0:
-            diff = torch.nan_to_num(
-                (data.abs() - gt.abs())
-            )
-            diff[~bet] = 0
-            logger.info("Add diff")
-            plots.append(diff)
-            logger.info(f"Mean Error: {torch.mean(torch.abs(diff))}")
+        nx, ny, ns, nc, nt = data.shape
+        name = d['name']
+        logger.info(f"add: {name}")
+        names.extend([name, f"{name} RSOS"])
+
+        # channel data
+        tmp_first.append(data[:, :, ns // 2, channel_idx, 0].abs())
+        rsos = root_sum_of_squares(data, dim_channel=-2)[:, :, ns //2, 0] / 2
+        tmp_first.append(rsos)
+
+        diff = data.abs() - gt.abs()
+        diff[~bet] = 0
+        tmp_second.append(diff[:, :, ns // 2, channel_idx, 0])
+        logger.info(f"Mean Error: {torch.mean(torch.abs(diff))}, l2: {torch.linalg.norm(diff)}")
+
+        diff_rsos = rsos.abs() - gt_rsos.abs()
+        diff_rsos[~bet[..., ns // 2, 0, 0]] = 0
+        tmp_second.append(diff_rsos)
+        logger.info(f"Mean Error: {torch.mean(torch.abs(diff_rsos))}, l2: {torch.linalg.norm(diff_rsos)}")
+    plots  = [tmp_first, tmp_second]
     del imgs
 
     fig = psub.make_subplots(
-        rows=len(channel_idx)+1, cols=len(plots),
-        column_titles=[
-            "Ground Truth", "US", "Diff GT US", "Corr. batching", "Diff. Corr. batching",
-            "Arange batching", "Diff Arange batching"
-        ],
-        row_titles=[f"Channel {c+1}" for c in channel_idx] + ["RSOS"],
-        vertical_spacing=0.01, horizontal_spacing=0.01,
+        rows=len(plots), cols=len(plots[0]),
+        column_titles=names,
+        # row_titles=[f"Data", "Difference"],
+        vertical_spacing=0.008, horizontal_spacing=0.005,
         shared_xaxes=True, shared_yaxes=True
     )
 
-    for i, p in enumerate(plots):
-        for ic, c in enumerate(channel_idx):
+    for i, r in enumerate(plots):
+        for ic, c in enumerate(r):
             fig.add_trace(
                 go.Heatmap(
-                    z=p[:, :, p.shape[2] // 2, c, 0].abs(), transpose=False,
+                    z=c, transpose=False,
                     showscale=False,
-                    colorscale="Inferno" if i not in [2, 4, 6] else "Balance",
-                    zmin=0 if i not in [2, 4, 6] else -0.1*c_max,
-                    zmax=c_max if i not in [2, 4, 6] else 0.1 * c_max,
+                    coloraxis="coloraxis" if i==0 else "coloraxis2",
                 ),
-                row=1+ic, col=1 + i
+                row=1+i, col=1 + ic
             )
+            xaxis = fig.data[-1].xaxis
+            fig.update_xaxes(visible=False, row=1+i, col=1 + ic)
+            fig.update_yaxes(visible=False, row=1+i, col=1 + ic, scaleanchor=xaxis)
 
-        if i in [2, 4, 6]:
-            rsos = root_sum_of_squares(plots[i-1], -2)[:, :, plots[i-1].shape[2] // 2, 0].abs()
-            rsos = torch.nan_to_num(rsos - gt_rsos, posinf=0.0, nan=0.0)
-            rsos[~bet[:, :, bet.shape[2]//2, 0, 0]] = 0
-        else:
-            rsos = root_sum_of_squares(p, -2)[:, :, p.shape[2] // 2, 0].abs()
-        fig.add_trace(
-            go.Heatmap(
-                z=rsos, transpose=False,
-                showscale=False,
-                colorscale="Inferno" if i not in [2, 4, 6] else "Balance",
-                zmin=0 if i not in [2, 4, 6] else -0.1 * gt_max,
-                zmax=gt_max if i not in [2, 4, 6] else 0.1 * gt_max,
-            ),
-            row=len(channel_idx) + 1, col=1 + i
-        )
-
-    fig.update_yaxes(visible=False)
-    fig.update_xaxes(visible=False)
     fig.update_layout(
         width=1000,
-        height=500,
-        margin=dict(t=25, b=55, l=65, r=5),
+        height=300,
+        margin=dict(t=25, b=20, l=20, r=2),
+        coloraxis=dict(
+            colorscale="Inferno",
+            cmin=0.0, cmax=c_max,
+            colorbar=dict(
+                x=1.01, y=0.5, len=0.5, thickness=14,
+                title=dict(text=f"Signal [a.u.]", side="right"),
+                xanchor="left", yanchor="bottom",
+            )
+        ),
+        coloraxis2=dict(
+            colorscale="Balance",
+            cmin=-0.1*c_max, cmax=0.1*c_max,
+            colorbar=dict(
+                x=1.01, y=0.0, len=0.5, thickness=14,
+                title=dict(text=f"Difference [a.u.]", side="right"),
+                xanchor="left", yanchor="bottom",
+            )
+        )
     )
     fn = path.joinpath(f"recon_batching_comparison").with_suffix(".html")
     logger.info(f"write file: {fn}")
@@ -373,11 +387,77 @@ def plot_svd_comp():
         fig.write_image(fn)
 
 
+def df_batching():
+    path = plib.Path(
+        get_test_result_output_dir("reconstruction_comparisons", mode=ResultMode.EXPERIMENT)).absolute().joinpath(
+        "batching")
+
+    _, bet = load_data()
+    bet = bet.to(torch.bool).permute(1, 0, 2).unsqueeze(-1)
+
+    gt = torch_load(path.joinpath(f"recon_batching_comparison_gt").with_suffix(".pt"))
+    gt_rsos = root_sum_of_squares(gt, dim_channel=-2)
+    gt_rsos[~bet.expand_as(gt_rsos)] = 0
+
+    stats = []
+    for i, t in enumerate(["us", "cb-True", "cb-False"]):
+        d = torch_load(path.joinpath(f"recon_batching_comparison_{t}").with_suffix(".pt"))
+        rsos = root_sum_of_squares(d, dim_channel=-2)
+        rsos[~bet.expand_as(rsos)] = 0
+        name = t
+        nmse = calc_nmse(gt_rsos, rsos)
+        psnr = calc_psnr(gt_rsos, rsos)
+        ssim = calc_ssim(gt_rsos.permute(3, 2, 1, 0), rsos.permute(3, 2, 1, 0))
+        stats.append({"name": name, "nmse": nmse, "psnr": psnr, "ssim": ssim})
+
+    df =  pl.DataFrame(stats)
+    logger.info(df)
+    fn = path.joinpath("errors").with_suffix(".json")
+    logger.info(f"write file: {fn}")
+    df.write_ndjson(fn)
+
+
+def df_svds():
+    path = plib.Path(
+        get_test_result_output_dir("reconstruction_comparisons", mode=ResultMode.EXPERIMENT)).absolute().joinpath(
+        "rsvds")
+    logger.info(f"set path: {path}")
+
+    _, bet = load_data()
+    bet = bet.to(torch.bool).permute(1, 0, 2)[:, :, bet.shape[2] //2, None]
+    fn = path.joinpath(f"recon_comparison_gt").with_suffix(".pt")
+    logger.info(f"Load file: {fn}")
+    gt = torch_load(fn)
+    gt_rsos = root_sum_of_squares(gt, dim_channel=-2)[:, :, gt.shape[2] // 2]
+    gt_rsos[~bet.expand_as(gt_rsos)] = 0
+
+    stats = []
+    for i, nsa in enumerate(list(NullspaceAlgorithm)):
+        logger.info(f"Process Algorithm: {nsa.name}")
+        fn = path.joinpath(f"recon_comparison_svd-{nsa.name}".lower()).with_suffix(".pt")
+        d = torch_load(fn)
+
+        rsos = root_sum_of_squares(d, dim_channel=-2)
+        rsos[~bet.expand_as(rsos)] = 0
+        name = nsa.name.lower()
+        nmse = calc_nmse(gt_rsos, rsos)
+        psnr = calc_psnr(gt_rsos, rsos)
+        ssim = calc_ssim(gt_rsos.permute(2, 0, 1), rsos.permute(2, 0, 1))
+        stats.append({"name": name, "nmse": nmse, "psnr": psnr, "ssim": ssim})
+
+    df =  pl.DataFrame(stats)
+    logger.info(df)
+    fn = path.joinpath(f"recon_comparison_svd-stats").with_suffix(".json")
+    df.write_ndjson(fn)
+
+
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
     # compare_batching()
     # plot_batching_comp()
+    df_batching()
 
-    compare_variants()
-    plot_svd_comp()
+    # compare_variants()
+    # plot_svd_comp()
+    df_svds()

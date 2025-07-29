@@ -2,9 +2,7 @@ import torch
 import logging
 import pathlib as plib
 import sys
-import threading
-import time
-import psutil
+
 from enum import Enum, auto
 from pymritools.utils import torch_load
 from pymritools.recon.loraks.utils import (
@@ -13,8 +11,8 @@ from pymritools.recon.loraks.utils import (
 )
 from typing import Tuple
 import subprocess
-import os
-import tracemalloc
+from os import path
+import msparser
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
@@ -27,6 +25,7 @@ class DataType(Enum):
     SHEPPLOGAN = auto()
     PHANTOM = auto()
     INVIVO = auto()
+    MASK = auto()
 
 
 
@@ -56,10 +55,10 @@ def load_data(data_type: DataType):
 
 
 #__ methods for autograd LORAKS iteration & prep
-def prep_k_space(k: torch.Tensor, batch_size_channels: int = -1):
+def prep_k_space(k: torch.Tensor, batch_size_channels: int = -1, use_correlation_clustering: bool = True):
     # we need to prepare the k-space
     batch_channel_idx = check_channel_batch_size_and_batch_channels(
-        k_space_rpsct=k, batch_size_channels=batch_size_channels
+        k_space_rpsct=k, batch_size_channels=batch_size_channels, use_correlation_clustering=use_correlation_clustering
     )
     prep_k, in_shape = prepare_k_space_to_batches(
         k_space_rpsct=k, batch_channel_indices=batch_channel_idx
@@ -75,6 +74,36 @@ def unprep_k_space(k: torch.Tensor, padding: Tuple[int, int], batch_idx: torch.t
         k_batched=k, batch_channel_indices=batch_idx, original_shape=input_shape
     )
 
+
+def run_command(function_call: str,
+                use_valgrind: bool = False,
+                massif_output_file: str = "massif.out",
+                capture_output: bool = True):
+
+    import subprocess, shlex
+    if not use_valgrind:
+        command_to_run = shlex.split(function_call)
+    else:
+        command_to_run = [
+                           "valgrind",
+                           "--tool=massif",
+                           "--trace-children=yes",
+                           f"--massif-out-file={massif_output_file}",
+                       ] + shlex.split(function_call)
+    return subprocess.run(command_to_run, capture_output=capture_output, text=True)
+
+
+def read_massif_max_memory_used(file_path):
+    if not path.exists(file_path) or not path.isfile(file_path):
+        raise ValueError(f"File '{file_path}' does not exist or is not a file.")
+    data = msparser.parse_file(file_path)
+    peak_idx = data['peak_snapshot_index']
+    peak_snapshot = data['snapshots'][peak_idx]
+    peak_heap_memory = peak_snapshot['mem_heap']
+    peak_extra_memory = peak_snapshot['mem_heap_extra']
+    return peak_heap_memory / (1024**2) , peak_extra_memory / (1024**2)
+
+
 ## For matlab comparisons we need the following logic:
 # 1) Save the data as <data>.mat file
 # 2) provide a <script>.m doing the task while interfacing with the <data>.mat
@@ -84,7 +113,8 @@ def unprep_k_space(k: torch.Tensor, padding: Tuple[int, int], batch_idx: torch.t
 # For timing comparisons we could try to run the process without an actual function call in matlab,
 # just the process calls and data loading, and then subtract this timing. Or we do the time keeping in matlab.
 
-def run_matlab_script(script_name, script_args=None, script_dir=None, capture_output=True):
+def run_matlab_script(script_name, use_valgrind: bool = True,
+                      script_args=None, script_dir=None, capture_output=True):
     """
     Run a MATLAB script with the given arguments.
 
@@ -132,110 +162,15 @@ def run_matlab_script(script_name, script_args=None, script_dir=None, capture_ou
     logger.debug(f"CMD:: {matlab_cmd}")
     # Run the MATLAB command
     # process = subprocess.run(matlab_cmd, shell=True, capture_output=capture_output, text=True)
-    process = subprocess.Popen(matlab_cmd, shell=True, text=True)
+    # process = subprocess.Popen(matlab_cmd, shell=True, text=True)
+    file_name = "/data/pt_np-jschmidt/code/PyMRItools/test_output/EXPERIMENT/speed_comparison/massif.out.123"
+    command_return = run_command(
+        function_call=matlab_cmd, use_valgrind=use_valgrind,
+        massif_output_file=file_name,
+        capture_output=capture_output
+    )
 
-    # Get the process object of the subprocess
-    subprocess_process = psutil.Process(process.pid)
-
-    memory_usage = []
-    shared = []
-    memory_usage.append(subprocess_process.memory_info().rss / (1024 * 1024))
-    # Track the memory usage during the process
-    # Function to track the memory usage of the subprocess
-    def track_memory_usage():
-        while subprocess_process.is_running():
-            mfi = subprocess_process.memory_full_info()
-            mem = mfi.rss + mfi.vms
-            shared.append(mfi.shared / (1024 * 1024))
-            memory_usage.append(mem / (1024 * 1024))
-            time.sleep(0.5)
-
-    # Create a thread to track the memory usage of the subprocess
-    thread = threading.Thread(target=track_memory_usage)
-    thread.start()
-
-    # Wait for the subprocess to finish
-    process.wait()
-    #
-    # # Check for errors
-    # if result.returncode != 0:
-    #     if capture_output:
-    #         print(f"MATLAB error: {result.stderr}")
-    #     raise RuntimeError(f"MATLAB script '{script_name}' execution failed")
-
-    memory_usage = max(memory_usage)
-    shared_usage = max(shared)
-    return memory_usage, shared_usage
-
-
-class TorchMemoryTracker:
-    def __init__(self, device: torch.device):
-        self.memory_allocated = 0
-        self.memory_reserved = 0
-        if device.type not in ['cpu', 'cuda']:
-            raise ValueError(f"Device type {device.type} not supported")
-        self.device = device
-        self.memory_info = {}
-
-        self.process = psutil.Process(os.getpid()) if self.device.type == 'cpu' else None
-
-
-    def _get_cuda_mem_dict(self):
-        cuda_max_alloc = torch.cuda.max_memory_allocated(self.device)
-        cuda_res = torch.cuda.memory_reserved(self.device)
-        d = {
-            'memory_allocated': cuda_max_alloc,
-            'memory_reserved': cuda_res,
-            'memory_allocated_mb': cuda_max_alloc / (1024 * 1024),
-            'memory_reserved_mb': cuda_res / (1024 * 1024)
-        }
-        return d
-
-    def _get_cpu_mem_dict(self):
-        # CPU memory tracking
-        mem_info = self.process.memory_full_info()
-        mem_used = mem_info.rss + mem_info.vms
-        # Get tracemalloc stats
-        current, peak = tracemalloc.get_traced_memory()
-        d = {
-            'memory_used': mem_used,  # Memory used during the operation
-            'memory_used_mb': mem_used / (1024 * 1024),
-            'tracemalloc_current': current,
-            'tracemalloc_peak': peak,
-            'tracemalloc_current_mb': current / (1024 * 1024),
-            'tracemalloc_peak_mb': peak / (1024 * 1024),
-            "mem_info": mem_info
-        }
-        return d
-
-    def start_tracking(self):
-        if self.device.type == 'cuda':
-            torch.cuda.reset_peak_memory_stats(self.device)
-            torch.cuda.reset_accumulated_memory_stats(self.device)
-            torch.cuda.synchronize(self.device)
-            self.memory_info["start"] = self._get_cuda_mem_dict()
-        else:
-            tracemalloc.start()
-            tracemalloc.reset_peak()
-            self.memory_info["start"] = self._get_cpu_mem_dict()
-
-    def end_tracking(self):
-        if self.device.type == 'cuda':
-            self.memory_info["end"] = self._get_cuda_mem_dict()
-        else:
-            self.memory_info["end"] = self._get_cpu_mem_dict()
-            tracemalloc.stop()
-
-    def get_memory_usage(self):
-        if self.device.type == 'cuda':
-            mem_after = self.memory_info["end"]["memory_allocated_mb"]
-            mem_before = self.memory_info["start"]["memory_allocated_mb"]
-            tm = None
-            shared = None
-        else:
-            mem_after = self.memory_info["end"]["memory_used_mb"]
-            mem_before = self.memory_info["start"]["memory_used_mb"]
-            tm = self.memory_info["end"]["tracemalloc_peak_mb"] - self.memory_info["start"]["tracemalloc_peak_mb"]
-            shared = (self.memory_info["end"]["mem_info"].shared - self.memory_info["start"]["mem_info"].shared) / 1024 / 1024
-        return mem_after - mem_before, tm, shared
-
+    memory_usage_mb, peak_extra_memory_mb = read_massif_max_memory_used(
+        file_path=file_name
+    )
+    return memory_usage_mb, peak_extra_memory_mb
