@@ -83,11 +83,10 @@ def compute():
 
         # SVDS
         for svd_type in list(SVDType):
-            if svd_type == SVDType.SVD:
-                if g % 2 == 0 or g > 10:
+            if g % 2 == 0:
+                if svd_type == SVDType.SVD and g > 10:
                     continue
-            elif svd_type == SVDType.RANDQLP:
-                if g > 15:
+                elif (svd_type == SVDType.RANDQLP or svd_type == SVDType.RANDNS) and g > 15:
                     continue
             # init run and measure memory
             mem_track = TorchMemoryTracker(device=device)
@@ -106,10 +105,11 @@ def compute():
                 "Mode": svd_type.name, "Time": t_processing, "Memory": mem_processing,
                 "mxy": mxy.item(), "mce": mce
             })
-    df = pl.DataFrame(meas)
-    fn = path.joinpath("results_df").with_suffix(".json")
-    logger.info(f"Writing to {fn}")
-    df.write_ndjson(fn)
+            torch.cuda.empty_cache()
+        df = pl.DataFrame(meas)
+        fn = path.joinpath("results_df").with_suffix(".json")
+        logger.info(f"Writing to {fn}")
+        df.write_ndjson(fn)
 
 
 def plot(colorscale: str = "Inferno", cmin: float = 0.1, cmax: float = 0.9):
@@ -166,5 +166,5 @@ def plot(colorscale: str = "Inferno", cmin: float = 0.1, cmax: float = 0.9):
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
+    compute()
     plot(colorscale="Turbo", cmin=0.0, cmax=1.0)
-    # compute()

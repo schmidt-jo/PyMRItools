@@ -10,13 +10,12 @@ from enum import Enum, auto
 import json
 
 import torch
-from pymritools.recon.loraks.loraks import Loraks, OperatorType, RankReduction, RankReductionMethod
-from pymritools.recon.loraks.p_loraks import PLoraksOptions, LowRankAlgorithmType
+from pymritools.recon.loraks.loraks import Loraks, OperatorType
 from pymritools.recon.loraks.utils import unpad_output
 
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, m_op_base
 from pymritools.utils.functions import fft_to_img
-from pymritools.utils import Phantom
+from pymritools.utils import Phantom, calc_psnr, root_sum_of_squares, calc_nmse, calc_ssim
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
@@ -156,7 +155,7 @@ def autograd_optimization_ac(
     # create AC options
     options = AcLoraksOptions(
         solver_type=SolverType.AUTOGRAD, regularization_lambda=regularization_lambda, max_num_iter=max_num_iter,
-        loraks_matrix_type=operator_type, batch_size_channels=batch_size_channels
+        loraks_matrix_type=operator_type,
     )
     options.rank.value = rank
     loraks = Loraks.create(options=options)
@@ -217,30 +216,56 @@ def extract_sampling_density(grad: torch.Tensor, ac_mask: torch.Tensor):
     # we now have the gradients for all channels and echoes.
     # we want to compute a sampling scheme per echo in the following way
     # take the AC region per default
-    # per echo we sum the absolute value of the gradients within all non ac lines per line
+
+    # we sum the absolute value of the gradients within all non ac readout lines per phase encode line
     # we sort the indices descending for highest gradient usage and declare those points "more important"
     # we take the mean across channels
     grad_am_cm = grad.abs().mean(dim=-2).squeeze()
     # we sum across the readout direction - and get rid here of the singular slice.
     # we can take this to a per slice sampling scheme if we wanted to
-    grad_am = torch.sum(grad_am_cm, dim=0)
+    grad_amp = torch.sum(grad_am_cm, dim=0)
     # now we have an "importance" score per phase encode point, per echo.
 
     # remove ac indices
     indices_ac = torch.where(torch.sum(ac_mask.to(torch.int), dim=0) == ac_mask.shape[0])[0]
+    grad_amp[indices_ac] = 0
 
-    grad_mac = grad_am.clone()
-    grad_mac[indices_ac] = 0
+    # additionally we turn this into a blueprint for a deterministic mask by assigning ordered integers based on the importance score.
+    # this way we can just extract the mask by masking all lower values.
+    # First we always keep the AC region
+    importance_mask = torch.zeros_like(grad_amp, dtype=torch.int)
+    num_pe = grad_amp.shape[0] - indices_ac.shape[0]
+    for i in range(grad_amp.shape[-1]):
+        # get importance score per echo
+        importance_scores = torch.argsort(grad_amp[:, i], descending=True).tolist()
+        # remove AC region
+        importance_scores = torch.tensor([ind for ind in importance_scores if ind not in indices_ac])
+
+        # add AC region to front
+        # assign indices from 0 to len - 1 based on sorted order
+        importance_mask[importance_scores, i] = torch.arange(num_pe, dtype=torch.int)
+
+    # we turn this into a sampling density function
+    grad_mac = grad_amp.clone()
+    # grad_mac[indices_ac] = 0
     sampling_density = grad_mac / grad_mac.sum(dim=0)
-    return sampling_density, grad_mac, indices_ac
+
+    return sampling_density, grad_mac, indices_ac, importance_mask
 
 
-def built_optimized_sampling_mask(acceleration: int, grad_mac: torch.Tensor, indices_ac: torch.Tensor, shape: tuple):
+def built_optimized_sampling_mask(
+        acceleration: int, grad_mac: torch.Tensor, indices_ac: torch.Tensor, shape: tuple,
+        # importance_mask: torch.Tensor
+):
     n_phase = grad_mac.shape[0]
     n_echoes = grad_mac.shape[-1]
     # calculate how many we want
     n_sub = (n_phase - len(indices_ac)) // acceleration
 
+    # deterministic mask
+    # mask = importance_mask < n_sub
+
+    # stochastic mask
     # we now want to draw from the indexes to keep, using the gradient function as sampling distribution per echo.
     # additionally we want to maximize the distribution to neighboring points across phase encodes and echoes.
     adaptive_sampler = AdaptiveSampler(p=grad_mac)
@@ -251,7 +276,7 @@ def built_optimized_sampling_mask(acceleration: int, grad_mac: torch.Tensor, ind
     mask_sub = torch.zeros(n_phase, n_echoes)
     for i in range(n_echoes):
         mask_sub[indices_sub[i], i] = 1
-    mask_sub = mask_sub[None, :, None, :].expand(shape).to(torch.int)
+    mask_sub = mask_sub[None, :, None, None, :].expand(shape).to(torch.int)
     return mask_sub
 
 
@@ -316,9 +341,12 @@ def recon_sampling_patterns(k: torch.Tensor, bet: torch.Tensor, masks: list, lor
         delta = rsos_rim - gt
         delta[~bet[:, :, 0]] = 0
         tmp_dict["img_us"] = im
-        tmp_dict["norm"] = torch.mean(delta.abs()).item()
+        tmp_dict["norm"] = torch.linalg.norm(delta).item()
         tmp_dict["rmse"] = torch.sqrt(torch.mean(delta.abs() ** 2))
         tmp_dict["delta"] = torch.nan_to_num(delta.abs() / gt, nan=0.0, posinf=0.0, neginf=0.0) * 100
+        tmp_dict["psnr"] = calc_psnr(original_input=gt, compressed_input=rsos_rim)
+        tmp_dict["nmse"] = calc_nmse(original_input=gt, compressed_input=rsos_rim)
+        tmp_dict["ssim"] = calc_ssim(original_input=gt.permute(2, 0, 1), compressed_input=rsos_rim.permute(2, 0, 1))
         tmp_dict["k_us"] = km
         tmp_dict["k_recon"] = recon_k
         tmp_dict["img_recon"] = recon_im
@@ -508,7 +536,7 @@ def plot_results(results: list, path: plib.Path):
             cmin=0.0, cmax=plot_err_percentage,
             colorbar=dict(
                 x=1.01, y=-0.01, len=0.25, thickness=14,
-                title=dict(text="Error vs Fully Sampled [%]", side="right"),
+                title=dict(text="Difference to Fully Sampled [%]", side="right"),
                 xanchor="left", yanchor="bottom",
             )
         ),
@@ -591,12 +619,15 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
             #     batch_size_channels=8, rank=150
             # )
             raise NotImplementedError(f"Loraks type {loraks_type} not implemented")
-        sampling_density, grad_mac, indices_ac = extract_sampling_density(grad=grad, ac_mask=mask)
-        logger.info(f"Save data: {path_tmp}")
-        sd = {"sampling_density": sampling_density, "grad_mac": grad_mac, "indices_ac": indices_ac, "mask": mask}
-        with open(path_tmp, "wb") as f:
-            pickle.dump(sd, f)
-        plot_sampling_density(grad=grad_mac, sampling_density=sampling_density, ac_mask=mask, path=path_out)
+        sampling_density, grad_mac, indices_ac, importance_mask = extract_sampling_density(grad=grad, ac_mask=mask)
+    logger.info(f"Save data: {path_tmp}")
+    sd = {
+        "sampling_density": sampling_density, "grad_mac": grad_mac, "indices_ac": indices_ac, "mask": mask,
+        # "importance_mask": importance_mask
+    }
+    with open(path_tmp, "wb") as f:
+        pickle.dump(sd, f)
+    plot_sampling_density(grad=grad_mac, sampling_density=sampling_density, ac_mask=mask, path=path_out)
 
     # create sub-sampling masks for visuals
     path_tmp = path_out_data.joinpath("masks").with_suffix(".pkl")
@@ -606,7 +637,8 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
     else:
         masks = create_subsampling_masks(k.squeeze().shape)
         m_opt = built_optimized_sampling_mask(
-            acceleration=6, grad_mac=grad_mac, indices_ac=indices_ac, shape=k.shape
+            acceleration=6, grad_mac=grad_mac, indices_ac=indices_ac, shape=k.shape,
+            # importance_mask=importance_mask
         )
         masks.append({"name": "Optimized", "data": m_opt.squeeze()})
         with open(path_tmp.as_posix(), "wb") as j_file:
@@ -622,18 +654,47 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
             # compare sampling patterns
             options = AcLoraksOptions(
                 solver_type=SolverType.AUTOGRAD, regularization_lambda=0.0, max_num_iter=500,
-                loraks_matrix_type=OperatorType.S, batch_size_channels=8
+                loraks_matrix_type=OperatorType.S
             )
             options.rank.value = 150
             loraks = Loraks.create(options=options)
             results = recon_sampling_patterns(k=k, masks=masks, bet=bet, loraks=loraks)
             with open(path_tmp.as_posix(), "wb") as j_file:
                 pickle.dump(results, j_file)
-            plot_results(results, path=path_out)
+        plot_results(results, path=path_out)
         plot_rmse(results, path=path_out)
 
         logger.info(f"RMSE: {[r['rmse'] for r in results]}")
         logger.info(f"Norm: {[r['norm'] for r in results]}")
+
+
+def plot_metrics(loraks_type: LoraksType = LoraksType.AC, data_type: DataType = DataType.INVIVO):
+    # get path
+    path_out = plib.Path(
+        get_test_result_output_dir(
+            f"autograd_subsampling_optimization",
+            mode=ResultMode.EXPERIMENT)
+    )
+    path_out = path_out.joinpath(f"{loraks_type.name}".lower()).joinpath(f"{data_type.name}".lower())
+    path_out_data = path_out.joinpath(f"data")
+    path_tmp = path_out_data.joinpath("ac_recon_results").with_suffix(".pkl")
+    if not path_tmp.is_file():
+        msg = f"File not found: {path_tmp}"
+        raise FileNotFoundError(msg)
+
+    with open(path_tmp.as_posix(), "rb") as j_file:
+        results = pickle.load(j_file)
+
+    gt = results[0]["img_us"]
+    gt = root_sum_of_squares(gt, dim_channel=-2)
+
+    for i, d in enumerate(results[1:]):
+        name=  d["name"]
+        psnr = d["psnr"]
+        ssim = d["ssim"]
+        nmse = d["nmse"]
+        logger.info(f"{name}: PSNR = {psnr:.5f}: SSIM = {ssim:.5f}: NMSE = {nmse:.5f}")
+
 
 
 if __name__ == '__main__':
@@ -642,3 +703,4 @@ if __name__ == '__main__':
         loraks_type=LoraksType.AC, data_type=DataType.INVIVO,
         device=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"),
     )
+    plot_metrics()
