@@ -863,12 +863,12 @@ def plot_wandb_sweep(force_api_load: bool = False):
         pl.col("sub").replace(mapping).alias("sub-num").cast(pl.Int64)
     )
     # df_data = df_data.filter(pl.col("loss") < -1.18)
-    df_data = df_data.sort(by="loss", descending=False)
+    df_data = df_data.sort(by="loss", descending=True)
 
-    logger.info(f"Optimal Rank: {df_data['rank'][0]}, Optimal Lambda: {df_data['lambda'][0]}, Optimal sub: {df_data['sub'][0]}")
+    logger.info(f"Optimal Rank: {df_data['rank'][-1]}, Optimal Lambda: {df_data['lambda'][-1]}, Optimal sub: {df_data['sub'][-1]}")
     logger.info(df_data)
 
-    columns = ["sub-num", "rank", "lambda", "psnr", "nmse", "ssim", "loss"]
+    columns = ["rank", "sub-num", "lambda", "psnr", "nmse", "ssim", "loss"]
     logger.info(columns)
     data_n = np.zeros((len(df_data), len(columns)))
 
@@ -942,8 +942,8 @@ def plot_wandb_sweep(force_api_load: bool = False):
                 'side': 'left' if i < len(columns) - 2 else 'right',
                 'position': 0.999 / (len(columns) - 1) * (i+1),  # Adjust positioning
                 'tickmode': 'array',
-                'tickvals': np.linspace(0, 1, 7),
-                'ticktext': [f"{x:.4f}" for x in np.linspace(ymin, ymax, 7)],
+                'tickvals': np.linspace(0, 1, 7) if i > 0 else (df_data["sub-num"].unique() / len(df_data["sub-num"].unique())).to_list(),
+                'ticktext': [f"{x:.4f}" for x in np.linspace(ymin, ymax, 7)] if i> 0 else df_data["sub"].unique().to_list(),
                 'layer': 'above traces',
             }
         })
