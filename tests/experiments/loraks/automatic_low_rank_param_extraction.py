@@ -839,8 +839,11 @@ def plot_wandb_sweep(force_api_load: bool = False):
             tmp = {
                 k: v for k, v in run.summary._json_dict.items() if not k.startswith("_")
             }
+            if not tmp:
+                 continue
 
             tmp["rank"] = config["rank"]
+            tmp["sub"] = config["sub"]
             tmp["name"] = run.name
             sum_list.append(tmp)
 
@@ -853,12 +856,19 @@ def plot_wandb_sweep(force_api_load: bool = False):
         df = pl.read_ndjson(fn)
 
     df_data = df.drop("name")
-    df_data = df_data.filter(pl.col("loss") < -1.18)
+    mapping = {}
+    for i, val in enumerate(df_data["sub"].unique()):
+        mapping[val] = i
+    df_data = df_data.with_columns(
+        pl.col("sub").replace(mapping).alias("sub-num").cast(pl.Int64)
+    )
+    # df_data = df_data.filter(pl.col("loss") < -1.18)
     df_data = df_data.sort(by="loss", descending=False)
 
-    logger.info(f"Optimal Rank: {df_data['rank'][0]}, Optimal Lambda: {df_data['lambda'][0]}")
+    logger.info(f"Optimal Rank: {df_data['rank'][0]}, Optimal Lambda: {df_data['lambda'][0]}, Optimal sub: {df_data['sub'][0]}")
+    logger.info(df_data)
 
-    columns = ["rank", "lambda", "psnr", "nmse", "ssim", "loss"]
+    columns = ["sub-num", "rank", "lambda", "psnr", "nmse", "ssim", "loss"]
     logger.info(columns)
     data_n = np.zeros((len(df_data), len(columns)))
 
@@ -880,21 +890,34 @@ def plot_wandb_sweep(force_api_load: bool = False):
     data_smooth = savgol_smooth_parallel_coords(data=data_smooth, window_length=5, polyorder=2)
     # data_smooth = gaussian_smooth_parallel_coords(data=data_straight, sigma=10)
 
-    plot_indices = np.arange(40).tolist() +  np.random.randint(50, data_smooth.shape[0], 500).tolist()
-    # data_plot = data_smooth[plot_indices]
-    data_plot = data_smooth
+    loss_th = -1.36
+    plot_indices_color = df_data.with_row_index().filter(pl.col("loss") < loss_th).select("index").to_numpy().squeeze()
+    plot_indices_grey = df_data.with_row_index().filter(pl.col("loss") > loss_th).select("index").to_numpy().squeeze()
+
     fig = go.Figure()
-    cmap = plc.sample_colorscale("Inferno_r", np.clip(data_plot[:, -1], 0, 1))
-    for i, d in enumerate(data_plot):
-        fig.add_trace(
-            go.Scatter(
-                y=d,
-                showlegend=False,
-                opacity=0.25,
-                mode="lines",
-                line=dict(color=cmap[i])
+    for ii, idx in enumerate([plot_indices_grey, plot_indices_color]):
+        data_plot = data_smooth[idx]
+        dmin, dmax = data_plot[:, -1].min(), data_plot[:, -1].max()
+        if ii == 1:
+            cm = "Inferno_r"
+            op = 0.3
+            amin, amax = 0, 0.8
+        else:
+            cm = "Gray"
+            op = 0.1
+            amin, amax = 0.5, 0.8
+        cmap = plc.sample_colorscale(cm, np.clip((data_plot[:, -1] - dmin) / (dmax - dmin), amin, amax))
+
+        for i, d in enumerate(data_plot):
+            fig.add_trace(
+                go.Scatter(
+                    y=d,
+                    showlegend=False,
+                    opacity=op,
+                    mode="lines",
+                    line=dict(color=cmap[i])
+                )
             )
-        )
     for i, c in enumerate(columns[1:]):
         fig.add_trace(
             go.Scatter(
@@ -912,7 +935,7 @@ def plot_wandb_sweep(force_api_load: bool = False):
                 "range": (-0.1, 1.1),
                 "anchor": 'free',
                 'title': dict(
-                    text=c.upper() if 0 < i < len(columns) - 2 else c.capitalize(),
+                    text=c.upper() if 1 < i < len(columns) - 2 else c.capitalize(),
                     standoff=1,
                 ),
                 'overlaying': 'y',
@@ -930,7 +953,7 @@ def plot_wandb_sweep(force_api_load: bool = False):
             title="Parameter - METRIC",
             tickmode="array",
             tickvals=np.arange(n_ext*len(columns) - 1) * n_ext,
-            ticktext=[columns[i].capitalize() if i in [0, 1, len(columns) - 1] else columns[i].upper() for i in range(len(columns))]
+            ticktext=[columns[i].capitalize() if i in [0, 1, 2, len(columns) - 1] else columns[i].upper() for i in range(len(columns))]
         ),
         yaxis=dict(
             range =(-0.1, 1.1),
