@@ -12,14 +12,19 @@ import plotly.subplots as psub
 import plotly.colors as plc
 import tqdm
 
+import wandb
+
+from pymritools.recon.loraks.ac_loraks import AcLoraksOptions
+from pymritools.recon.loraks.loraks import RankReduction, RankReductionMethod, Loraks
 from pymritools.recon.loraks.operators import Operator, OperatorType
 from pymritools.utils.algorithms import rank_estimator_adaptive_rsvd
-from pymritools.utils import fft_to_img, torch_load, Phantom, ifft_to_k
+from pymritools.utils import fft_to_img, torch_load, Phantom, ifft_to_k, calc_nmse, calc_psnr, root_sum_of_squares, \
+    calc_ssim, torch_save
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, create_phantom, ResultMode
-from tests.experiments.loraks.utils import prep_k_space, DataType, load_data
+from tests.experiments.loraks.utils import prep_k_space, DataType, load_data, unprep_k_space
 
 logger = logging.getLogger(__name__)
 logger.manager.loggerDict["tests.experiments.loraks.utils"].setLevel(logging.DEBUG)
@@ -99,6 +104,101 @@ def try_arsvd():
     fig.write_html(fn)
 
 
+def rank_parameter_influence():
+    # get path
+    path = plib.Path(get_test_result_output_dir(
+        f"automatic_low_rank_param_extraction/invivo_ac_random_lines".lower(),
+        mode=ResultMode.EXPERIMENT)
+    )
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
+    k, _, bet = load_data(data_type=DataType.INVIVO)
+    bet = bet[:,:,0].to(torch.bool)
+
+    shape = k.shape
+    gt = fft_to_img(k, dims=(0, 1))
+    gt = root_sum_of_squares(gt, dim_channel=-2)
+    gt[~bet] = 0
+
+    data_in, in_shape, padding, batch_channel_idx = prep_k_space(k.unsqueeze_(2), batch_size_channels=8)
+    op = Operator(
+        k_space_shape=data_in.shape[1:], nb_side_length=5, device=device, operator_type=OperatorType.S
+    )
+    mat = op.forward(data_in[0].to(device))
+    _, th = process_rsvd(data_in.to(device), op, area_thr_factor=0.5)
+    logger.info(f"S-Matrix shape: {mat.shape}")
+    m = min(mat.shape)
+    logger.info(f"Rank estimation: {th}")
+    del mat
+    torch.cuda.empty_cache()
+    results = []
+    for si, sub_sample in enumerate(["ac-random", "ac-random-lines", "grappa", "interleaved-lines"]):
+        for acc in [2, 3, 4, 5, 6]:
+            # create sampling mask
+            phantom = Phantom.get_shepp_logan(shape=shape[:2], num_coils=shape[-2], num_echoes=shape[-1])
+            if si == 0:
+                k_us = phantom.sub_sample_random(acceleration=acc, ac_central_radius=20)
+            elif si == 1:
+                k_us = phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=36)
+            elif si == 2:
+                k_us = phantom.sub_sample_ac_grappa(acceleration=acc, ac_lines=36)
+            else:
+                k_us = phantom.sub_sample_ac_skip_lines(acceleration=acc, ac_lines=36)
+            mask = k_us.abs() > 1e-10
+            k_in = k.clone().squeeze()
+            k_in[~mask] = 0
+            data_in, in_shape, padding, batch_channel_idx = prep_k_space(k_in.unsqueeze(2), batch_size_channels=8)
+
+            img_us = fft_to_img(k_in, dims=(0, 1))
+            img_us = root_sum_of_squares(img_us, dim_channel=-2)
+            nmse = calc_nmse(gt, img_us)
+            psnr = calc_psnr(gt, img_us)
+            ssim = calc_ssim(gt.permute(2, 1, 0), img_us.permute(2, 1, 0))
+
+            results.append({
+                "sub-sample": sub_sample, "acc": acc,
+                "lambda": None, "rank": None, "name": "us", "nmse": nmse, "psnr": psnr, "ssim": ssim
+            })
+
+            for l in [0.0, 0.01, 0.04, 0.1]:
+
+                for i, r in enumerate(
+                        torch.linspace(20, 200, 10).to(torch.int).tolist() +
+                        torch.linspace(250, int(0.25 * m), 10).to(torch.int).tolist()
+                ):
+                    # create rank grid
+                    ac_opts = AcLoraksOptions(
+                        loraks_neighborhood_size=5, loraks_matrix_type=OperatorType.S,
+                        rank=RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=r), regularization_lambda=l,
+                        max_num_iter=30, device=device
+                    )
+                    loraks = Loraks.create(ac_opts)
+                    k_recon = loraks.reconstruct(data_in)
+                    k_recon = unprep_k_space(k_recon, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
+                    img_recon = fft_to_img(k_recon, dims=(0, 1)).squeeze()
+                    rsos = root_sum_of_squares(img_recon, dim_channel=-2)
+                    rsos[~bet] = 0
+
+                    nmse = calc_nmse(gt, rsos)
+                    psnr = calc_psnr(gt, rsos)
+                    ssim = calc_ssim(gt.permute(2, 1, 0), rsos.permute(2, 1, 0))
+
+                    results.append({
+                        "sub-sample": sub_sample, "acc": acc,
+                        "lambda": l, "rank": r, "name": "recon", "nmse": nmse, "psnr": psnr, "ssim": ssim
+                    })
+
+                    df = pl.DataFrame(results)
+                    fn = path.joinpath("metrics_rank").with_suffix(".json")
+                    logger.info(f"Update file: {fn}")
+                    df.write_ndjson(fn)
+                    if i % 4 == 0:
+                        name = f"recon_img_rsos_sub-{sub_sample}_acc{acc}_r{r}_lambda-{l}".replace(".", "p")
+                        torch_save(data=rsos, path_to_file=path.joinpath("recon_data"), file_name=name)
+
+
+
+
 
 def automatic_low_rank_param_extraction(data_type: DataType, force_processing: bool = False):
     # get path
@@ -141,7 +241,8 @@ def automatic_low_rank_param_extraction(data_type: DataType, force_processing: b
             logger.info("_______________________")
             logger.info("_______________________")
             # create sampling mask
-            k_us = phantom.sub_sample_random(acceleration=acc, ac_central_radius=20)
+            # k_us = phantom.sub_sample_random(acceleration=acc, ac_central_radius=20)
+            k_us = phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=24)
             mask = k_us.abs() > 1e-10
             k_in = k.clone()
             k_in[~mask] = 0
@@ -164,7 +265,7 @@ def automatic_low_rank_param_extraction(data_type: DataType, force_processing: b
                             op = Operator(
                                 k_space_shape=data_in.shape[1:], nb_side_length=5, device=device, operator_type=OperatorType.S
                             )
-                            _, th = process_rsvd(data_in.to(device), op, area_thr_factor=0.9)
+                            _, th = process_rsvd(data_in.to(device), op, area_thr_factor=0.6)
                             # calculate matrix size
                             mat_size = nb_size * ic * ie
                             results.append({
@@ -172,9 +273,9 @@ def automatic_low_rank_param_extraction(data_type: DataType, force_processing: b
                                 "nc": ic.item(), "ne": ie.item(), "mat_size": mat_size.item(), "calc_acc": calc_acc.item()
                             })
 
-        logger.info(f"Write file: {path_out}")
-        with open(path_out.as_posix(), "wb") as f:
-            pickle.dump(results, f)
+            logger.info(f"Write file: {path_out}")
+            with open(path_out.as_posix(), "wb") as f:
+                pickle.dump(results, f)
 
     plot_results_vs_acc_mat_size(results, path)
 
@@ -437,8 +538,310 @@ def mask_rank(data_type: DataType):
 
         plot_results_vs_acc_mat_size(results, path)
 
+
+def plot_rank_param_influence_errors():
+    path = plib.Path(get_test_result_output_dir(
+        "automatic_low_rank_param_extraction", mode=ResultMode.EXPERIMENT
+    )).joinpath(
+        "invivo_ac_random_lines"
+    )
+    path_recon_data = path.joinpath("recon_data")
+    cmaps = ["Purples", "Greens", "Oranges", "Greys", "Blues", "Reds"]
+    df = pl.read_ndjson(path.joinpath("metrics_rank.json"))
+    lambdas = df.filter(pl.col("lambda").is_not_null())["lambda"].unique()
+    num_lambda = len(lambdas)
+    accs = df.filter(pl.col("acc").is_not_null())["acc"].unique().sort(descending=False).to_list()
+    num_acc = len(accs)
+    sub_samples = df["sub-sample"].unique().to_list()
+    num_subs = len(sub_samples)
+
+    # plot fixed acc
+    acc = 3
+    fig = psub.make_subplots(
+        rows=3, cols=num_subs,
+        vertical_spacing=0.02, horizontal_spacing=0.02,
+        shared_xaxes=True, shared_yaxes=True,
+        x_title="Reconstruction Rank Parameter",
+        row_titles=["NMSE", "PSNR", "SSIM"],
+        column_titles=sub_samples,
+    )
+    for si, sub in enumerate(sub_samples):
+        for h, err in enumerate(["nmse", "psnr", "ssim"]):
+            # for g, acc in enumerate(accs):
+            cmap = plc.sample_colorscale("Inferno", num_lambda)
+            for i, l in enumerate(lambdas):
+                df_tmp = df.filter(
+                    (pl.col("lambda") == l) &
+                    (pl.col("rank").is_not_null()) &
+                    (pl.col("acc") == acc) &
+                    (pl.col("sub-sample") == sub) &
+                    (pl.col("rank") < 500)
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_tmp["rank"], y=df_tmp[err],
+                        marker=dict(color=cmap[i]),
+                        mode="lines+markers",
+                        showlegend=(h == 0) & (si == 0), name=f"Lambda: {l}", legendgroup=l,
+                        # cmin=zmin, cmax=zmax
+                    ),
+                    row=1+h, col=1+si
+                )
+    fig.update_yaxes(range=(0, 0.035), row=1, col=1)
+    fig.update_yaxes(range=(20, 45), row=2, col=1)
+    fig.update_yaxes(range=(0.92, 1), row=3, col=1)
+    fn = path.joinpath("error_vs_rank_acc3").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Write file: {fn}")
+        fig.write_image(fn)
+
+    # plot fixed lambda
+    l = 0.0
+    fig = psub.make_subplots(
+        rows=3, cols=num_subs,
+        vertical_spacing=0.02, horizontal_spacing=0.02,
+        shared_xaxes=True, shared_yaxes=True,
+        x_title="Reconstruction Rank Parameter",
+        row_titles=["NMSE", "PSNR", "SSIM"],
+        column_titles=sub_samples,
+    )
+    for si, sub in enumerate(sub_samples):
+        for h, err in enumerate(["nmse", "psnr", "ssim"]):
+            # for g, acc in enumerate(accs):
+            cmap = plc.sample_colorscale("Inferno", num_acc)
+            for i, acc in enumerate(accs):
+                df_tmp = df.filter(
+                    (pl.col("lambda") == l) &
+                    (pl.col("rank").is_not_null()) &
+                    (pl.col("acc") == acc) &
+                    (pl.col("sub-sample") == sub) &
+                    (pl.col("rank") < 500)
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_tmp["rank"], y=df_tmp[err],
+                        marker=dict(color=cmap[i]),
+                        mode="lines+markers",
+                        showlegend=(h == 0) & (si == 0), name=f"Acc.: {acc}", legendgroup=l,
+                        # cmin=zmin, cmax=zmax
+                    ),
+                    row=1+h, col=1+si
+                )
+    fig.update_yaxes(range=(0, 0.015), row=1, col=1)
+    fig.update_yaxes(range=(32, 47), row=2, col=1)
+    fig.update_yaxes(range=(0.92, 1), row=3, col=1)
+    fn = path.joinpath("error_vs_rank_lambda0").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Write file: {fn}")
+        fig.write_image(fn)
+
+
+    # plot fixed sub
+    sub = "ac-random-lines"
+    fig = psub.make_subplots(
+        rows=3, cols=2,
+        vertical_spacing=0.02, horizontal_spacing=0.02,
+        shared_xaxes=True, shared_yaxes=True,
+        x_title="Reconstruction Rank Parameter",
+        row_titles=["NMSE", "PSNR", "SSIM"],
+        column_titles=["Lambda", "Acceleration"],
+    )
+    a = [[[3]*len(lambdas), lambdas], [accs, [0.0]*len(accs)] ]
+    cmaps = ["Agsunset", "Aggrnyl_r"]
+    for h, err in enumerate(["nmse", "psnr", "ssim"]):
+        for i, d in enumerate(a):
+            aa, ll = d
+            cmap = plc.sample_colorscale(cmaps[i], len(aa))
+            for g, acc in enumerate(aa):
+                for n, l in enumerate(ll):
+                    c = n if i==0 else g
+                    if i == 0:
+                        showlegend = True if g == 0 and h==0 else False
+                    else:
+                        showlegend = True if n == 0 and h==0 else False
+                    df_tmp = df.filter(
+                        (pl.col("lambda") == l) &
+                        (pl.col("rank").is_not_null()) &
+                        (pl.col("acc") == acc) &
+                        (pl.col("sub-sample") == sub) &
+                        (pl.col("rank") < 500)
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=df_tmp["rank"], y=df_tmp[err],
+                            marker=dict(color=cmap[c], coloraxis="coloraxis"),
+                            mode="lines+markers",
+                            showlegend=showlegend,
+                            name=f"Acc.: {acc}" if i ==1 else f"Lambda: {l}"
+                        ),
+                        row=1+h, col=1+i
+                    )
+    fig.update_yaxes(range=(0, 0.035), row=1, col=1)
+    fig.update_yaxes(range=(20, 45), row=2, col=1)
+    fig.update_yaxes(range=(0.92, 1), row=3, col=1)
+    fig.update_layout(
+        width=800, height=450,
+        coloraxis=dict(
+            colorscale="Agsunset",
+            cmin=0.0, cmax=lambdas.max(),
+            colorbar=dict(
+                x=0.5, y=-0.01, len=0.4, thickness=14,
+                # title=dict(text="Difference to Fully Sampled [%]", side="right"),
+                xref="paper", yref="paper",
+                xanchor="left", yanchor="bottom",
+            ),
+        ),
+        coloraxis2=dict(
+            colorscale="Aggrnyl_r",
+            cmin=min(accs), cmax=max(accs),
+            colorbar=dict(
+                x=0.5, y=0.5, len=0.4, thickness=14,
+                # title=dict(text="Difference to Fully Sampled [%]", side="right"),
+                xref="paper", yref="paper",
+                xanchor="left", yanchor="bottom",
+            ),
+        ),
+        margin=dict(t=20, b=20, l=10, r=20)
+    )
+    fn = path.joinpath("error_vs_rank_per_sub").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Write file: {fn}")
+        fig.write_image(fn)
+
+def plot_rank_param_influence_imgs():
+    path = plib.Path(get_test_result_output_dir(
+        "automatic_low_rank_param_extraction", mode=ResultMode.EXPERIMENT
+    )).joinpath(
+        "invivo_ac_random_lines"
+    )
+    k, _, bet = load_data(DataType.INVIVO)
+    bet = bet[:,:,0].to(torch.bool)
+    shape = k.shape
+
+    # create sampling mask
+    phantom = Phantom.get_shepp_logan(shape=shape[:2], num_coils=shape[-2], num_echoes=shape[-1])
+    k_us = phantom.sub_sample_ac_random_lines(acceleration=4, ac_lines=36)
+    mask = k_us.abs() > 1e-10
+    k_in = k.clone()
+    k_in[~mask] = 0
+    img_us = root_sum_of_squares(fft_to_img(k_in, dims=(0, 1)), dim_channel=-2)
+    img_us[~bet] = 0
+
+    img_gt = fft_to_img(k, dims=(0, 1))
+    img_gt = root_sum_of_squares(img_gt, dim_channel=-2)
+    img_gt[~bet] = 0
+    img_max = img_gt.max().item() * 0.6
+
+    path_recon_data = path.joinpath("recon_data")
+    lambdas = []
+    ranks = []
+
+    for f in path_recon_data.iterdir():
+        if f.is_file():
+            parts = f.stem.split("_")
+            rank = int(parts[-2][1:])
+            if rank not in ranks:
+                ranks.append(rank)
+            lam = float(parts[-1].split("-")[-1].replace("p", "."))
+            if lam not in lambdas:
+                lambdas.append(lam)
+    ranks.sort()
+    lambdas.sort()
+    num_lambda = len(lambdas)
+    num_ranks = len(ranks)
+
+    fig = psub.make_subplots(
+        rows=num_lambda, cols=num_ranks + 2,
+        row_titles=lambdas, column_titles=["GT", "US"] + ranks,
+        vertical_spacing=0.01, horizontal_spacing=0.01
+    )
+    for l in range(num_lambda):
+        for i, d in enumerate([img_gt, img_us]):
+            fig.add_trace(
+                go.Contour(
+                    z=d[:, :, 0], showlegend=False, showscale=False,
+                    colorscale="Inferno",
+                    zmin=0, zmax=img_max
+                ),
+                row=1+l, col=1+i
+            )
+
+    for f in path_recon_data.iterdir():
+        if f.is_file():
+            parts = f.stem.split("_")
+            rank = int(parts[-2][1:])
+            lam = float(parts[-1].split("-")[-1].replace("p", "."))
+            d = torch_load(f)
+            row = lambdas.index(lam) + 1
+            col = ranks.index(rank) + 3
+
+            fig.add_trace(
+                go.Heatmap(
+                    z=d[:, :, 0], showlegend=False, showscale=False,
+                    colorscale="Inferno",
+                    zmin=0, zmax=img_max
+                ),
+                row=row, col=col
+            )
+
+    fig.update_yaxes(visible=False)
+    fig.update_xaxes(visible=False)
+
+    # for i, d in enumerate(data):
+    #     dp = d["data"].abs()[:, :, 0]
+    #     fig.add_trace(
+    #         go.Heatmap(
+    #             z=dp
+    #         ),
+    #         row=1, col=1+i
+    #     )
+
+    fn = path.joinpath("img_vs_rank").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
+
+def plot_wandb_sweep():
+    api = wandb.Api()
+
+    runs = api.runs("schmidt-jo/loraks_rank_optimization")
+
+    sum_list = []
+    for run in tqdm.tqdm(runs, desc="process wandb runs"):
+        tmp = {
+            k: v for k, v in run.summary._json_dict.items() if not k.startswith("_")
+        }
+
+        config = {
+            k: v for k, v in run.config.items() if not k.startswith("_")
+        }
+        tmp["rank"] = config["rank"]
+        tmp["name"] = run.name
+        sum_list.append(tmp)
+
+    df = pl.DataFrame(sum_list)
+    logger.info(df)
+
+
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    automatic_low_rank_param_extraction(data_type=DataType.INVIVO, force_processing=True)
+    logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
+                        datefmt='%I:%M:%S', level=logging.INFO)
+    # automatic_low_rank_param_extraction(data_type=DataType.INVIVO, force_processing=True)
     # try_arsvd()
     # mask_rank(data_type=DataType.MASK)
+    # rank_parameter_influence()
+    # plot_rank_param_influence_errors()
+    # plot_rank_param_influence_imgs()
+    plot_wandb_sweep()
