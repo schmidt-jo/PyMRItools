@@ -816,7 +816,7 @@ def plot_rank_param_influence_imgs():
     fig.write_html(fn)
 
 
-def plot_wandb_sweep():
+def plot_wandb_sweep(force_api_load: bool = False):
     path = plib.Path(
         get_test_result_output_dir("automatic_low_rank_param_extraction", ResultMode.EXPERIMENT)
     ).absolute().joinpath("wandb")
@@ -825,20 +825,21 @@ def plot_wandb_sweep():
     path.mkdir(exist_ok=True, parents=True)
 
     fn = path.joinpath("wandb_runs").with_suffix(".json")
-    if not fn.exists():
-        api = wandb.Api()
+    if not fn.exists() or force_api_load:
+        api = wandb.Api().project("loraks_rank_optimization")
+        sweeps = api.sweeps()
 
-        runs = api.runs("schmidt-jo/loraks_rank_optimization")
+        runs = sweeps[0].runs
 
         sum_list = []
         for run in tqdm.tqdm(runs, desc="process wandb runs"):
+            config = {
+                k: v for k, v in run.config.items() if not k.startswith("_")
+            }
             tmp = {
                 k: v for k, v in run.summary._json_dict.items() if not k.startswith("_")
             }
 
-            config = {
-                k: v for k, v in run.config.items() if not k.startswith("_")
-            }
             tmp["rank"] = config["rank"]
             tmp["name"] = run.name
             sum_list.append(tmp)
@@ -852,26 +853,36 @@ def plot_wandb_sweep():
         df = pl.read_ndjson(fn)
 
     df_data = df.drop("name")
+    df_data = df_data.filter(pl.col("loss") < -1.18)
+    df_data = df_data.sort(by="loss", descending=False)
 
-    columns = ["rank", "psnr", "nmse", "ssim", "loss"]
+    logger.info(f"Optimal Rank: {df_data['rank'][0]}, Optimal Lambda: {df_data['lambda'][0]}")
+
+    columns = ["rank", "lambda", "psnr", "nmse", "ssim", "loss"]
     logger.info(columns)
     data_n = np.zeros((len(df_data), len(columns)))
 
     for i, c in enumerate(columns):
-        data_n[:, i] = (df_data[c].to_numpy() - df[c].min()) / (df[c].max() - df[c].min())
+        data_n[:, i] = (df_data[c].to_numpy() - df_data[c].min()) / (df_data[c].max() - df_data[c].min())
 
-    n_ext = 50
+    n_ext = 60
+    n_ext_edge = int(0.1 * n_ext)
     data_straight = np.zeros((data_n.shape[0], n_ext * (data_n.shape[1] - 1)))
     for i, d in enumerate(data_n):
         for r in range(data_n.shape[1]-1):
             start = data_n[i, r]
             end = data_n[i, r+1]
-            data_straight[i, r*n_ext:(r+1)*n_ext] = np.linspace(start, end, n_ext, endpoint=True)
+            data_straight[i, r*n_ext:r*n_ext+n_ext_edge] = np.linspace(start, start, n_ext_edge, endpoint=True)
+            data_straight[i, r*n_ext+n_ext_edge:(r+1)*n_ext-n_ext_edge] = np.linspace(start, end, n_ext - 2*n_ext_edge, endpoint=True)
+            data_straight[i, (r+1)*n_ext-n_ext_edge:(r+1)*n_ext] = np.linspace(end, end, n_ext_edge, endpoint=True)
 
-    data_smooth = savgol_smooth_parallel_coords(data=data_straight, window_length=n_ext, polyorder=2)
+    data_smooth = savgol_smooth_parallel_coords(data=data_straight, window_length=int(0.8*n_ext), polyorder=2)
+    data_smooth = savgol_smooth_parallel_coords(data=data_smooth, window_length=5, polyorder=2)
     # data_smooth = gaussian_smooth_parallel_coords(data=data_straight, sigma=10)
 
-    data_plot = data_smooth[::3]
+    plot_indices = np.arange(40).tolist() +  np.random.randint(50, data_smooth.shape[0], 500).tolist()
+    # data_plot = data_smooth[plot_indices]
+    data_plot = data_smooth
     fig = go.Figure()
     cmap = plc.sample_colorscale("Inferno_r", np.clip(data_plot[:, -1], 0, 1))
     for i, d in enumerate(data_plot):
@@ -879,7 +890,7 @@ def plot_wandb_sweep():
             go.Scatter(
                 y=d,
                 showlegend=False,
-                opacity=0.1,
+                opacity=0.25,
                 mode="lines",
                 line=dict(color=cmap[i])
             )
@@ -894,36 +905,39 @@ def plot_wandb_sweep():
                 line=dict(color="white", width=1),
             )
         )
-        ymin = df[c].min()
-        ymax = df[c].max()
+        ymin = df_data[c].min()
+        ymax = df_data[c].max()
         fig.update_layout(**{
             f'yaxis{i + 2}': {
-                "range": (-0.05, 1.05),
+                "range": (-0.1, 1.1),
                 "anchor": 'free',
-                'title': c.upper() if i < len(columns) - 2 else c.capitalize(),
+                'title': dict(
+                    text=c.upper() if 0 < i < len(columns) - 2 else c.capitalize(),
+                    standoff=1,
+                ),
                 'overlaying': 'y',
                 'side': 'left' if i < len(columns) - 2 else 'right',
-                'position': 0.2499 * (i+1),  # Adjust positioning
+                'position': 0.999 / (len(columns) - 1) * (i+1),  # Adjust positioning
                 'tickmode': 'array',
                 'tickvals': np.linspace(0, 1, 7),
                 'ticktext': [f"{x:.4f}" for x in np.linspace(ymin, ymax, 7)],
-                'layer': 'above traces'
+                'layer': 'above traces',
             }
         })
 
     fig.update_layout(
         xaxis=dict(
-            title="Parameter - Metric",
+            title="Parameter - METRIC",
             tickmode="array",
             tickvals=np.arange(n_ext*len(columns) - 1) * n_ext,
-            ticktext=[c.capitalize() if i in [0, len(columns) - 1] else c.upper() for c in columns]
+            ticktext=[columns[i].capitalize() if i in [0, 1, len(columns) - 1] else columns[i].upper() for i in range(len(columns))]
         ),
         yaxis=dict(
-            range =(-0.05, 1.05),
+            range =(-0.1, 1.1),
             title="Rank",
             tickmode="array",
             tickvals=np.linspace(0, 1, 13),
-            ticktext=[f"{int(x)}" for x in np.linspace(df["rank"].min(), df["rank"].max(), 34)]
+            ticktext=[f"{int(x)}" for x in np.linspace(df_data["rank"].min(), df_data["rank"].max(), 13)]
         ),
         width=800, height=350,
         margin=dict(t=10, b=10, l=10, r=10)
@@ -986,4 +1000,4 @@ if __name__ == '__main__':
     # rank_parameter_influence()
     # plot_rank_param_influence_errors()
     # plot_rank_param_influence_imgs()
-    plot_wandb_sweep()
+    plot_wandb_sweep(force_api_load=False)
