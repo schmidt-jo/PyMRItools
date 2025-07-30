@@ -186,3 +186,49 @@ def run_ac_loraks_matlab_script(use_valgrind: bool = True,
         "peak_extra_memory": peak_extra_memory_mb,
         "command_output": None if not capture_output else command_return
     }
+
+
+def run_ac_loraks_torch_script(use_valgrind: bool = True,
+                                script_args=None,
+                                script_dir=None,
+                                data_dir=None,
+                                capture_output=True) -> dict:
+    # Default script directory is 'torch' subdirectory of current file's directory
+    if script_dir is None:
+        script_dir = plib.Path(__file__).absolute().parent.joinpath("torch")
+    else:
+        script_dir = plib.Path(script_dir)
+    script = script_dir.joinpath("run_torch_cpu").with_suffix(".py")
+    if not script.is_file():
+        raise FileNotFoundError(f"Python script 'run_torch_cpu.py' not found in directory '{script_dir}'")
+
+    data_dir = plib.Path(data_dir)
+    if not data_dir.is_file():
+        raise FileNotFoundError(f"Data not found in file '{data_dir}'")
+
+    # get script args
+    rank, reg_lam, max_num_iter = script_args
+
+    cmd = f"conda run --name mri_tools_env python {script.as_posix()} --file {data_dir.as_posix()} --rank {rank} --max_num_iter {max_num_iter} --regularization_lambda {reg_lam}"
+    logger.info(f"CMD: '{cmd}'")
+
+    # For the valgrind massif output file, a temporary file is enough.
+    # We return the file name together with the other return values.
+    import time
+    tmp_massif_file = tempfile.mktemp(suffix=f".out.{int(time.time())}")
+    command_return = run_command(
+        function_call=cmd,
+        use_valgrind=use_valgrind,
+        massif_output_file=tmp_massif_file,
+        capture_output=capture_output
+    )
+
+    memory_usage_mb, peak_extra_memory_mb = read_massif_max_memory_used(
+        file_path=tmp_massif_file
+    )
+    return {
+        "massif_file": tmp_massif_file,
+        "peak_memory": memory_usage_mb,
+        "peak_extra_memory": peak_extra_memory_mb,
+        "command_output": None if not capture_output else command_return
+    }

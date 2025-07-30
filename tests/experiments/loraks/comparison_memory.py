@@ -4,7 +4,7 @@ import sys
 import torch
 import polars as pl
 
-from scipy.io import savemat, loadmat
+from scipy.io import savemat
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, ComputationType
 from pymritools.recon.loraks.loraks import LoraksImplementation, OperatorType, RankReduction, RankReductionMethod, \
     Loraks
@@ -12,9 +12,13 @@ from pymritools.recon.loraks.loraks import LoraksImplementation, OperatorType, R
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, ResultMode
-from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_ac_loraks_matlab_script
+from tests.experiments.loraks.utils import (
+    prep_k_space, unprep_k_space, create_phantom,
+    run_ac_loraks_matlab_script, run_ac_loraks_torch_script
+)
 
 logger = logging.getLogger(__name__)
+
 
 
 # --  Computations
@@ -67,26 +71,28 @@ def recon_ac_loraks_gpu(
 
 
 def recon_ac_loraks_cpu(
-        k: torch.Tensor, device: torch.device,
+        k: torch.Tensor,
         rank: int, regularization_lambda: float,
-        max_num_iter: int = 30,
-):
+        max_num_iter: int = 30,):
+    # we need to save the tensor and pass the settings
+    device = torch.device("cpu")
     logger.info(f"Set device: {device}")
 
-    if device.type == "cuda":
-        msg = f"called CPU run with wrong device: {device}"
-        logger.error(msg)
-        raise AttributeError(msg)
+    # use a sub-path
+    path = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT)).joinpath("tmp")
+    path.mkdir(parents=True, exist_ok=True)
 
-    mem_start = torch.cuda.max_memory_allocated(device)
+    fn = path.joinpath("tmp_data").with_suffix(".pt")
+    logger.info(f"Writing data {fn}")
+    torch.save(k.unsqueeze(2), fn)
 
-    k_recon = torch_loraks_run(
-        k=k, device=device, rank=rank, regularization_lambda=regularization_lambda, max_num_iter=max_num_iter
+    # run torch script as cmd line script using valgrind
+    logger.info(f"Calling Torch valgrind routine")
+    result = run_ac_loraks_torch_script(
+        use_valgrind=True, data_dir=fn.as_posix(), script_args=(rank, regularization_lambda, max_num_iter)
     )
 
-    mem_end = torch.cuda.max_memory_allocated(device)
-
-    return (mem_end - mem_start) / 1024 / 1024
+    return result["peak_memory"]
 
 
 def recon_ac_loraks_matlab(
@@ -120,12 +126,12 @@ def compute():
     # get path
     path_out = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT))
     # do loops for different data sizes
-    # ms_xy = torch.linspace(100*100, 280*280, 10)
-    # ncs = torch.arange(4, 37, 4)
-    # nes = torch.arange(2, 6, 1)
-    ms_xy = torch.tensor([10000])
-    ncs = torch.tensor([4])
-    nes = torch.tensor([2])
+    ms_xy = torch.linspace(100*100, 240*240, 5)
+    ncs = torch.arange(4, 33, 8)
+    nes = torch.arange(2, 6, 2)
+    # ms_xy = torch.tensor([10000])
+    # ncs = torch.tensor([4])
+    # nes = torch.tensor([2])
 
     # set some params
     regularization_lambda = 0.0
@@ -155,37 +161,40 @@ def compute():
                 # prepare the data
                 _, k_us = create_phantom(shape_xyct=(nx.item(), ny.item(), nc.item(), ne.item()), acc=3, ac_lines=ny.item() // 6.5)
 
-                logger.info(f"__ Processing Torch GPU\n")
-                if not torch.cuda.is_available():
-                    msg = "No GPU device available, skipping GPU benchmark"
-                    logger.warning(msg)
-                else:
-                    try:
-                        mem_usage = recon_ac_loraks_gpu(
-                            k=k_us.clone(), device=torch.device("cuda:0"),
-                            rank=rank, regularization_lambda=regularization_lambda,
-                            max_num_iter=max_num_iter
-                        )
-                    except Exception as e:
-                        logger.warning(e)
-                        mem_usage = "Maxed Out"
-                    meas.append({
-                        "Mode": "torch", "Device": "GPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
-                    })
-
+                # logger.info(f"__ Processing Torch GPU\n")
+                # if not torch.cuda.is_available():
+                #     msg = "No GPU device available, skipping GPU benchmark"
+                #     logger.warning(msg)
+                # else:
+                #     try:
+                #         mem_usage = recon_ac_loraks_gpu(
+                #             k=k_us.clone(), device=torch.device("cuda:0"),
+                #             rank=rank, regularization_lambda=regularization_lambda,
+                #             max_num_iter=max_num_iter
+                #         )
+                #     except Exception as e:
+                #         logger.warning(e)
+                #         mem_usage = "Maxed Out"
+                #     meas.append({
+                #         "Mode": "torch", "Device": "GPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
+                #     })
+                #
                 logger.info(f"__ Processing Torch CPU\n")
-                try:
-                    mem_usage = recon_ac_loraks_cpu(
-                        k=k_us.clone(), device=torch.device("cpu"),
-                        rank=rank, regularization_lambda=regularization_lambda,
-                        max_num_iter=max_num_iter
-                    )
-                except Exception as e:
-                    logger.warning(e)
-                    mem_usage = "Maxed Out"
+
+                mem_usage = recon_ac_loraks_cpu(
+                    k=k_us.clone(),
+                    rank=rank, regularization_lambda=regularization_lambda,
+                    max_num_iter=max_num_iter
+                )
+
                 meas.append({
                     "Mode": "torch", "Device": "CPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
                 })
+
+                df = pl.DataFrame(meas)
+                fn = path_out.joinpath("results_df_latest").with_suffix(".json")
+                logger.info(f"Writing to {fn}")
+                df.write_ndjson(fn)
 
                 logger.info(f"__ Processing Matlab CPU\n")
                 mem_usage = recon_ac_loraks_matlab(
@@ -196,12 +205,10 @@ def compute():
                     "Mode": "matlab", "Device": "CPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
                 })
 
-
-
-        df = pl.DataFrame(meas)
-        fn = path_out.joinpath("results_df_latest").with_suffix(".json")
-        logger.info(f"Writing to {fn}")
-        df.write_ndjson(fn)
+                df = pl.DataFrame(meas)
+                fn = path_out.joinpath("results_df_latest").with_suffix(".json")
+                logger.info(f"Writing to {fn}")
+                df.write_ndjson(fn)
 
 
 if __name__ == '__main__':
