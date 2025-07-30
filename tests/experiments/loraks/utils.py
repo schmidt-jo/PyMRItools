@@ -9,10 +9,11 @@ from pymritools.recon.loraks.utils import (
     prepare_k_space_to_batches, pad_input,
     check_channel_batch_size_and_batch_channels, unpad_output, unprepare_batches_to_k_space
 )
-from typing import Tuple
+from typing import Tuple, Union
 import subprocess
 from os import path
 import msparser
+import tempfile
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
@@ -28,8 +29,7 @@ class DataType(Enum):
     MASK = auto()
 
 
-
-#__ misc functionalities
+# __ misc functionalities
 def load_data(data_type: DataType):
     match data_type:
         case DataType.SHEPPLOGAN:
@@ -54,7 +54,7 @@ def load_data(data_type: DataType):
     return k, k_us, bet
 
 
-#__ methods for autograd LORAKS iteration & prep
+# __ methods for autograd LORAKS iteration & prep
 def prep_k_space(k: torch.Tensor, batch_size_channels: int = -1, use_correlation_clustering: bool = True):
     # we need to prepare the k-space
     batch_channel_idx = check_channel_batch_size_and_batch_channels(
@@ -79,51 +79,58 @@ def run_command(function_call: str,
                 use_valgrind: bool = False,
                 massif_output_file: str = "massif.out",
                 capture_output: bool = True):
-
     import subprocess, shlex
     if not use_valgrind:
         command_to_run = shlex.split(function_call)
     else:
         command_to_run = [
-                           "valgrind",
-                           "--tool=massif",
-                           "--trace-children=yes",
-                           f"--massif-out-file={massif_output_file}",
-                       ] + shlex.split(function_call)
+                             "valgrind",
+                             "--tool=massif",
+                             "--trace-children=yes",
+                             f"--massif-out-file={massif_output_file}",
+                         ] + shlex.split(function_call)
     return subprocess.run(command_to_run, capture_output=capture_output, text=True)
 
 
-def read_massif_max_memory_used(file_path):
-    if not path.exists(file_path) or not path.isfile(file_path):
+def read_massif_max_memory_used(file_path: Union[str, plib.Path]):
+    """
+    Reads the maximum memory usage details from a valgrind massif output file.
+
+    Args:
+        file_path: The file path to the massif output file as a string.
+
+    Returns:
+        A tuple containing two floats:
+            - Maximum heap memory usage in megabytes.
+            - Maximum extra heap memory usage in megabytes.
+
+    Raises:
+        ValueError: If the specified file does not exist or is not a file.
+    """
+    file_path = plib.Path(file_path)
+    if not file_path.exists() or not file_path.is_file():
         raise ValueError(f"File '{file_path}' does not exist or is not a file.")
     data = msparser.parse_file(file_path)
     peak_idx = data['peak_snapshot_index']
     peak_snapshot = data['snapshots'][peak_idx]
     peak_heap_memory = peak_snapshot['mem_heap']
     peak_extra_memory = peak_snapshot['mem_heap_extra']
-    return peak_heap_memory / (1024**2) , peak_extra_memory / (1024**2)
+    return peak_heap_memory / (1024 ** 2), peak_extra_memory / (1024 ** 2)
 
 
-## For matlab comparisons we need the following logic:
-# 1) Save the data as <data>.mat file
-# 2) provide a <script>.m doing the task while interfacing with the <data>.mat
-# 3) Save the results as <results>.mat inside the script (2)
-# 4) load results via scipy.io into python as dictionary and do the rest
-
-# For timing comparisons we could try to run the process without an actual function call in matlab,
-# just the process calls and data loading, and then subtract this timing. Or we do the time keeping in matlab.
-
-def run_matlab_script(script_name, use_valgrind: bool = True,
-                      script_args=None, script_dir=None, capture_output=True):
+def run_ac_loraks_matlab_script(use_valgrind: bool = True,
+                                script_args=None,
+                                script_dir=None,
+                                capture_output=True) -> dict:
     """
-    Run a MATLAB script with the given arguments.
+    Run AC-Loraks script with the given arguments.
 
     Parameters:
-        script_name (str): Name of the MATLAB script file (with or without .m extension)
-        script_args (str, optional): Arguments to pass to the MATLAB script
-        script_dir (str, optional): Directory containing the MATLAB script
-                                   (defaults to 'matlab' subdirectory of current file's directory)
-        capture_output (bool, optional): Whether to capture and return the output
+        use_valgrind:
+        script_args: Arguments to pass to the MATLAB script
+        script_dir: Directory containing the MATLAB script
+                   (defaults to 'matlab' subdirectory of the current file's directory)
+        capture_output: Whether to capture and return the output
 
     Returns:
         subprocess.CompletedProcess: Result of the subprocess run
@@ -131,46 +138,51 @@ def run_matlab_script(script_name, use_valgrind: bool = True,
     Raises:
         RuntimeError: If the MATLAB script execution fails
     """
-    # Ensure script name has .m extension
-    if not script_name.endswith('.m'):
-        script_name += '.m'
 
     # Default script directory is 'matlab' subdirectory of current file's directory
     if script_dir is None:
         script_dir = plib.Path(__file__).absolute().parent.joinpath("matlab")
-    # ensure Path object
-    script_dir = plib.Path(script_dir)
+    else:
+        script_dir = plib.Path(script_dir)
 
-    # Full path to the script
-    script_path = script_dir.joinpath(script_name)
+    # Since Loraks is not open-source, we need developers to copy the script to the right location
+    # because it will not be in the repository.
+    if not script_dir.joinpath("AC_LORAKS.m").is_file():
+        raise FileNotFoundError(f"Matlab script 'AC_LORAKS.m' not found in directory '{script_dir}'")
 
-    # Construct the MATLAB command
-    matlab_cmd = f"matlab -nodisplay -nosplash -nodesktop -r \"addpath('{script_dir}'); "
+    # TODO: if possible, we should replace "matlab" with the real binary e.g. MATLAB/R2022a/bin/glnxa64/MATLAB
+    # This would prevent valgrind to trace all commands that are done in the matlab shell script
+    # However, it would be possible that library paths need to be set, etc.
+    # Also check "matlab -n" which gives the overview of all variables and settings and which maybe will allow
+    # us to extract the real binary automatically
+    matlab_cmd = f"matlab -nodisplay -nosplash -nodesktop -nojvm -r \"addpath('{script_dir}'); "
+    script_func = "ac_loraks"
 
-    # Extract script name without extension for the function call
-    script_func = script_path.as_posix()
-
-    # Add function call with arguments if provided
     if script_args:
         matlab_cmd += f"run('{script_func}({script_args})'); "
     else:
         matlab_cmd += f"run('{script_func}'); "
 
-    # Add an exit command to close MATLAB after execution
     matlab_cmd += "exit;\""
-
     logger.debug(f"CMD:: {matlab_cmd}")
-    # Run the MATLAB command
-    # process = subprocess.run(matlab_cmd, shell=True, capture_output=capture_output, text=True)
-    # process = subprocess.Popen(matlab_cmd, shell=True, text=True)
-    file_name = "/data/pt_np-jschmidt/code/PyMRItools/test_output/EXPERIMENT/speed_comparison/massif.out.123"
+
+    # For the valgrind massif output file, a temporary file is enough.
+    # We return the file name together with the other return values.
+    import time
+    tmp_massif_file = tempfile.mktemp(suffix=f".out.{int(time.time())}")
     command_return = run_command(
-        function_call=matlab_cmd, use_valgrind=use_valgrind,
-        massif_output_file=file_name,
+        function_call=matlab_cmd,
+        use_valgrind=use_valgrind,
+        massif_output_file=tmp_massif_file,
         capture_output=capture_output
     )
 
     memory_usage_mb, peak_extra_memory_mb = read_massif_max_memory_used(
-        file_path=file_name
+        file_path=tmp_massif_file
     )
-    return memory_usage_mb, peak_extra_memory_mb
+    return {
+        "massif_file": tmp_massif_file,
+        "peak_memory": memory_usage_mb,
+        "peak_extra_memory": peak_extra_memory_mb,
+        "command_output": None if not capture_output else command_return
+    }

@@ -95,3 +95,5 @@ cython_debug/
 /pex_output/
 /tests/experiments/loraks/data/
 /tests/experiments/loraks/matlab/AC_LORAKS.m
+/tests/experiments/loraks/matlab/input.mat
+/tests/experiments/loraks/matlab/output.mat

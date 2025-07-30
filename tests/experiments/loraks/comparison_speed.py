@@ -18,9 +18,10 @@ from scipy.io import loadmat, savemat
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, ResultMode
-from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_matlab_script
+from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_ac_loraks_matlab_script
 
 logger = logging.getLogger(__name__)
+
 
 # --- COMPUTATIONS
 
@@ -47,19 +48,19 @@ def compute():
     # use few passes only
     max_num_iter = 5
     # set number of benchmarking runs
-    num_warmup_runs=2
-    num_timer_runs=3
+    num_warmup_runs = 2
+    num_timer_runs = 3
 
     meas = []
 
     for i, mxy in enumerate(ms_xy):
-        logger.info(f"Processing Matrix Size XY : {i+1} / {ms_xy.shape[0]}")
+        logger.info(f"Processing Matrix Size XY : {i + 1} / {ms_xy.shape[0]}")
         nx = torch.sqrt(mxy).to(torch.int)
         ny = (mxy / nx).to(torch.int)
         for g, nc in enumerate(ncs):
-            logger.info(f"__ nc: {g+1} / {ncs.shape[0]}")
+            logger.info(f"__ nc: {g + 1} / {ncs.shape[0]}")
             for h, ne in enumerate(nes):
-                logger.info(f"__ ne: {h+1} / {nes.shape[0]}")
+                logger.info(f"__ ne: {h + 1} / {nes.shape[0]}")
                 mce = ne * nc * 5 ** 2
                 rank = max(15, min(mce.item(), mxy.item()) // 10)
 
@@ -125,35 +126,31 @@ def compute():
 
 
 def recon_ac_loraks_matlab(
-        k: torch.Tensor, rank: int, regularization_lambda: float, max_num_iter: int = 30,
-        num_warmup_runs: int = 2, num_timer_runs: int = 5
-
-):
-    # set data path
-    path = plib.Path(__file__).absolute().parent.joinpath("data")
-    logger.info(f"set matlab data path: {path}")
-    path.mkdir(exist_ok=True, parents=True)
+        k: torch.Tensor,
+        rank: int,
+        regularization_lambda: float,
+        max_num_iter: int = 30,
+        num_warmup_runs: int = 2,
+        num_timer_runs: int = 5):
+    path = plib.Path(__file__).absolute().parent.joinpath("matlab")
 
     # build matlab data - for joint echo reconstruction, we just combine channel and echo data
     k = k.view(*k.shape[:2], -1)
     mask = (k.abs() > 1e-12)
 
-    fn = path.joinpath("input").with_suffix(".mat")
-    logger.info(f"save matlab input data: {fn}")
-    mat_data = {
+    matlab_input_file = path.joinpath("input").with_suffix(".mat")
+    logger.info(f"save matlab input data: {matlab_input_file}")
+    matlab_input_data = {
         "k_data": k.numpy(), "mask": mask.numpy(),
         "rank": rank, "lambda": regularization_lambda, "max_num_iter": max_num_iter,
         "num_timer_runs": num_timer_runs, "num_warmup_runs": num_warmup_runs,
     }
-    # save as .mat file
-    savemat(fn, mat_data)
+    savemat(matlab_input_file, matlab_input_data)
 
-    logger.info("Call matlab routine")
-    # we could provide the data path as script parameters or just stick to always using "data.mat"
-    _ = run_matlab_script("ac_loraks", use_valgrind=False)
+    logger.info("Calling MATLAB routine")
+    _ = run_ac_loraks_matlab_script(use_valgrind=False)
 
-    # load in results
-    logger.info("Fetch results")
+    logger.info("Fetching results")
     results = loadmat(path.joinpath("output.mat").as_posix())
 
     times = torch.from_numpy(results["t"][0])
@@ -164,7 +161,7 @@ def recon_ac_loraks_matlab(
 def loraks_run(
         k: torch.Tensor, device: torch.device,
         rank: int, regularization_lambda: float,
-        max_num_iter: int = 30,):
+        max_num_iter: int = 30, ):
     # set up AC loraks
     opts = AcLoraksOptions(
         loraks_type=LoraksImplementation.AC_LORAKS, loraks_neighborhood_size=5,
@@ -196,7 +193,8 @@ def recon_ac_loraks(
     t = Timer(
         stmt="loraks_init_run(k, device, rank, regularization_lambda, max_num_iter)",
         setup="from __main__ import loraks_init_run",
-        globals={"k": k, "device": device, "rank": rank, "regularization_lambda": regularization_lambda, "max_num_iter": max_num_iter,}
+        globals={"k": k, "device": device, "rank": rank, "regularization_lambda": regularization_lambda,
+                 "max_num_iter": max_num_iter, }
     )
 
     # warmup & result
@@ -215,7 +213,7 @@ def recon_ac_loraks(
 # --- PLOTTING
 def load_df(path: plib.Path, name: str = ""):
     if name and not name.startswith("_"):
-        name=f"_{name}"
+        name = f"_{name}"
     fn = path.joinpath(f"results_df{name}").with_suffix(".json")
     logger.info(f"Loading from {fn}")
 
@@ -292,19 +290,19 @@ def plot_per_mode(name: str = ""):
                         showlegend=False,
                         legendgroup=g, name=f"M. size - Nx Ny: {m}"
                     ),
-                    row=1+i, col=1+it
+                    row=1 + i, col=1 + it
                 )
-                fig.update_yaxes(title=f"{t} {units[it]}", row=1+i, col=1+it)
+                fig.update_yaxes(title=f"{t} {units[it]}", row=1 + i, col=1 + it)
         fig.update_layout(
             {c_ax: dict(
                 colorscale="Inferno",
                 cmin=0.0, cmax=[mces, mxys][i].max(),
                 colorbar=dict(
-                    x=1.01, y=0.5 - i*0.5, len=0.5, thickness=14,
+                    x=1.01, y=0.5 - i * 0.5, len=0.5, thickness=14,
                     title=dict(text=f"Matrix size - {['Nc Ne Nb', 'Nx Ny'][i]}", side="right"),
                     xanchor="left", yanchor="bottom",
-                    )
                 )
+            )
             }
         )
     fig.update_layout(
@@ -390,9 +388,11 @@ def plot_per_size(name: str = ""):
                     col=1 + i, row=1 + it
                 )
                 if i == 0:
-                    fig.update_yaxes(title=f"{t} {units[it]}", col=1 + i, row=1+ it)
+                    fig.update_yaxes(title=f"{t} {units[it]}", col=1 + i, row=1 + it)
                 if it == 1:
-                    fig.update_xaxes(title=f"Matrix size - {['N<sub>c</sub> x N<sub>e</sub> x N<sub>b</sub>', 'N<sub>x</sub> N<sub>y</sub>'][i]}", col=1 + i, row=1 + it)
+                    fig.update_xaxes(
+                        title=f"Matrix size - {['N<sub>c</sub> x N<sub>e</sub> x N<sub>b</sub>', 'N<sub>x</sub> N<sub>y</sub>'][i]}",
+                        col=1 + i, row=1 + it)
 
     fig.update_layout(
         width=1000,
@@ -446,9 +446,9 @@ def table_per_mode(name: str = ""):
     text_cmap = plc.sample_colorscale(cm, [0.8, 0.7, 0.1])
     ann_a = []
     ann_m = []
-    zmin=0
-    zmax=df_norm["Acceleration"].max() * 0.85
-    mmax=df_norm["Memory"].max() * 0.85 *1e-3
+    zmin = 0
+    zmax = df_norm["Acceleration"].max() * 0.85
+    mmax = df_norm["Memory"].max() * 0.85 * 1e-3
     mxys = df_norm["mxy"].unique().sort(descending=False).to_numpy()
     mces = df_norm["mce"].unique().sort(descending=False).to_numpy()
     for i, m in enumerate(df_norm["plot_mode"].unique().sort()):
@@ -468,7 +468,7 @@ def table_per_mode(name: str = ""):
                 mem[g, h] = zm[0]
         fig.add_trace(
             go.Surface(
-                x=mxys*2, y=mces*2,
+                x=mxys * 2, y=mces * 2,
                 z=acc.mT.numpy(), opacity=0.82,
                 cmin=zmin, cmax=zmax,
                 colorscale=cm,
@@ -484,12 +484,12 @@ def table_per_mode(name: str = ""):
         ann_a.append(dict(
             text=m[0].capitalize() + m[1:], font=dict(color=text_cmap[i]),
             showarrow=False, textangle=-18,
-            x=2*mxys[0], y=2*(mces[-3] + np.diff(mces)[-2] / 2), z=acc[0, -2] + [3, 5, 5][i]
+            x=2 * mxys[0], y=2 * (mces[-3] + np.diff(mces)[-2] / 2), z=acc[0, -2] + [3, 5, 5][i]
         ))
         if i == 2:
             fig2.add_trace(
                 go.Surface(
-                    x=mxys*2, y=mces*2,
+                    x=mxys * 2, y=mces * 2,
                     z=mem.mT.numpy() * 1e-3, opacity=0.82,
                     cmin=zmin, cmax=mmax,
                     colorscale=cm, showscale=True,
@@ -503,8 +503,8 @@ def table_per_mode(name: str = ""):
             )
     # add a point for a modern scan sizes
     df_pts = df_norm.filter(
-            (pl.col("mxy") == 70800) & (pl.col("mce") == 1600)
-        ).drop(["Mode", "plot_mode", "plot_size", "Time"])
+        (pl.col("mxy") == 70800) & (pl.col("mce") == 1600)
+    ).drop(["Mode", "plot_mode", "plot_size", "Time"])
 
     for i, t in enumerate(["Acceleration", "Memory"]):
         df_pt = df_pts.filter(pl.col("Device").is_in(["GPU"]))
@@ -517,15 +517,15 @@ def table_per_mode(name: str = ""):
         fff = fig if i == 0 else fig2
         fff.add_trace(
             go.Scatter3d(
-                x=df_pt["mxy"]*2, y=df_pt["mce"]*2, z=df_pt[t]*f, marker=dict(color="red", symbol="x", size=3),
+                x=df_pt["mxy"] * 2, y=df_pt["mce"] * 2, z=df_pt[t] * f, marker=dict(color="red", symbol="x", size=3),
                 showlegend=False
             )
         )
         val = df_pt[t].unique().sort(descending=True)[ff] * f
         d = dict(
-                text=f"{val:.1f} {['', 'GB'][i]}", x=70800*2, y=1400*2, z=val*1.5, showarrow=False, yanchor="bottom",
-                font=dict(color="red")
-            )
+            text=f"{val:.1f} {['', 'GB'][i]}", x=70800 * 2, y=1400 * 2, z=val * 1.5, showarrow=False, yanchor="bottom",
+            font=dict(color="red")
+        )
         if i == 0:
             ann_a.append(d)
         else:
@@ -545,7 +545,7 @@ def table_per_mode(name: str = ""):
                 ticktext=[f"{val}k" for val in np.arange(40, 121, 40)]
             ),
             # yaxis=dict(title="Matrix size N<sub>c</sub> x N<sub>e</sub> x N<sub>b</sub>",),
-            yaxis=dict(title="",),
+            yaxis=dict(title="", ),
             # zaxis=dict(title="Acceleration     " if i==0 else "Memory [GB]     ")
             zaxis=dict(title="")
         )
@@ -565,9 +565,6 @@ def table_per_mode(name: str = ""):
             fn = fn.with_suffix(suff)
             logger.info(f"write file: {fn}")
             fff.write_image(fn)
-
-
-
 
 
 if __name__ == '__main__':

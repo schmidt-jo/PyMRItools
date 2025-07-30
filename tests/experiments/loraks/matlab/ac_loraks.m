@@ -1,10 +1,6 @@
 function ac_loraks()
 
-% setup
-addpath("/data/pt_np-jschmidt/code/PyMRItools/tests/experiments/loraks/matlab/");
-% load data - hardcoded path
-
-mat_vars = load("/data/pt_np-jschmidt/code/PyMRItools/tests/experiments/loraks/data/input.mat");
+mat_vars = load("input.mat");
 kData = mat_vars.k_data;
 mask = mat_vars.mask;
 rank = mat_vars.rank;
@@ -41,6 +37,7 @@ end
 % p = profile('info');
 % prof = p.FunctionTable;
 % write out data
-save("/data/pt_np-jschmidt/code/PyMRItools/tests/experiments/loraks/data/output.mat", "t", "k_recon");
+[filepath,~,~] = fileparts(mfilename('fullpath'));
+save(fullfile(filepath, 'output.mat'), 't', 'k_recon');
 
 end

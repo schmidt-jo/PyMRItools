@@ -12,7 +12,7 @@ from pymritools.recon.loraks.loraks import LoraksImplementation, OperatorType, R
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, ResultMode
-from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_matlab_script
+from tests.experiments.loraks.utils import prep_k_space, unprep_k_space, create_phantom, run_ac_loraks_matlab_script
 
 logger = logging.getLogger(__name__)
 
@@ -90,31 +90,30 @@ def recon_ac_loraks_cpu(
 
 
 def recon_ac_loraks_matlab(
-        k: torch.Tensor, rank: int, regularization_lambda: float, max_num_iter: int = 30):
-    # set data path
-    path = plib.Path(__file__).absolute().parent.joinpath("data")
-    logger.info(f"set matlab data path: {path}")
-    path.mkdir(exist_ok=True, parents=True)
+        k: torch.Tensor,
+        rank: int,
+        regularization_lambda: float,
+        max_num_iter: int = 30):
+    matlab_path = plib.Path(__file__).absolute().parent.joinpath("matlab")
+    logger.info(f"Set MATLAB data path: {matlab_path}")
 
     # build matlab data - for joint echo reconstruction, we just combine channel and echo data
     k = k.view(*k.shape[:2], -1)
     mask = (k.abs() > 1e-12)
 
-    fn = path.joinpath("input").with_suffix(".mat")
-    logger.info(f"save matlab input data: {fn}")
+    matlab_input_file = matlab_path.joinpath("input").with_suffix(".mat")
+    logger.info(f"Save MATLAB input data: {matlab_input_file}")
     mat_data = {
         "k_data": k.numpy(), "mask": mask.numpy(),
         "rank": rank, "lambda": regularization_lambda, "max_num_iter": max_num_iter,
         "num_timer_runs": 0, "num_warmup_runs": 1,
     }
-    # save as .mat file
-    savemat(fn, mat_data)
+    savemat(matlab_input_file, mat_data)
 
-    logger.info("Call matlab routine")
-    # we could provide the data path as script parameters or just stick to always using "data.mat"
-    memory, _ = run_matlab_script("ac_loraks")
+    logger.info("Calling MATLAB routine")
+    result = run_ac_loraks_matlab_script()
 
-    return memory
+    return result["peak_memory"]
 
 
 def compute():
