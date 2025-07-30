@@ -6,7 +6,10 @@ import pickle
 import polars as pl
 
 import torch
-from scipy.ndimage import zoom
+import numpy as np
+from scipy.ndimage import zoom, gaussian_filter1d
+from scipy.signal import savgol_filter
+
 import plotly.graph_objects as go
 import plotly.subplots as psub
 import plotly.colors as plc
@@ -814,25 +817,164 @@ def plot_rank_param_influence_imgs():
 
 
 def plot_wandb_sweep():
-    api = wandb.Api()
+    path = plib.Path(
+        get_test_result_output_dir("automatic_low_rank_param_extraction", ResultMode.EXPERIMENT)
+    ).absolute().joinpath("wandb")
+    logger.info(f"Set path: {path}")
 
-    runs = api.runs("schmidt-jo/loraks_rank_optimization")
+    path.mkdir(exist_ok=True, parents=True)
 
-    sum_list = []
-    for run in tqdm.tqdm(runs, desc="process wandb runs"):
-        tmp = {
-            k: v for k, v in run.summary._json_dict.items() if not k.startswith("_")
-        }
+    fn = path.joinpath("wandb_runs").with_suffix(".json")
+    if not fn.exists():
+        api = wandb.Api()
 
-        config = {
-            k: v for k, v in run.config.items() if not k.startswith("_")
-        }
-        tmp["rank"] = config["rank"]
-        tmp["name"] = run.name
-        sum_list.append(tmp)
+        runs = api.runs("schmidt-jo/loraks_rank_optimization")
 
-    df = pl.DataFrame(sum_list)
-    logger.info(df)
+        sum_list = []
+        for run in tqdm.tqdm(runs, desc="process wandb runs"):
+            tmp = {
+                k: v for k, v in run.summary._json_dict.items() if not k.startswith("_")
+            }
+
+            config = {
+                k: v for k, v in run.config.items() if not k.startswith("_")
+            }
+            tmp["rank"] = config["rank"]
+            tmp["name"] = run.name
+            sum_list.append(tmp)
+
+        df = pl.DataFrame(sum_list)
+        logger.info(df)
+        logger.info(f"Save file: {fn}")
+        df.write_ndjson(fn)
+    else:
+        logger.info(f"Read file: {fn}")
+        df = pl.read_ndjson(fn)
+
+    df_data = df.drop("name")
+
+    columns = ["rank", "psnr", "nmse", "ssim", "loss"]
+    logger.info(columns)
+    data_n = np.zeros((len(df_data), len(columns)))
+
+    for i, c in enumerate(columns):
+        data_n[:, i] = (df_data[c].to_numpy() - df[c].min()) / (df[c].max() - df[c].min())
+
+    n_ext = 50
+    data_straight = np.zeros((data_n.shape[0], n_ext * (data_n.shape[1] - 1)))
+    for i, d in enumerate(data_n):
+        for r in range(data_n.shape[1]-1):
+            start = data_n[i, r]
+            end = data_n[i, r+1]
+            data_straight[i, r*n_ext:(r+1)*n_ext] = np.linspace(start, end, n_ext, endpoint=True)
+
+    data_smooth = savgol_smooth_parallel_coords(data=data_straight, window_length=n_ext, polyorder=2)
+    # data_smooth = gaussian_smooth_parallel_coords(data=data_straight, sigma=10)
+
+    data_plot = data_smooth[::3]
+    fig = go.Figure()
+    cmap = plc.sample_colorscale("Inferno_r", np.clip(data_plot[:, -1], 0, 1))
+    for i, d in enumerate(data_plot):
+        fig.add_trace(
+            go.Scattergl(
+                y=d,
+                showlegend=False,
+                opacity=0.1,
+                mode="lines",
+                line=dict(color=cmap[i])
+            )
+        )
+    for i, c in enumerate(columns[1:]):
+        fig.add_trace(
+            go.Scatter(
+                x=[n_ext*(i+1)], y=[0, 1],
+                yaxis=f"y{i+2}",
+                showlegend=False,
+                mode="lines",
+                line=dict(color="white", width=1),
+            )
+        )
+        ymin = df[c].min()
+        ymax = df[c].max()
+        fig.update_layout(**{
+            f'yaxis{i + 2}': {
+                "range": (-0.05, 1.05),
+                "anchor": 'free',
+                'title': c.upper() if i < len(columns) - 2 else c.capitalize(),
+                'overlaying': 'y',
+                'side': 'left' if i < len(columns) - 2 else 'right',
+                'position': 0.2499 * (i+1),  # Adjust positioning
+                'tickmode': 'array',
+                'tickvals': np.linspace(0, 1, 7),
+                'ticktext': [f"{x:.4f}" for x in np.linspace(ymin, ymax, 7)],
+                'layer': 'above traces'
+            }
+        })
+
+    fig.update_layout(
+        xaxis=dict(
+            title="Parameter - Metric",
+            tickmode="array",
+            tickvals=np.arange(n_ext*len(columns) - 1) * n_ext,
+            ticktext=[c.capitalize() if i in [0, len(columns) - 1] else c.upper() for c in columns]
+        ),
+        yaxis=dict(
+            range =(-0.05, 1.05),
+            title="Rank",
+            tickmode="array",
+            tickvals=np.linspace(0, 1, 13),
+            ticktext=[f"{int(x)}" for x in np.linspace(df["rank"].min(), df["rank"].max(), 34)]
+        ),
+        width=800, height=350,
+        margin=dict(t=10, b=10, l=10, r=10)
+    )
+    fn = path.joinpath("sweep_trendline").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Write file: {fn}")
+        fig.write_image(fn)
+
+
+def savgol_smooth_parallel_coords(data, window_length=5, polyorder=2):
+    """
+    Apply Savitzky-Golay smoothing
+
+    Args:
+        data (np.ndarray): Original data
+        window_length (int): Length of the filter window
+        polyorder (int): Order of the polynomial used to fit the samples
+
+    Returns:
+        np.ndarray: Smoothed data
+    """
+    smoothed_data = np.copy(data)
+
+    for dim in tqdm.trange(data.shape[0], desc="savgol smoothing"):
+        smoothed_data[dim] = savgol_filter(data[dim], window_length=window_length, polyorder=polyorder)
+
+    return smoothed_data
+
+
+def gaussian_smooth_parallel_coords(data, sigma=1.0):
+    """
+    Apply Gaussian smoothing to each dimension
+
+    Args:
+        data (np.ndarray): Original data
+        sigma (float): Standard deviation for Gaussian kernel
+
+    Returns:
+        np.ndarray: Smoothed data
+    """
+    smoothed_data = np.copy(data)
+
+    for dim in range(data.shape[0]):
+        smoothed_data[dim] = gaussian_filter1d(data[dim], sigma=sigma)
+
+    return smoothed_data
 
 
 if __name__ == '__main__':
