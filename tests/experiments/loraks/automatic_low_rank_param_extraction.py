@@ -876,7 +876,7 @@ def plot_wandb_sweep():
     cmap = plc.sample_colorscale("Inferno_r", np.clip(data_plot[:, -1], 0, 1))
     for i, d in enumerate(data_plot):
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 y=d,
                 showlegend=False,
                 opacity=0.1,
