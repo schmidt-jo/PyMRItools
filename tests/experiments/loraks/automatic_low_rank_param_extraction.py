@@ -123,6 +123,9 @@ def rank_parameter_influence():
     gt = root_sum_of_squares(gt, dim_channel=-2)
     gt[~bet] = 0
 
+    name = f"recon_img_rsos_gt"
+    torch_save(data=gt, path_to_file=path.joinpath("recon_data"), file_name=name)
+
     data_in, in_shape, padding, batch_channel_idx = prep_k_space(k.unsqueeze_(2), batch_size_channels=8)
     op = Operator(
         k_space_shape=data_in.shape[1:], nb_side_length=5, device=device, operator_type=OperatorType.S
@@ -135,14 +138,16 @@ def rank_parameter_influence():
     del mat
     torch.cuda.empty_cache()
     results = []
-    for si, sub_sample in enumerate(["ac-random", "ac-random-lines", "grappa", "interleaved-lines"]):
-        for acc in [2, 3, 4, 5, 6]:
+    # for si, sub_sample in enumerate(["ac-random-lines", "ac-random", "grappa", "interleaved-lines"]):
+    for si, sub_sample in enumerate(["ac-random-lines"]):
+        # for acc in [2, 3, 4, 5, 6]:
+        for acc in [4]:
             # create sampling mask
             phantom = Phantom.get_shepp_logan(shape=shape[:2], num_coils=shape[-2], num_echoes=shape[-1])
             if si == 0:
-                k_us = phantom.sub_sample_random(acceleration=acc, ac_central_radius=20)
-            elif si == 1:
                 k_us = phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=36)
+            elif si == 1:
+                k_us = phantom.sub_sample_random(acceleration=acc, ac_central_radius=20)
             elif si == 2:
                 k_us = phantom.sub_sample_ac_grappa(acceleration=acc, ac_lines=36)
             else:
@@ -154,6 +159,10 @@ def rank_parameter_influence():
 
             img_us = fft_to_img(k_in, dims=(0, 1))
             img_us = root_sum_of_squares(img_us, dim_channel=-2)
+
+            name = f"recon_img_rsos_us"
+            torch_save(data=img_us, path_to_file=path.joinpath("recon_data"), file_name=name)
+
             nmse = calc_nmse(gt, img_us)
             psnr = calc_psnr(gt, img_us)
             ssim = calc_ssim(gt.permute(2, 1, 0), img_us.permute(2, 1, 0))
@@ -163,11 +172,13 @@ def rank_parameter_influence():
                 "lambda": None, "rank": None, "name": "us", "nmse": nmse, "psnr": psnr, "ssim": ssim
             })
 
-            for l in [0.0, 0.01, 0.04, 0.1]:
+            # for l in [0.0, 0.01, 0.04, 0.1]:
+            for l in [0.0]:
 
                 for i, r in enumerate(
-                        torch.linspace(20, 200, 10).to(torch.int).tolist() +
-                        torch.linspace(250, int(0.25 * m), 10).to(torch.int).tolist()
+                        # torch.linspace(20, 200, 10).to(torch.int).tolist() +
+                        # torch.linspace(250, int(0.25 * m), 10).to(torch.int).tolist()
+                    torch.arange(20, 300, 40).tolist()
                 ):
                     # create rank grid
                     ac_opts = AcLoraksOptions(
@@ -195,11 +206,8 @@ def rank_parameter_influence():
                     fn = path.joinpath("metrics_rank").with_suffix(".json")
                     logger.info(f"Update file: {fn}")
                     df.write_ndjson(fn)
-                    if i % 4 == 0:
-                        name = f"recon_img_rsos_sub-{sub_sample}_acc{acc}_r{r}_lambda-{l}".replace(".", "p")
-                        torch_save(data=rsos, path_to_file=path.joinpath("recon_data"), file_name=name)
-
-
+                    name = f"recon_img_rsos_sub-{sub_sample}_acc{acc}_r{r}_lambda-{l}".replace(".", "p")
+                    torch_save(data=rsos, path_to_file=path.joinpath("recon_data"), file_name=name)
 
 
 
@@ -975,6 +983,115 @@ def plot_wandb_sweep(force_api_load: bool = False):
         fig.write_image(fn)
 
 
+def plot_low_rank_influence():
+    path = plib.Path(get_test_result_output_dir("automatic_low_rank_param_extraction", ResultMode.EXPERIMENT))
+    path = path.joinpath("invivo_ac_random_lines")
+    path_in = path.joinpath("recon_data")
+    # load metrics
+    fn = path.joinpath("metrics_rank").with_suffix(".json")
+    logger.info(f"Read file: {fn}")
+    metrics = pl.read_ndjson(fn)
+
+    logger.info(metrics)
+
+    # we know that the optimal rank is ~150 from optimisation
+    # load in some data
+    gt = torch_load(path_in.joinpath("recon_img_rsos_gt").with_suffix(".pt"))
+    mask = gt > 1e-9
+    us = torch_load(path_in.joinpath("recon_img_rsos_us").with_suffix(".pt"))
+    us[~mask] = 0
+
+    zmax = gt.abs().max().item() * 0.65
+
+    data = [gt, us]
+    ranks = [0, 1]
+    for i, f in enumerate(path_in.iterdir()):
+        if "sub-ac" in f.stem:
+            data.append(torch_load(f))
+            r = int(f.stem.split("_")[-2][1:])
+            ranks.append(r)
+    ranks = np.array(ranks)
+    inds = np.argsort(ranks)
+    # sort the data according to the rank used in the recon, take the first echo only
+    data = np.stack(data)[inds][..., 0]
+    ranks = ranks[inds]
+
+    data = data[:-2]
+    ranks = ranks[:-2]
+
+    zzmax = (data[2] - data[0]).max() * 0.1
+
+    fig = psub.make_subplots(
+        rows=2, cols=data.shape[0],
+        column_titles=["GT", "US"] + [f"Rank: {r}" for r in ranks[2:]],
+        shared_yaxes=True,
+        vertical_spacing=0.02, horizontal_spacing=0.01
+    )
+
+    for i, d in enumerate(data):
+        for h, dd in enumerate([d, d - data[0]]):
+            # plot images
+            fig.add_trace(
+                go.Heatmap(
+                    z=dd, showscale=False, showlegend=False,
+                    colorscale="Inferno" if h ==0 else "Balance_r",
+                    zmin=0.0 if h == 0 else -zzmax, zmax=zmax if h == 0 else zzmax
+                ),
+                row=1+h, col=1+i
+            )
+
+            xaxis=fig.data[-1].xaxis
+            fig.update_yaxes(visible=False, row=1+h, col=1+i, scaleanchor=xaxis)
+            fig.update_xaxes(visible=False, row=1+h, col=1+i)
+
+    fig.update_layout(
+        width=800, height = 300,
+        margin=dict(t=20, b=10, l=10, r=10)
+    )
+    fn = path.joinpath("low_rank_influence").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Write file: {fn}")
+        fig.write_image(fn)
+
+    mets = ["nmse", "psnr", "ssim"]
+    fig = psub.make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+    )
+    tmp = metrics.filter(pl.col("name") == "recon")
+    names = [f"Rank: {r}" for r in tmp["rank"].sort().to_list()]
+    ranges=[(0.00, 0.008), (35, 42), (0.92, 0.98)]
+    cmap = plc.sample_colorscale("Inferno", 3, 0.7, 0.3)
+    for i, m in enumerate(mets):
+        fig.add_trace(
+            go.Bar(
+                x=names, y=tmp[m],
+                marker=dict(color=cmap[i]),
+                showlegend=False,
+            ),
+            row=1+i, col=1
+        )
+        fig.update_yaxes(
+            range=ranges[i], row=1+i, col=1, side="right", title=m.upper()
+        )
+    fig.update_layout(
+        width=650, height=250,
+        margin=dict(t=10, b=10, l=10, r=10)
+    )
+    fn = path.joinpath("low_rank_influence_metrics").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Write file: {fn}")
+        fig.write_image(fn)
+
 def savgol_smooth_parallel_coords(data, window_length=5, polyorder=2):
     """
     Apply Savitzky-Golay smoothing
@@ -1023,4 +1140,5 @@ if __name__ == '__main__':
     # rank_parameter_influence()
     # plot_rank_param_influence_errors()
     # plot_rank_param_influence_imgs()
-    plot_wandb_sweep(force_api_load=False)
+    # plot_wandb_sweep(force_api_load=False)
+    plot_low_rank_influence()
