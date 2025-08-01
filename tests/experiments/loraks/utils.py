@@ -156,7 +156,7 @@ def run_ac_loraks_matlab_script(use_valgrind: bool = True,
     # Also check "matlab -n" which gives the overview of all variables and settings and which maybe will allow
     # us to extract the real binary automatically
     matlab_cmd = f"matlab -nodisplay -nosplash -nodesktop -nojvm -r \"addpath('{script_dir}'); "
-    script_func = "ac_loraks"
+    script_func = "profile_ac_loraks"
 
     if script_args:
         matlab_cmd += f"run('{script_func}({script_args})'); "

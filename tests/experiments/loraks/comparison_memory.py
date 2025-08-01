@@ -57,7 +57,7 @@ def recon_ac_loraks_gpu(
         logger.error(msg)
         raise AttributeError(msg)
 
-    torch.cuda.reset_peak_memory_stats(device)
+    torch.cuda.reset_peak_memory_stats()
     torch.cuda.reset_accumulated_memory_stats(device)
     torch.cuda.synchronize(device)
     mem_start = torch.cuda.max_memory_allocated(device)
