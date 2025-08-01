@@ -21,8 +21,8 @@ class RFPulse(Serializable):
     time_bandwidth: float = bandwidth_in_Hz * duration_in_us * 1e-6
     num_samples: int = int(duration_in_us)
 
-    amplitude: np.ndarray = np.zeros(num_samples)
-    phase: np.ndarray = np.zeros(num_samples)
+    amplitude: np.ndarray = dc.field(default_factory=lambda: np.zeros(0))
+    phase: np.ndarray = dc.field(default_factory=lambda: np.zeros(0))
 
     def __post_init__(self):
         # check array sizes - for some reason this is not working properly when creating class with input args
