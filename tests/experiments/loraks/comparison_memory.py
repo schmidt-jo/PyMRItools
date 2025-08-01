@@ -5,6 +5,8 @@ import torch
 import polars as pl
 
 from scipy.io import savemat
+from torch.profiler import profile, record_function, ProfilerActivity
+
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, ComputationType
 from pymritools.recon.loraks.loraks import LoraksImplementation, OperatorType, RankReduction, RankReductionMethod, \
     Loraks
@@ -18,7 +20,6 @@ from tests.experiments.loraks.utils import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 
 # --  Computations
@@ -70,10 +71,56 @@ def recon_ac_loraks_gpu(
     return (mem_end - mem_start) / 1024 / 1024
 
 
+def recon_ac_loraks_cpu_profile(
+        k: torch.Tensor,
+        rank: int,
+        regularization_lambda: float,
+        max_num_iter: int = 30):
+    """
+    This measurement of the peak memory is so bad, I wouldn't even call it an estimate.
+    I try to sum allocated and freed memory over all profile events.
+    If these events actually contain all allocations in an order sorted by time,
+    this could be correct. However, the results just appear to be wildly off.
+    No clue what to do.
+    """
+
+    # it seems we need that because the profiler still tries to access the GPU, although
+    # we say during profiling that we only want to trace the CPU
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.enabled = False
+
+    device = torch.device("cpu")
+    logger.info(f"Using device: {device}")
+
+    path = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT)).joinpath("tmp")
+    path.mkdir(parents=True, exist_ok=True)
+
+    with profile(
+            activities=[torch.profiler.ProfilerActivity.CPU],
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+    ) as prof:
+        k_recon = torch_loraks_run(
+            k=k, device=device, rank=rank, regularization_lambda=regularization_lambda, max_num_iter=max_num_iter
+        )
+
+    events = prof.key_averages()
+    accumulated_memory = 0
+    max_memory = 0
+    for e in events:
+        accumulated_memory += e.self_cpu_memory_usage
+        max_memory = max(max_memory, accumulated_memory)
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.enabled = True
+    return max_memory / 1024 ** 2
+
+
 def recon_ac_loraks_cpu(
         k: torch.Tensor,
         rank: int, regularization_lambda: float,
-        max_num_iter: int = 30,):
+        max_num_iter: int = 30, ):
     # we need to save the tensor and pass the settings
     device = torch.device("cpu")
     logger.info(f"Set device: {device}")
@@ -143,23 +190,24 @@ def compute():
 
     # cycle through different matrix sizes
     for i, mxy in enumerate(ms_xy):
-        logger.info(f"Processing Matrix Size XY : {i+1} / {ms_xy.shape[0]}")
+        logger.info(f"Processing Matrix Size XY : {i + 1} / {ms_xy.shape[0]}")
         # extract k-space side from matrix
         nx = torch.sqrt(mxy).to(torch.int)
         ny = (mxy / nx).to(torch.int)
         # cycle through different number of channels and echoes
 
         for g, nc in enumerate(ncs):
-            logger.info(f"__ nc: {g+1} / {ncs.shape[0]}")
+            logger.info(f"__ nc: {g + 1} / {ncs.shape[0]}")
 
             for h, ne in enumerate(nes):
-                logger.info(f"__ ne: {h+1} / {nes.shape[0]}")
+                logger.info(f"__ ne: {h + 1} / {nes.shape[0]}")
                 mce = ne * nc * 5 ** 2
 
                 rank = max(15, min(mce.item(), mxy.item()) // 10)
 
                 # prepare the data
-                _, k_us = create_phantom(shape_xyct=(nx.item(), ny.item(), nc.item(), ne.item()), acc=3, ac_lines=ny.item() // 6.5)
+                _, k_us = create_phantom(shape_xyct=(nx.item(), ny.item(), nc.item(), ne.item()), acc=3,
+                                         ac_lines=ny.item() // 6.5)
 
                 # logger.info(f"__ Processing Torch GPU\n")
                 # if not torch.cuda.is_available():
