@@ -23,5 +23,6 @@ dependencies:
   - pip:
       - torch
       - autodmri
+      - msparser
       - git+https://github.com/pehses/twixtools.git@master#egg=twixtools
       - git+https://github.com/imr-framework/pypulseq.git@dev#egg=pypulseq
