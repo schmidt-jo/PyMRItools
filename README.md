@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/863383414.svg)](https://doi.org/10.5281/zenodo.13992707)
+
 # PyMRItools
 
 Toolbox for MRI sequence programming, reconstruction, simulation, processing, and analysis using Python.
@@ -142,3 +144,20 @@ python3.10 pymritools/processing/unringing/gibbs_unr.py \
 ```
 
 ---
+
+### References
+
+Parts of the code implemented is based on the work of peers. 
+If you use any of the code please consider citing their contributions:
+
+- EMC Simulation and Grid Search Fitting: 
+  - [Ben-Eliezer et al. 2015](https://doi.org/10.1002/mrm.25156)
+- Denoising MPPCA:
+  - [Does et al. 2019](https://doi.org/10.1002/mrm.27658)
+  - [Veraart et al. 2016]( https://doi.org/10.1002/mrm.26059)
+  - [Manjon et al. 2015](http://dx.doi.org/10.1016/j.media.2015.01.004)
+- Denoising Noise Mask Extraction:
+  - [StJean et al. 2020](https://doi.org/10.1016/j.media.2020.101758)
+- Gibbs Unringing: 
+  - [Kellner et al. 2016](https://doi.org/10.1002/mrm.26054)
+
