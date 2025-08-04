@@ -141,7 +141,7 @@ def rank_parameter_influence():
     # for si, sub_sample in enumerate(["ac-random-lines", "ac-random", "grappa", "interleaved-lines"]):
     for si, sub_sample in enumerate(["ac-random-lines"]):
         # for acc in [2, 3, 4, 5, 6]:
-        for acc in [4]:
+        for acc in [3]:
             # create sampling mask
             phantom = Phantom.get_shepp_logan(shape=shape[:2], num_coils=shape[-2], num_echoes=shape[-1])
             if si == 0:
@@ -1035,6 +1035,7 @@ def plot_low_rank_influence():
                 go.Heatmap(
                     z=dd, showscale=False, showlegend=False,
                     colorscale="Inferno" if h ==0 else "Balance_r",
+                    coloraxis="coloraxis" if h==0 else "coloraxis2",
                     zmin=0.0 if h == 0 else -zzmax, zmax=zmax if h == 0 else zzmax
                 ),
                 row=1+h, col=1+i
@@ -1045,8 +1046,26 @@ def plot_low_rank_influence():
             fig.update_xaxes(visible=False, row=1+h, col=1+i)
 
     fig.update_layout(
-        width=800, height = 300,
-        margin=dict(t=20, b=10, l=10, r=10)
+        width=800, height = 260,
+        margin=dict(t=20, b=10, l=10, r=10),
+        coloraxis=dict(
+            colorscale="Inferno",
+            cmin=0.0, cmax=zmax,
+            colorbar=dict(
+                x=1.01, y=0.5, len=0.5, thickness=14,
+                title=dict(text="Signal [a.u.]", side="right"),
+                xanchor="left", yanchor="bottom",
+            )
+        ),
+        coloraxis2=dict(
+            colorscale="Balance_r",
+            cmin=-zzmax, cmax=zzmax,
+            colorbar=dict(
+                x=1.01, y=0.0, len=0.5, thickness=14,
+                title=dict(text="Difference to<br>ground truth [a.u.]", side="right"),
+                xanchor="left", yanchor="bottom",
+            )
+        ),
     )
     fn = path.joinpath("low_rank_influence").with_suffix(".html")
     logger.info(f"Write file: {fn}")

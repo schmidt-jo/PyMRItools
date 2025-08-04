@@ -8,8 +8,11 @@ import logging
 import pathlib as plib
 from enum import Enum, auto
 import json
+import polars as pl
 
 import torch
+import tqdm
+
 from pymritools.recon.loraks.loraks import Loraks, OperatorType
 from pymritools.recon.loraks.utils import unpad_output
 
@@ -171,7 +174,7 @@ def autograd_optimization_ac(
 
     # we need to prepare the k-space
     prep_k_ac, in_shape, padding, batch_channel_idx = prep_k_space(
-        k=k_us.unsqueeze_(2), batch_size_channels=batch_size_channels
+        k=k_us.unsqueeze(2), batch_size_channels=batch_size_channels
     )
 
     loraks._initialize(k_space=prep_k_ac)
@@ -187,7 +190,7 @@ def autograd_optimization_ac(
 
     # we want to do the rest of the optimization on the fully sampled data
     prep_k, in_shape, padding, batch_channel_idx = prep_k_space(
-        k.unsqueeze_(2), batch_size_channels=batch_size_channels
+        k.unsqueeze(2), batch_size_channels=batch_size_channels
     )
 
     grad_pb = torch.zeros_like(prep_k)
@@ -276,7 +279,7 @@ def built_optimized_sampling_mask(
     mask_sub = torch.zeros(n_phase, n_echoes)
     for i in range(n_echoes):
         mask_sub[indices_sub[i], i] = 1
-    mask_sub = mask_sub[None, :, None, None, :].expand(shape).to(torch.int)
+    mask_sub = mask_sub[None, :, None, :].expand(shape).to(torch.int)
     return mask_sub
 
 
@@ -291,7 +294,7 @@ def create_subsampling_masks(shape):
         phantom.sub_sample_ac_random_lines,
         phantom.sub_sample_ac_random_lines, phantom.sub_sample_ac_weighted_lines,
         phantom.sub_sample_ac_grappa, phantom.sub_sample_ac_skip_lines]):
-        k_us = f(acceleration=6 if i > 0 else 1, ac_lines=36)
+        k_us = f(acceleration=5 if i > 0 else 1, ac_lines=36)
 
         masks.append({"name": names[i], "data": (k_us.abs() > 1e-10).to(torch.int)})
     return masks
@@ -608,18 +611,60 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
         loraks = None
     else:
         # compute optimized sampling scheme
-        if loraks_type == LoraksType.AC:
-            grad, prep_k, mask, loraks = autograd_optimization_ac(
-                k=k, device=device,
-                batch_size_channels=8, rank=150
-            )
-        else:
-            # grad, prep_k, mask, loraks = autograd_optimization_p(
-            #     k=k, device=device,
-            #     batch_size_channels=8, rank=150
-            # )
-            raise NotImplementedError(f"Loraks type {loraks_type} not implemented")
+        if not loraks_type == LoraksType.AC:
+            msg = "only implemented for AC LORAKS"
+            logger.error(msg)
+            raise AttributeError(msg)
+        # do the density based version
+        grad, prep_k, mask, loraks = autograd_optimization_ac(
+            k=k, device=device,
+            batch_size_channels=8, rank=150
+        )
         sampling_density, grad_mac, indices_ac, importance_mask = extract_sampling_density(grad=grad, ac_mask=mask)
+        # now do the iterative version
+        # calculate how many lines to skip
+        n_to_skip = (k.shape[1] - indices_ac.shape[0])
+        sampling_mask = torch.full((k.shape[1], k.shape[-1]), k.shape[1], dtype=torch.int, device=device)
+        for n in tqdm.trange(n_to_skip):
+            # for each line we want to take away
+            for e in range(k.shape[-1]):
+                # we go through the echoes
+                # we take away previous lines
+                k_iter = k.clone()
+                m = sampling_mask[None, :, None, :].expand_as(k_iter)
+                k_iter[m < n+1] = 0
+                # calculate the gradient and chose the phase encode line with the smalles gradient sum
+                # do the density based version
+                grad, _, _, _ = autograd_optimization_ac(
+                    k=k, device=device,
+                    batch_size_channels=8, rank=150
+                )
+                # we now have a gradient and are interested in its smalles amplitude along the echo were looking at,
+                # and along the phase encode dir
+                # first squeeze slice
+                grad = grad.squeeze().abs()
+                # normalise by k - space abs
+                grad = grad / (torch.log(k.abs()))
+                grad = grad.sum(dim=(0, -1))[..., e]
+                # set ac region highest
+                grad[indices_ac] = grad.max()
+                # get indices according to the sorted amplitudes
+                _, opt_ind = torch.sort(grad, descending=False)
+                # now we want to get the lowest amplitude and set it 0,
+                for oo in range(opt_ind.shape[0]):
+                    o = opt_ind[oo]
+                    # check if we this index was previously unassigned.
+                    # if so take it, if not iterate
+                    if sampling_mask[o, e] > n:
+                        sampling_mask[o, e] = n
+                        break
+
+    fn = path_tmp.parent.joinpath("sampling_mask").with_suffix(".pt")
+    logger.info(f"Write file: {fn}")
+    # torch.save(sampling_mask, fn)
+    sampling_mask = torch.load(fn)
+    plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
+
     logger.info(f"Save data: {path_tmp}")
     sd = {
         "sampling_density": sampling_density, "grad_mac": grad_mac, "indices_ac": indices_ac, "mask": mask,
@@ -637,10 +682,22 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
     else:
         masks = create_subsampling_masks(k.squeeze().shape)
         m_opt = built_optimized_sampling_mask(
-            acceleration=6, grad_mac=grad_mac, indices_ac=indices_ac, shape=k.shape,
+            acceleration=5, grad_mac=grad_mac, indices_ac=indices_ac, shape=k.shape,
             # importance_mask=importance_mask
         )
         masks.append({"name": "Optimized", "data": m_opt.squeeze()})
+
+        # add deterministic mask too
+        n_outer = sampling_mask.shape[0] - indices_ac.shape[0]
+        n_to_keep = n_outer // 5
+        n_th = n_outer - n_to_keep
+
+        mask_opt_d = sampling_mask.clone()
+        mask_opt_d[mask_opt_d < n_th] = 0
+        mask_opt_d[mask_opt_d >= n_th] = 1
+        mask_opt_d = mask_opt_d[None, :, None, :].expand_as(k)
+        masks.append({"name": "Opt.Determ.", "data": mask_opt_d})
+
         with open(path_tmp.as_posix(), "wb") as j_file:
             pickle.dump(masks, j_file)
         plot_sampling_masks(masks, path=path_out)
@@ -659,6 +716,9 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
             options.rank.value = 150
             loraks = Loraks.create(options=options)
             results = recon_sampling_patterns(k=k, masks=masks, bet=bet, loraks=loraks)
+            df = [{"psnr": r["psnr"], "ssim": r["ssim"], "nmse": r["nmse"]} for r in results]
+            df = pl.DataFrame(df)
+            df.write_ndjson(path_tmp.with_suffix(".json"))
             with open(path_tmp.as_posix(), "wb") as j_file:
                 pickle.dump(results, j_file)
         plot_results(results, path=path_out)
@@ -696,6 +756,36 @@ def plot_metrics(loraks_type: LoraksType = LoraksType.AC, data_type: DataType = 
         logger.info(f"{name}: PSNR = {psnr:.5f}: SSIM = {ssim:.5f}: NMSE = {nmse:.5f}")
 
 
+def plot_mask(loraks_type: LoraksType, data_type: DataType):
+    # get path
+    path_out = plib.Path(
+        get_test_result_output_dir(
+            f"autograd_subsampling_optimization",
+            mode=ResultMode.EXPERIMENT)
+    )
+    path_out = path_out.joinpath(f"{loraks_type.name}".lower()).joinpath(f"{data_type.name}".lower())
+    fn = path_out.joinpath("data").joinpath("sampling_mask").with_suffix(".pt")
+    logger.info(f"Write file: {fn}")
+    sampling_mask = torch.load(fn).cpu()
+    # if we want to keep n lines we do the following
+    n_ac = 36
+    acc = 3
+
+    n_outer = sampling_mask.shape[0] - n_ac
+    n_to_keep = n_outer // acc
+    n_th = n_outer - n_to_keep
+
+    mask = sampling_mask.clone()
+    mask[mask < n_th] = 0
+    mask[mask >= n_th] = 1
+    fig = go.Figure()
+    fig.add_trace(
+        go.Heatmap(z=mask)
+    )
+    fn = path_out.joinpath("sampling_mask").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
@@ -704,3 +794,6 @@ if __name__ == '__main__':
         device=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"),
     )
     plot_metrics()
+    plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
+
+

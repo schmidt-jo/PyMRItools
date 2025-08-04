@@ -18,7 +18,6 @@ p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 
 from tests.utils import get_test_result_output_dir, ResultMode
-from tests.experiments.loraks.utils import TorchMemoryTracker
 
 logger = logging.getLogger(__name__)
 
@@ -80,19 +79,30 @@ def compute():
         rank = max(m // 10, 10)
 
         matrix = torch.randn((mxy, mce), device=device)
+        matrix += torch.full_like(matrix, 1)
+        matrix += torch.randn_like(matrix)**2
 
         # SVDS
         for svd_type in list(SVDType):
             if g % 2 == 0:
-                if svd_type == SVDType.SVD and g > 10:
+                if svd_type == SVDType.SVD:
                     continue
-                elif (svd_type == SVDType.RANDQLP or svd_type == SVDType.RANDNS) and g > 15:
+            if g > 10:
+                if svd_type == SVDType.SVD :
+                    continue
+            if g > 15:
+                if svd_type == SVDType.RANDQLP or svd_type == SVDType.RANDNS:
                     continue
             # init run and measure memory
-            mem_track = TorchMemoryTracker(device=device)
-            mem_track.start_tracking()
+            torch.cuda.empty_cache()
+            torch.cuda.reset_max_memory_allocated(device)
+            torch.cuda.synchronize(device)
+            mem_start = torch.cuda.max_memory_allocated(device)
+
             process_svd(matrix=matrix, svd_type=svd_type, rank=rank, oversampling=oversampling, power_iterations=2)
-            mem_track.end_tracking()
+
+            mem_end = torch.cuda.max_memory_allocated(device)
+
             # timing runs
             t = Timer(
                 stmt="process_svd(matrix=matrix, svd_type=svd_type, rank=rank)",
@@ -100,7 +110,7 @@ def compute():
                 globals={"matrix":matrix, "svd_type":svd_type, "rank":rank}
             )
             t_processing = t.timeit(num_timer_runs) / num_timer_runs
-            mem_processing, _, _ = mem_track.get_memory_usage()
+            mem_processing = (mem_end - mem_start) / 1024 / 1024
             meas.append({
                 "Mode": svd_type.name, "Time": t_processing, "Memory": mem_processing,
                 "mxy": mxy.item(), "mce": mce

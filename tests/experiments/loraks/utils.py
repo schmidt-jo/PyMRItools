@@ -176,6 +176,7 @@ def run_ac_loraks_matlab_script(use_valgrind: bool = True,
         massif_output_file=tmp_massif_file,
         capture_output=capture_output
     )
+    logger.info(command_return.stdout)
 
     memory_usage_mb, peak_extra_memory_mb = read_massif_max_memory_used(
         file_path=tmp_massif_file
