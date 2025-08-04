@@ -192,7 +192,7 @@ def recon_ac_loraks(
     # timing
     t = Timer(
         stmt="loraks_run(k, device, rank, regularization_lambda, max_num_iter)",
-        setup="from __main__ import loraks_init_run",
+        setup="from __main__ import loraks_run",
         globals={"k": k, "device": device, "rank": rank, "regularization_lambda": regularization_lambda,
                  "max_num_iter": max_num_iter, }
     )
