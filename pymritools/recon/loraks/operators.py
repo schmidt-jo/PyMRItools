@@ -200,6 +200,7 @@ def calculate_matrix_size(k_space_shape: Tuple,
     k_space_shape = torch.tensor(k_space_shape)
     patch_shape = torch.tensor(patch_shape)
     sample_directions = torch.tensor(sample_directions)
+
     patch_sizes = torch.where(patch_shape == 0, torch.tensor(1), patch_shape)
     patch_sizes = torch.where(patch_shape == -1, k_space_shape, patch_sizes)
 

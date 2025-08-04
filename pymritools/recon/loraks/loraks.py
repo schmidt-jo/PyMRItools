@@ -103,7 +103,6 @@ class LoraksOptions(Serializable):
     rank: RankReduction = field(
         default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
     regularization_lambda: float = 0.1
-    batch_size_channels: int = -1
     max_num_iter: int = 300
     device: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 

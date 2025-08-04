@@ -72,8 +72,10 @@ def check_channel_batch_size_and_batch_channels(
                 k_data_nrps_c=k_space_rpsct[..., 0], batch_size_channels=batch_size_channels
             )
         else:
+            torch.manual_seed(8)
             batch_channel_indices = torch.stack(
-                torch.tensor_split(torch.arange(n_channels), num_channel_batches),
+                torch.tensor_split(
+                    torch.randperm(n_channels), num_channel_batches),
                 dim=0
             )
     elif batching and batch_size_channels == 1:
