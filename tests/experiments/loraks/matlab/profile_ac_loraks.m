@@ -1,4 +1,4 @@
-function ac_loraks()
+function profile_ac_loraks()
 
 mat_vars = load("input.mat");
 kData = mat_vars.k_data;
