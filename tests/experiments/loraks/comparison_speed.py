@@ -36,12 +36,12 @@ def compute():
     # path_out.mkdir(parents=True, exist_ok=True)
 
     # do loops for different data sizes
-    # ms_xy = torch.linspace(100*100, 280*280, 10)
-    # ncs = torch.arange(4, 37, 4)
-    # nes = torch.arange(2, 6, 1)
-    ms_xy = torch.tensor([10000])
-    ncs = torch.tensor([4])
-    nes = torch.tensor([2])
+    ms_xy = torch.linspace(100*100, 280*280, 10)
+    ncs = torch.arange(4, 37, 4)
+    nes = torch.arange(2, 6, 1)
+    # ms_xy = torch.tensor([10000])
+    # ncs = torch.tensor([4])
+    # nes = torch.tensor([2])
 
     # some settings
     regularization_lambda = 0.0
@@ -91,36 +91,36 @@ def compute():
                             "mxy": mxy, "mce": mce
                         })
 
-                logger.info(f"__ Processing Torch CPU\n")
-                try:
-                    time = recon_ac_loraks(
-                        k=k_us.clone(), device=torch.device("cpu"),
-                        rank=rank, regularization_lambda=regularization_lambda,
-                        max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
-                    )
-                    meas.append({
-                        "Mode": "torch", "Device": "CPU", "Time": time,
-                        "mxy": mxy, "mce": mce
-                    })
-                except Exception as e:
-                    logger.warning(e)
-                    meas.append({
-                        "Mode": "torch", "Device": "CPU", "Time": None,
-                        "mxy": mxy, "mce": mce
-                    })
-
-                logger.info(f"__ Processing Matlab CPU\n")
-                time = recon_ac_loraks_matlab(
-                    k=k_us, rank=rank, regularization_lambda=regularization_lambda,
-                    max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
-                )
-                meas.append({
-                    "Mode": "matlab", "Device": "CPU", "Time": time,
-                    "mxy": mxy, "mce": mce
-                })
+                # logger.info(f"__ Processing Torch CPU\n")
+                # try:
+                #     time = recon_ac_loraks(
+                #         k=k_us.clone(), device=torch.device("cpu"),
+                #         rank=rank, regularization_lambda=regularization_lambda,
+                #         max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
+                #     )
+                #     meas.append({
+                #         "Mode": "torch", "Device": "CPU", "Time": time,
+                #         "mxy": mxy, "mce": mce
+                #     })
+                # except Exception as e:
+                #     logger.warning(e)
+                #     meas.append({
+                #         "Mode": "torch", "Device": "CPU", "Time": None,
+                #         "mxy": mxy, "mce": mce
+                #     })
+                #
+                # logger.info(f"__ Processing Matlab CPU\n")
+                # time = recon_ac_loraks_matlab(
+                #     k=k_us, rank=rank, regularization_lambda=regularization_lambda,
+                #     max_num_iter=max_num_iter, num_warmup_runs=num_warmup_runs, num_timer_runs=num_timer_runs
+                # )
+                # meas.append({
+                #     "Mode": "matlab", "Device": "CPU", "Time": time,
+                #     "mxy": mxy, "mce": mce
+                # })
 
         df = pl.DataFrame(meas)
-        fn = path_out.joinpath("results_df_latest").with_suffix(".json")
+        fn = path_out.joinpath("results_df_latest_gpu").with_suffix(".json")
         logger.info(f"Writing to {fn}")
         df.write_ndjson(fn)
 
@@ -191,7 +191,7 @@ def recon_ac_loraks(
 
     # timing
     t = Timer(
-        stmt="loraks_init_run(k, device, rank, regularization_lambda, max_num_iter)",
+        stmt="loraks_run(k, device, rank, regularization_lambda, max_num_iter)",
         setup="from __main__ import loraks_init_run",
         globals={"k": k, "device": device, "rank": rank, "regularization_lambda": regularization_lambda,
                  "max_num_iter": max_num_iter, }
