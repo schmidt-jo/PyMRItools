@@ -1,7 +1,7 @@
 import torch
 from typing import Tuple
 
-from pymritools.recon.loraks.matrix_indexing import get_linear_indices, get_circular_nb_indices_in_2d_shape
+from pymritools.recon.loraks.matrix_indexing import get_linear_indices
 from pymritools.recon.loraks.loraks import OperatorType
 
 

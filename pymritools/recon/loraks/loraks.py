@@ -97,13 +97,13 @@ class LoraksOptions(Serializable):
     Base options available in each Loraks algorithm.
     Do not use this class directly but instead its subclasses for the particular algorithm.
     """
-    loraks_type: LoraksImplementation = LoraksImplementation.P_LORAKS
+    loraks_type: LoraksImplementation = LoraksImplementation.AC_LORAKS
     loraks_neighborhood_size: int = 5
-    loraks_matrix_type: OperatorType = OperatorType.C
+    loraks_matrix_type: OperatorType = OperatorType.S
     rank: RankReduction = field(
         default_factory=lambda: RankReduction(method=RankReductionMethod.HARD_CUTOFF, value=150))
-    regularization_lambda: float = 0.1
-    max_num_iter: int = 300
+    regularization_lambda: float = 0.0
+    max_num_iter: int = 30
     device: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 
