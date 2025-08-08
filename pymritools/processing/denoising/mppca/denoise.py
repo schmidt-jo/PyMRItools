@@ -9,7 +9,7 @@ import tqdm
 from scipy.ndimage import binary_erosion
 
 from pymritools.config.processing import DenoiseSettingsMPPCA
-from pymritools.utils import nifti_load, nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load
+from pymritools.utils import nifti_load, nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load, torch_save
 from pymritools.recon.loraks.matrix_indexing import get_linear_indices
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from pymritools.config import setup_program_logging, setup_parser
@@ -406,9 +406,7 @@ def save_data(
         data_denoised: torch.Tensor, data_noise: torch.Tensor, data_p: torch.Tensor,
         nii_img: nib.Nifti1Image, out_path: plib.Path | str,
         noise_mask: torch.Tensor = None, data_denoised_nbc: torch.Tensor = None):
-    if data_denoised.shape[-2] > 1:
-        # [x, y, z, ch, t]
-        data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
+
     path_output = plib.Path(out_path).absolute()
 
     # save data
@@ -416,6 +414,12 @@ def save_data(
     data_noise = torch.squeeze(data_noise)
     # data_noise_sm_var = torch.squeeze(data_noise_sm_var)
     # data_denoised *= max_val / torch.max(data_denoised)
+
+    torch_save(data_denoised, path_to_file=path_output, file_name="denoised_data")
+
+    if data_denoised.shape[-2] > 1:
+        # [x, y, z, ch, t]
+        data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
 
     nifti_save(data=data_denoised.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data")
     nifti_save(data=data_noise.abs().numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
@@ -425,10 +429,6 @@ def save_data(
     # )
     nifti_save(data=data_p.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="avg_p")
 
-    #
-    # file_name = save_path.joinpath(name).with_suffix(".pt")
-    # logging.info(f"write file: {file_name.as_posix()}")
-    # torch.save(data_denoised, file_name.as_posix())
 
     if data_denoised_nbc is not None:
         if noise_mask is not None:
