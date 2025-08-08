@@ -11,6 +11,9 @@ sys.path.append(p_tests.as_posix())
 from tests.experiments.loraks.comparison_memory import torch_loraks_run
 from tests.utils import get_test_result_output_dir, ResultMode
 
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
+logging.getLogger("simple_parsing").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
