@@ -148,7 +148,7 @@ def recon_ac_loraks_matlab(
     savemat(matlab_input_file, matlab_input_data)
 
     logger.info("Calling MATLAB routine")
-    _ = run_ac_loraks_matlab_script(use_valgrind=False)
+    _ = run_ac_loraks_matlab_script(profile_memory=False)
 
     logger.info("Fetching results")
     results = loadmat(path.joinpath("output.mat").as_posix())
