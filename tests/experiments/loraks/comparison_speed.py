@@ -218,8 +218,10 @@ def load_df(path: plib.Path, name: str = ""):
     logger.info(f"Loading from {fn}")
 
     df = pl.read_ndjson(fn)
-    df = df.with_columns(pl.col('mxy').cast(pl.Int32))
-
+    df = df.with_columns(
+        pl.col('mxy').cast(pl.Int32),
+        pl.col('mce').cast(pl.Int32)
+    )
     df_plot = df.with_columns(
         pl.concat_str(
             [pl.col("Mode"), pl.col("Device")],
@@ -236,7 +238,7 @@ def load_df(path: plib.Path, name: str = ""):
     )
     # average across same matrix sizes but different nc / ne parameters
     df_plot = df_plot.group_by(["Mode", "Device", "mxy", "mce", "plot_mode", "plot_size"]).agg([
-        pl.col("Memory").mean().alias("Memory"),
+        # pl.col("Memory").mean().alias("Memory"),
         pl.col("Time").mean().alias("Time")
     ])
     return df_plot.sort(by=["mxy", "plot_mode"], descending=False)
@@ -415,10 +417,18 @@ def plot_per_size(name: str = ""):
         fig.write_image(fn)
 
 
-def table_per_mode(name: str = ""):
-    path_out = plib.Path(get_test_result_output_dir("speed_comparison", mode=ResultMode.EXPERIMENT))
+def table_per_mode():
+    path_out = plib.Path(get_test_result_output_dir("comparison_speed", mode=ResultMode.EXPERIMENT))
 
-    df = load_df(path=path_out, name=name)
+    df = load_df(path=path_out, name="latest_gpu")
+    # load and cleanup old data and join
+    df_old = load_df(path=path_out, name="2025-07-16")
+    df_old = df_old.filter(pl.col("Device") != "GPU")
+    logger.info(df)
+    logger.info(df_old)
+    df = pl.concat([df, df_old])
+    df = df.filter(~pl.col("Time").is_null())
+
     # get df time normalized by matlab time
     # create lookup reference
     reference_values = (
@@ -433,110 +443,88 @@ def table_per_mode(name: str = ""):
         )
         .drop("ref_time")
     )
-
+    df_norm = df_norm.filter(
+        (pl.col("Acceleration").is_not_null()) &
+        (pl.col("mce") > 400)
+    )
     df_norm.write_ndjson(
         path_out.joinpath("df_performance_benchmark").with_suffix(".json")
     )
 
-    # plot this quickly
-    fig = go.Figure()
-    fig2 = go.Figure()
+    # plot this
+    for l, t in enumerate(["Time", "Acceleration"]):
+        fig = go.Figure()
 
-    cm = "Inferno"
-    text_cmap = plc.sample_colorscale(cm, [0.8, 0.7, 0.1])
-    ann_a = []
-    ann_m = []
-    zmin = 0
-    zmax = df_norm["Acceleration"].max() * 0.85
-    mmax = df_norm["Memory"].max() * 0.85 * 1e-3
-    mxys = df_norm["mxy"].unique().sort(descending=False).to_numpy()
-    mces = df_norm["mce"].unique().sort(descending=False).to_numpy()
-    for i, m in enumerate(df_norm["plot_mode"].unique().sort()):
-        # build tensor to ensure order
-        acc = torch.zeros((mxys.shape[0], mces.shape[0]))
-        mem = torch.zeros((mxys.shape[0], mces.shape[0]))
-        for g, mxy in enumerate(mxys):
-            for h, mce in enumerate(mces):
-                df_tmp = df_norm.filter(
-                    (pl.col("plot_mode") == m) & (pl.col("mxy") == mxy) & (pl.col("mce") == mce)
-                )
-                za = df_tmp["Acceleration"]
-                zm = df_tmp["Memory"]
-                if len(za) > 1:
-                    logger.warning("Found more than one acceleration value for mode, mxy, mce combination!")
-                acc[g, h] = za[0]
-                mem[g, h] = zm[0]
-        fig.add_trace(
-            go.Surface(
-                x=mxys * 2, y=mces * 2,
-                z=acc.mT.numpy(), opacity=0.82,
-                cmin=zmin, cmax=zmax,
-                colorscale=cm,
-                showscale=i == 0,
-                colorbar=dict(
-                    titleside="right",
-                    title="",
-                    # title="Acceleration",
-                    thickness=20,
-                )
-            )
-        )
-        ann_a.append(dict(
-            text=m[0].capitalize() + m[1:], font=dict(color=text_cmap[i]),
-            showarrow=False, textangle=-18,
-            x=2 * mxys[0], y=2 * (mces[-3] + np.diff(mces)[-2] / 2), z=acc[0, -2] + [3, 5, 5][i]
-        ))
-        if i == 2:
-            fig2.add_trace(
+        cm = "Inferno"
+        text_cmap = plc.sample_colorscale(cm, [0.8, 0.7, 0.1])
+        ann_a = []
+        zmin = 0
+        zmax = df_norm[t].max()
+        cmax = df_norm[t].max()
+        for i, m in enumerate(df_norm["plot_mode"].unique().sort()):
+            ddd = df_norm.filter(pl.col("plot_mode") == m)
+            mxys = ddd["mxy"].unique().sort(descending=False).to_numpy()
+            mces = ddd["mce"].unique().sort(descending=False).to_numpy()
+
+            # build tensor to ensure order
+            acc = torch.zeros((mxys.shape[0], mces.shape[0]))
+            for g, mxy in enumerate(mxys):
+                for h, mce in enumerate(mces):
+                    df_tmp = df_norm.filter(
+                        (pl.col("plot_mode") == m) & (pl.col("mxy") == mxy) & (pl.col("mce") == mce)
+                    )
+                    za = df_tmp[t]
+                    if len(za) > 1:
+                        logger.warning("Found more than one acceleration value for mode, mxy, mce combination!")
+                    if za[0] is None:
+                        logger.warning(f"Found null acceleration value for mode, {mxy}, {mce} combination!")
+                    acc[g, h] = za[0]
+            fig.add_trace(
                 go.Surface(
                     x=mxys * 2, y=mces * 2,
-                    z=mem.mT.numpy() * 1e-3, opacity=0.82,
-                    cmin=zmin, cmax=mmax,
-                    colorscale=cm, showscale=True,
+                    z=acc.mT.numpy(), opacity=0.9,
+                    cmin=zmin, cmax=cmax,
+                    colorscale=cm,
+                    showscale=i == 0,
                     colorbar=dict(
                         titleside="right",
-                        # title="Memory [GB]",
                         title="",
+                        # title="Acceleration",
                         thickness=20,
                     )
                 )
             )
-    # add a point for a modern scan sizes
-    df_pts = df_norm.filter(
-        (pl.col("mxy") == 70800) & (pl.col("mce") == 1600)
-    ).drop(["Mode", "plot_mode", "plot_size", "Time"])
-
-    for i, t in enumerate(["Acceleration", "Memory"]):
-        df_pt = df_pts.filter(pl.col("Device").is_in(["GPU"]))
-        if i == 1:
-            f = 1e-3
-            ff = 0
-        else:
-            f = 1
-            ff = 0
-        fff = fig if i == 0 else fig2
-        fff.add_trace(
-            go.Scatter3d(
-                x=df_pt["mxy"] * 2, y=df_pt["mce"] * 2, z=df_pt[t] * f, marker=dict(color="red", symbol="x", size=3),
-                showlegend=False
-            )
-        )
-        val = df_pt[t].unique().sort(descending=True)[ff] * f
-        d = dict(
-            text=f"{val:.1f} {['', 'GB'][i]}", x=70800 * 2, y=1400 * 2, z=val * 1.5, showarrow=False, yanchor="bottom",
-            font=dict(color="red")
-        )
-        if i == 0:
-            ann_a.append(d)
-        else:
-            ann_m.append(d)
+            ann_a.append(dict(
+                text=m[0].capitalize() + m[1:], font=dict(color=text_cmap[i]),
+                showarrow=False, textangle=-18,
+                x=2.2 * mxys[0], y=2.2 * (mces[-3] + np.diff(mces)[-2] / 2), z=acc[0, -2] + [3, 5, 5][i]
+            ))
+        # add a point for a modern scan size
+        # df_pts = df_norm.filter(
+        #     (pl.col("mxy") == 70800) & (pl.col("mce") == 1600)
+        # ).drop(["Mode", "plot_mode", "plot_size", "Time"])
+        #
+        # df_pt = df_pts.filter(pl.col("Device").is_in(["GPU"]))
+        #
+        # fig.add_trace(
+        #     go.Scatter3d(
+        #         x=df_pt["mxy"] * 2, y=df_pt["mce"] * 2, z=df_pt["Acceleration"], marker=dict(color="red", symbol="x", size=3),
+        #         showlegend=False
+        #     )
+        # )
+        # val = df_pt[t].unique().sort(descending=True)[0]
+        # d = dict(
+        #     text=f"{val:.1f}", x=70800 * 2, y=1400 * 2, z=val * 1.2, showarrow=False, yanchor="bottom",
+        #     font=dict(color="red")
+        # )
+        # ann_a.append(d)
         scene = dict(
             camera=dict(
                 up=dict(x=0, y=0, z=1),
                 center=dict(x=0, y=0, z=-0.2),
                 eye=dict(x=-2.1, y=1.05, z=0.8)
             ),
-            annotations=ann_a if i == 0 else ann_m,
+            # annotations=ann_a,
             xaxis=dict(
                 # title="Matrix size N<sub>x</sub> x N<sub>y</sub>",
                 title="",
@@ -547,28 +535,45 @@ def table_per_mode(name: str = ""):
             # yaxis=dict(title="Matrix size N<sub>c</sub> x N<sub>e</sub> x N<sub>b</sub>",),
             yaxis=dict(title="", ),
             # zaxis=dict(title="Acceleration     " if i==0 else "Memory [GB]     ")
-            zaxis=dict(title="")
+            zaxis=dict(title="", range=(0, zmax))
         )
 
-        fff.update_scenes(
+        fig.update_scenes(
             scene
         )
-        fff.update_layout(
+        fig.update_layout(
             width=450, height=450,
             margin=dict(t=20, b=20, l=0, r=0)
 
         )
         fn = path_out.joinpath(f"performance_benchmark_{t}".lower()).with_suffix(".html")
         logger.info(f"write file: {fn}")
-        fff.write_html(fn)
+        fig.write_html(fn)
         for suff in [".pdf", ".png"]:
             fn = fn.with_suffix(suff)
             logger.info(f"write file: {fn}")
-            fff.write_image(fn)
+            fig.write_image(fn)
+
+
+def print_table():
+    path_out = plib.Path(get_test_result_output_dir("comparison_speed", mode=ResultMode.EXPERIMENT))
+    df = pl.read_ndjson(path_out.joinpath("df_performance_benchmark").with_suffix(".json"))
+
+    logger.info(df.filter(pl.col("Device") == "GPU")["Acceleration"].mean())
+    logger.info(df.filter((pl.col("Device") == "CPU") & (pl.col("Mode") == "torch"))["Acceleration"].mean())
+    logger.info(df["mxy"].unique())
+    logger.info(df["mce"].unique())
+    df = df.filter(
+        (pl.col("mxy").is_in([48000, 78400])) &
+        (pl.col("mce").is_in([800, 2500]))
+    ).sort(by=["mxy", "mce", "Mode", "Device"], descending=False)
+    logger.info(df)
+    df.write_ndjson(path_out.joinpath("df_performance_benchmark_filtered").with_suffix(".json"))
 
 
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
-    compute()
-    # table_per_mode("2025-07-16")
+    # compute()
+    # table_per_mode()
+    print_table()
