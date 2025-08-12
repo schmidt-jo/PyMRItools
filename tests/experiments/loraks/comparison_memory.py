@@ -179,9 +179,9 @@ def compute():
     # get path
     path_out = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT))
     # do loops for different data sizes
-    ms_xy = torch.linspace(100*100, 240*240, 5)
-    ncs = torch.arange(4, 33, 8)
-    nes = torch.arange(2, 6, 2)
+    ms_xy = torch.linspace(100*100, 280*280, 10)
+    ncs = torch.arange(4, 37, 4)
+    nes = torch.arange(2, 6, 1)
     # ms_xy = torch.tensor([10000])
     # ncs = torch.tensor([4])
     # nes = torch.tensor([2])
@@ -215,23 +215,23 @@ def compute():
                 _, k_us = create_phantom(shape_xyct=(nx.item(), ny.item(), nc.item(), ne.item()), acc=3,
                                          ac_lines=ny.item() // 6.5)
 
-                # logger.info(f"__ Processing Torch GPU\n")
-                # if not torch.cuda.is_available():
-                #     msg = "No GPU device available, skipping GPU benchmark"
-                #     logger.warning(msg)
-                # else:
-                #     try:
-                #         mem_usage = recon_ac_loraks_gpu(
-                #             k=k_us.clone(), device=torch.device("cuda:0"),
-                #             rank=rank, regularization_lambda=regularization_lambda,
-                #             max_num_iter=max_num_iter
-                #         )
-                #     except Exception as e:
-                #         logger.warning(e)
-                #         mem_usage = "Maxed Out"
-                #     meas.append({
-                #         "Mode": "torch", "Device": "GPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
-                #     })
+                logger.info(f"__ Processing Torch GPU\n")
+                if not torch.cuda.is_available():
+                    msg = "No GPU device available, skipping GPU benchmark"
+                    logger.warning(msg)
+                else:
+                    try:
+                        mem_usage = recon_ac_loraks_gpu(
+                            k=k_us.clone(), device=torch.device("cuda:0"),
+                            rank=rank, regularization_lambda=regularization_lambda,
+                            max_num_iter=max_num_iter
+                        )
+                    except Exception as e:
+                        logger.warning(e)
+                        mem_usage = -1
+                    meas.append({
+                        "Mode": "torch", "Device": "GPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
+                    })
 
                 logger.info(f"__ Processing Torch CPU\n")
                 write_df(meas, path_out)
