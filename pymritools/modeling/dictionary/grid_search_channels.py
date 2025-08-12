@@ -6,13 +6,15 @@ import numpy as np
 import torch
 import json
 
+from torch import Tensor
+
 from pymritools.modeling.dictionary.setup import setup_db, setup_b1, setup_path, setup_input, setup_b0
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.emc import EmcFitSettings
 from pymritools.config.database import DB
 from pymritools.utils import nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load, nifti_load
 
-log_module = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def smooth_map(data: torch.Tensor, kernel_size: int = 5):
@@ -38,8 +40,8 @@ def smooth_map(data: torch.Tensor, kernel_size: int = 5):
 
 def fit_megesse():
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-    log_module.info(f"set device: {device}")
-    log_module.info(f"Load data")
+    logger.info(f"set device: {device}")
+    logger.info(f"Load data")
     data = torch_load(
         "/data/pt_np-jschmidt/data/00_phantom_scan_data/2025-03-06_megesse_tests/raw/megesse_cesp_axial/gnc/"
         "img_gnc_cplx_slice.pt"
@@ -48,7 +50,7 @@ def fit_megesse():
     affine = torch_load(
         "/data/pt_np-jschmidt/data/00_phantom_scan_data/2025-03-06_megesse_tests/raw/megesse_cesp_axial/affine.pt"
     )
-    log_module.info(f"load database")
+    logger.info(f"load database")
     db = DB.load(
         "/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/2025-03-03_megesse_phantom_vfa/emc/"
         "test_batch/db_megesse_cesp.pkl"
@@ -64,7 +66,7 @@ def fit_megesse():
     ) as j_file:
         te = json.load(j_file)
 
-    log_module.info("Get Params")
+    logger.info("Get Params")
     te = torch.tensor(te)
     gre_attenuation_times = torch.zeros_like(te)
     gre_attenuation_times[:5] = torch.abs(te[:5] - te[0])
@@ -84,11 +86,11 @@ def fit_megesse():
     # get t2 and b1 values
     t1_vals, t2_vals, b1_vals, b0_vals = db.get_t1_t2_b1_b0_values()
 
-    log_module.info("normalize data")
+    logger.info("normalize data")
     # data_rsos = root_sum_of_squares(input_data=data, dim_channel=-2)
     data_rsos = data
 
-    log_module.info("prep database")
+    logger.info("prep database")
 
     t1t2b1b0_vals = torch.tensor([
         [t1, t2, b1, b0] for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals for b0 in b0_vals
@@ -116,7 +118,7 @@ def fit_megesse():
     # prep for b1 estimation
     db_se = torch.reshape(db_se, (-1, db_se.shape[-1]))
 
-    log_module.info("Allocate data")
+    logger.info("Allocate data")
 
     t2 = torch.zeros(data_normed_se.shape[:-1])
     r2p = torch.zeros(data_normed_se.shape[:-1])
@@ -127,7 +129,7 @@ def fit_megesse():
     loss_residual = torch.zeros(data_normed_se.shape[:-1])
     phase_offset = torch.zeros(data_normed_se.shape[:-1])
 
-    log_module.info(f"rough estimate R2*")
+    logger.info(f"rough estimate R2*")
     r2s = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
     residual = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
     weights = torch.tensor((3/4, 1/4))
@@ -163,7 +165,7 @@ def fit_megesse():
     nifti_save(torch.clamp_min(r2s, 0.0), img_aff=affine, path_to_dir=path, file_name="r2s_rough")
     nifti_save(weights, img_aff=affine, path_to_dir=path, file_name="r2s_weights")
 
-    log_module.info(f"rough estimate R2+")
+    logger.info(f"rough estimate R2+")
     r2dag = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
     residual = torch.squeeze(torch.zeros((*data_normed_se.shape[:-1], 2)))
     weights = torch.tensor((3/4, 1/4))
@@ -199,15 +201,15 @@ def fit_megesse():
     nifti_save(torch.clamp_min(r2dag, 0.0), img_aff=affine, path_to_dir=path, file_name="r2dagger_rough")
     nifti_save(weights, img_aff=affine, path_to_dir=path, file_name="r2_dagger_weights")
 
-    log_module.info(f"rough estimate R2 & R2'")
+    logger.info(f"rough estimate R2 & R2'")
     rough_r2 = 0.5 * (r2s + r2dag)
     rough_r2p = 0.5 * (r2s - r2dag)
     nifti_save(rough_r2, img_aff=affine, path_to_dir=path, file_name="r2_rough")
     nifti_save(rough_r2p, img_aff=affine, path_to_dir=path, file_name="r2p_rough")
 
-    log_module.info(f"Estimate rough B0 / B1")
+    logger.info(f"Estimate rough B0 / B1")
     for idx_z in range(data_normed_se.shape[2]):
-        log_module.info(f"Process slice: {idx_z + 1} / {data_normed_se.shape[2]}")
+        logger.info(f"Process slice: {idx_z + 1} / {data_normed_se.shape[2]}")
         for idx_x in tqdm.trange(data_normed_se.shape[0]):
             data_batch = data_normed_se[idx_x, :, idx_z].to(device)
 
@@ -226,7 +228,7 @@ def fit_megesse():
             b0[idx_x, :, idx_z] = batch_t1t2b1b0_vals[..., 3].cpu()
             loss_residual[idx_x, :, idx_z] = vals
 
-    log_module.info("B1 smoothing")
+    logger.info("B1 smoothing")
     b1_map = smooth_map(b1, kernel_size=min(b1.shape[:2]) // 32)
 
     nifti_save(b1, img_aff=affine, path_to_dir=path, file_name="reg_b1_estimate")
@@ -246,7 +248,7 @@ def fit_megesse():
     nifti_save(weights, img_aff=affine, path_to_dir=path, file_name="reg_b1_weights")
     nifti_save(b1_map, img_aff=affine, path_to_dir=path, file_name="reg_b1_combined")
 
-    log_module.info("prep data")
+    logger.info("prep data")
     data_norm = torch.linalg.norm(data_rsos, dim=-1, keepdim=True)
     data_normed = torch.nan_to_num(data_rsos / data_norm)
     # data_normed = torch.abs(data_normed).unsqueeze(-2)
@@ -254,7 +256,7 @@ def fit_megesse():
     b1_map = b1_map.unsqueeze(-1)
     # sample r2p
     r2p_att = torch.exp(-gre_attenuation_times[None] * r2p_vals[:, None]).to(device)
-    log_module.info("sample r2p db")
+    logger.info("sample r2p db")
     db_r2p = torch.zeros((*db_shape[:-1], r2p_att.shape[0], db_shape[-1]), dtype=db_pattern.dtype)
 
     for idx_t2 in tqdm.trange(t2_vals.shape[0]):
@@ -266,7 +268,7 @@ def fit_megesse():
     # now has dims [t1, t2, ny, b0, t]
     # r2p samples have dims [r2p, t] - > want [t1, t2, ny, b0, r2p, t]
 
-    log_module.info("B1 Regularized matching")
+    logger.info("B1 Regularized matching")
     batch_size = 100
     num_batches = int(np.ceil(data_normed.shape[1] / batch_size))
 
@@ -309,12 +311,12 @@ def fit_megesse():
                 r2p[idx_x, start:end, idx_z] = batch_t1t2b0r2p[:, 3]
                 phase_offset[idx_x, start:end, idx_z] = po
 
-    # log_module.info("B0 smoothing")
+    # logger.info("B0 smoothing")
     # b0_map = smooth_map(b0, kernel_size=min(b1.shape[:2]) // 32)
     # nifti_save(b0, img_aff=affine, path_to_dir=path, file_name="se_b0_estimate")
     # nifti_save(b0_map, img_aff=affine, path_to_dir=path, file_name="se_b0_smoothed")
     #
-    # log_module.info("B0 Regularized matching")
+    # logger.info("B0 Regularized matching")
     # for idx_z in range(data_normed.shape[2]):
     #     for idx_x in tqdm.trange(data_normed.shape[0]):
     #     # for idx_x in tqdm.trange(20):
@@ -361,7 +363,7 @@ def fit_megesse():
     r2 = torch.nan_to_num(1 / t2)
     t2 = 1e3 * t2
 
-    log_module.info(f"Combining channels")
+    logger.info(f"Combining channels")
     # weights = (l2_residual_upper_limit - torch.clamp(l2_res, 0, l2_residual_upper_limit)) / l2_residual_upper_limit
     weights = (
         torch.clamp(loss_residual, loss_residual_lower_limit, loss_residual_upper_limit) - loss_residual_lower_limit
@@ -383,7 +385,7 @@ def fit_megesse():
         torch.sum(weights * b1, dim=-1) / torch.sum(weights, dim=-1)
     )
 
-    log_module.info(f"Saving channel fits")
+    logger.info(f"Saving channel fits")
     # reshape & save
     names = ["ch_optimize_residual", "ch_r2", "ch_t2", "weights", "r2", "r2p", "r2s", "b0", "b1", "phase_offset"]
     for i, r in enumerate([loss_residual, r2, t2, weights, r2_combined, r2p_combined, r2s, b0, b1, phase_offset]):
@@ -395,8 +397,8 @@ def fit_megesse():
 
 def fit_revisited():
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-    log_module.info(f"set device: {device}")
-    log_module.info(f"Load data")
+    logger.info(f"set device: {device}")
+    logger.info(f"Load data")
     # data, img = nifti_load(
     #     "/data/pt_np-jschmidt/data/01_in_vivo_scan_data/paper_protocol_mese/7T/2023-12-08/processed/"
     #     "denoising/d_mppca_fixed-p-1_mod_semc_r0p7_fa140_z4000_pat2-36_sl31-200_esp9p5_nbc-manjon.nii"
@@ -411,7 +413,7 @@ def fit_revisited():
     affine = torch_load(
         "/data/pt_np-jschmidt/data/00_phantom_scan_data/2025-03-20_mese_fs/raw/mese_fs_vfa/affine.pt"
     )
-    log_module.info(f"load database")
+    logger.info(f"load database")
     db = DB.load(
         "/data/pt_np-jschmidt/data/00_phantom_scan_data/2025-03-20_mese_fs/emc/mese_vfa/mese_vfa_kernels.pkl"
     )
@@ -452,7 +454,7 @@ def fit_revisited():
     b1 = torch.zeros(data_normed.shape[:-1])
     l2_res = torch.zeros(data_normed.shape[:-1])
 
-    log_module.info(f"l2 fit - b1 estimate")
+    logger.info(f"l2 fit - b1 estimate")
     batch_size = 1
     num_batches = int(np.ceil(data_normed.shape[0] / batch_size))
     for idx_c in tqdm.trange(data_normed.shape[-2], desc="channel wise processing"):
@@ -469,7 +471,7 @@ def fit_revisited():
                 b1[start:end, :, idx_z, idx_c] = batch_t1t2b1b0_vals[..., 2].cpu()
                 l2_res[start:end, :, idx_z, idx_c] = vals
 
-    log_module.info("B1 smoothing")
+    logger.info("B1 smoothing")
     b1_map = smooth_map(b1, kernel_size=min(b1.shape[:2]) // 32)
 
     nifti_save(b1, img_aff=affine, path_to_dir=path, file_name="reg_b1_estimate")
@@ -492,7 +494,7 @@ def fit_revisited():
     db_pattern_normed = torch.reshape(db_pattern_normed, (-1, *db_pattern_normed.shape[-2:]))
     l2_res = torch.zeros(data_normed.shape[:-1])
 
-    log_module.info("Regularized fit")
+    logger.info("Regularized fit")
     # do slice wise processing
     for idx_z in tqdm.trange(data_normed.shape[2], desc="Processing, slice wise with b1 reg."):
         for idx_c in range(data_normed.shape[3]):
@@ -523,7 +525,7 @@ def fit_revisited():
     r2 = torch.nan_to_num(1 / t2)
     t2 = 1e3 * t2
 
-    log_module.info(f"Combining channels")
+    logger.info(f"Combining channels")
     weights = (l2_residual_upper_limit - torch.clamp(l2_res, 0, l2_residual_upper_limit)) / l2_residual_upper_limit
     weights = smooth_map(weights, kernel_size=5)
 
@@ -532,7 +534,7 @@ def fit_revisited():
         torch.sum(weights * r2, dim=-1) / torch.sum(weights, dim=-1)
     )
 
-    log_module.info(f"Saving channel fits")
+    logger.info(f"Saving channel fits")
     # reshape & save
     names = ["ch_optimize_residual", "ch_r2", "ch_t2", "weights", "r2"]
     for i, r in enumerate([l2_res, r2, t2, weights, r2_combined]):
@@ -542,23 +544,23 @@ def fit_revisited():
         )
 
 
-def fit_mese(settings: EmcFitSettings):
+def wrap_cli(settings: EmcFitSettings):
     device = torch.device("cuda:0") if settings.use_gpu and torch.cuda.is_available() else torch.device("cpu")
-    log_module.info(f"set device: {device}")
+    logger.info(f"set device: {device}")
 
-    log_module.info(f"Load data")
+    logger.info(f"Load data")
     data = torch_load(settings.input_data)
 
     if settings.process_slice:
         data = data[:, :, data.shape[2] // 2, None]
     affine = torch_load(settings.input_affine) if settings.input_affine else torch.eye(4)
 
-    log_module.info(f"load database")
+    logger.info(f"load database")
     db = DB.load(settings.input_database)
 
     path = plib.Path(settings.out_path)
 
-    log_module.info(f"Prepare data")
+    logger.info(f"Prepare data")
     # get torch tensors
     db_torch_mag, db_torch_phase = db.get_torch_tensors_t1t2b1b0e()
     # get t2 and b1 values
@@ -566,115 +568,102 @@ def fit_mese(settings: EmcFitSettings):
 
     # fft reconned k-space
     data = fft_to_img(data, dims=(0, 1))
-    # normalize data
-    data_rsos = root_sum_of_squares(input_data=data, dim_channel=-2)
-    data_norm_rsos = torch.linalg.norm(data_rsos, dim=-1, keepdim=True)
-    data_rsos_normed = torch.nan_to_num(data_rsos / data_norm_rsos)
-
-    data_norm = torch.linalg.norm(data, dim=-1, keepdim=True)
-    data_normed = torch.nan_to_num(data / data_norm)
-    data_normed = torch.abs(data_normed)
 
     # set database
     db_pattern = db_torch_mag * torch.exp(1j * db_torch_phase)
-    db_shape = db_pattern.shape
-    # normalize database
-
-    db_norm = torch.linalg.norm(db_pattern, dim=-1, keepdim=True)
-    db_pattern_normed = torch.nan_to_num(db_pattern / db_norm)
-    db_pattern_normed = torch.reshape(db_pattern_normed, (-1, db_pattern_normed.shape[-1]))
-    # abs values
-    db_pattern_normed = torch.abs(db_pattern_normed)
-    db_pattern_normed = db_pattern_normed.to(dtype=data_normed.dtype, device=device)
-
-    t2 = torch.zeros(data_normed.shape[:-1])
-    b1 = torch.zeros(data_normed.shape[:-1])
-    l2_res = torch.zeros(data_normed.shape[:-1])
-
-    t2_rsos = torch.zeros(data_rsos_normed.shape[:-1])
-    b1_rsos = torch.zeros(data_rsos_normed.shape[:-1])
-    l2_res_rsos = torch.zeros(data_rsos_normed.shape[:-1])
 
     path_in_b1 = plib.Path(settings.input_b1)
     if not path_in_b1.is_file():
-        log_module.info(f"No B1 input given or input invalid, estimating B1 from data")
-        t1t2b1b0_vals = torch.tensor([
-            [t1, t2, b1, b0] for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals for b0 in b0_vals
-        ], device=device)
-
-        log_module.info(f"l2 fit - b1 estimate")
-        batch_size = 10
-        num_batches = int(np.ceil(data_normed.shape[0] / batch_size))
-        for idx_c in tqdm.trange(data_normed.shape[-2], desc="channel wise processing"):
-            for idx_z in range(data_normed.shape[2]):
-                for idx_x in range(num_batches):
-                    start = idx_x * batch_size
-                    end = min((idx_x + 1) * batch_size, data_normed.shape[0])
-                    data_batch = data_normed[start:end, :, idx_z, idx_c, :].to(device)
-
-                    l2 = torch.linalg.norm(data_batch[:, None] - db_pattern_normed[None, :,  None], dim=-1)
-                    vals, indices = torch.min(l2, dim=1)
-                    batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
-
-                    b1[start:end, :, idx_z, idx_c] = batch_t1t2b1b0_vals[..., 2].cpu()
-                    l2_res[start:end, :, idx_z, idx_c] = vals
-
-        log_module.info(f"l2 fit - b1 estimate - rsos")
-        for idx_z in range(data_rsos_normed.shape[2]):
-            for idx_x in range(num_batches):
-                start = idx_x * batch_size
-                end = min((idx_x + 1) * batch_size, data_rsos_normed.shape[0])
-                data_batch = data_rsos_normed[start:end, :, idx_z, :].to(device)
-
-                l2 = torch.linalg.norm(data_batch[:, None] - db_pattern_normed[None, :, None], dim=-1)
-                vals, indices = torch.min(l2, dim=1)
-                batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
-
-                b1_rsos[start:end, :, idx_z] = batch_t1t2b1b0_vals[..., 2].cpu()
-                l2_res_rsos[start:end, :, idx_z] = vals
-
-        log_module.info("B1 smoothing")
-        b1_map = smooth_map(b1, kernel_size=min(b1.shape[:2]) // 32)
-        b1_map_rsos = smooth_map(b1_rsos, kernel_size=min(b1_rsos.shape[:2]) // 32)
-
-        nifti_save(b1, img_aff=affine, path_to_dir=path, file_name="reg_b1_estimate")
-        nifti_save(b1_map, img_aff=affine, path_to_dir=path, file_name="reg_b1_smoothed")
-        nifti_save(b1_rsos, img_aff=affine, path_to_dir=path, file_name="rsos_reg_b1_estimate")
-        nifti_save(b1_map_rsos, img_aff=affine, path_to_dir=path, file_name="rsos_reg_b1_smoothed")
-
-        b1_map = torch.from_numpy(
-            nifti_load(path.joinpath("rsos_reg_b1_smoothed").with_suffix(".nii"))[0]
-        ).unsqueeze(-1).expand(b1.shape)
+        logger.info(f"No B1 input given or input invalid, estimating B1 from data")
+        b1_data = None
     else:
         b1_map = torch.from_numpy(nifti_load(path_in_b1)[0])
         if b1_map.max() > 10:
             b1_map /= 100
         if settings.process_slice:
             b1_map = b1_map[:, :, b1_map.shape[2] // 2, None]
-        while b1_map.shape.__len__() < data_normed.shape.__len__() - 1:
+        while b1_map.ndim < data.ndim - 1:
             b1_map = b1_map.unsqueeze(-1)
-        b1_map = b1_map.expand(data_normed.shape[:-1])
-        b1_map_rsos = root_sum_of_squares(b1_map, dim_channel=-1)
+        b1_data = b1_map.expand_as(data[..., 0])
 
-    log_module.info("Regularized fit")
-    t1t2b0_vals = torch.tensor([
-        [t1, t2, b0] for t1 in t1_vals for t2 in t2_vals for b0 in b0_vals
-    ], device=device)
+    if settings.rsos_channel_combine:
+        b1_data = root_sum_of_squares(b1_data, dim_channel=-1).unsqueeze(-1) if b1_data is not None else None
+        data = root_sum_of_squares(input_data=data, dim_channel=-2).unsqueeze(-2)
+
+    fit_mese(
+        data_xyzce=data, db_t1t2b1b0=db_pattern,
+        t1_vals=t1_vals, t2_vals=t2_vals, b1_vals=b1_vals, b0_vals=b0_vals,
+        path_out=path, b1_data=b1_data, device=device, input_affine=affine
+    )
+
+
+def normalize_data(data, dim: int = -1):
+    norm = torch.linalg.norm(data, dim=dim, keepdims=True)
+    return torch.nan_to_num(data / norm, posinf=0.0, nan=0.0)
+
+
+def estimate_b1_from_db(
+        data: torch.Tensor, db_t1t2b1b0: torch.Tensor, device: torch.device,
+        t1t2b1b0_vals: torch.Tensor,batch_size: int = 10):
+    logger.info(f"l2 fit - b1 estimate")
+    num_batches = int(np.ceil(data.shape[0] / batch_size))
+    b1_alloc = torch.zeros(data.shape[:-1])
+    db_shape = db_t1t2b1b0.shape
+    db_t1t2b1b0 = db_t1t2b1b0.to(device)
+
+    if data.ndim < 5:
+        msg = f"Assume 4D input data, added singular channel dim for processing"
+        logger.info(msg)
+        # we insert a channel dimension to make this function compatible with rsos and non rsos data
+        data.unsqueeze_(-2)
+    if data.ndim < 5:
+        # if data is still smaller we throw an error
+        msg = f"Input data assumed to be at least 4D (x y z (c) e), got: {data.shape}"
+        logger.error(msg)
+        raise AttributeError(msg)
+
+    for idx_c in tqdm.trange(data.shape[-2], desc="channel dim processing"):
+        for idx_z in range(data.shape[2]):
+            for idx_x in range(num_batches):
+                start = idx_x * batch_size
+                end = min((idx_x + 1) * batch_size, data.shape[0])
+                data_batch = data[start:end, :, idx_z, idx_c, :].to(device)
+
+                l2 = torch.linalg.norm(data_batch[:, None] - db_t1t2b1b0.view(-1, db_shape[-1])[None, :, None], dim=-1)
+                vals, indices = torch.min(l2, dim=1)
+                batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
+
+                b1_alloc[start:end, :, idx_z, idx_c] = batch_t1t2b1b0_vals[..., 2].cpu()
+
+    logger.info("B1 smoothing")
+    b1_alloc = smooth_map(b1_alloc, kernel_size=min(b1_alloc.shape[:2]) // 32)
+    return b1_alloc
+
+
+def regularised_fit(
+        data: torch.Tensor, db_t1t2b1b0: torch.Tensor, b1_data: torch.Tensor,
+        b1_vals: torch.Tensor, t1t2b0_vals: torch.Tensor,
+        device: torch.device) -> (torch.Tensor, torch.Tensor):
+    logger.info("Regularized fit")
     # prepare the database for b1 regularization
-    db_pattern_normed = torch.reshape(db_pattern_normed, db_shape)
-    db_pattern_normed = torch.movedim(db_pattern_normed, -2, 2)
-    db_pattern_normed = torch.reshape(db_pattern_normed, (-1, *db_pattern_normed.shape[-2:]))
-    l2_res = torch.zeros(data_normed.shape[:-1])
+    db_shape = db_t1t2b1b0.shape
+    db_b1_reg = torch.movedim(db_t1t2b1b0, -2, 2)
+    db_b1_reg = torch.reshape(db_b1_reg, (-1, *db_b1_reg.shape[-2:])).to(device)
+    b1_vals = b1_vals.to(device)
+
+    # allocate
+    l2_res = torch.zeros(data.shape[:-1])
+    t2 = torch.zeros(data.shape[:-1])
 
     # do slice wise processing
-    for idx_z in tqdm.trange(data_normed.shape[2], desc="Processing, slice wise with b1 reg."):
-        for idx_c in range(data_normed.shape[3]):
-            data_batch = data_normed[:, :, idx_z, idx_c].to(device)
-            b1_batch = b1_map[:, :, idx_z, idx_c]
+    for idx_z in tqdm.trange(data.shape[2], desc="Processing, slice wise with b1 reg."):
+        for idx_c in range(data.shape[3]):
+            data_batch = data[:, :, idx_z, idx_c].to(device)
+            b1_batch = b1_data[:, :, idx_z, idx_c].to(device)
             # want the database to be pulled towards the b1 regularization, b1-batch [nx, ny]
             b1_loss = torch.abs(b1_batch[None] - b1_vals[:, None, None])
             _, b1_indices = torch.min(b1_loss, dim=0)
-            db_batch = db_pattern_normed[:, b1_indices, :]
+            db_batch = db_b1_reg[:, b1_indices, :]
             # now db dims match with data batch
             # db [t1t2b0, nx, ny, nc, t], data_batch [nx, ny, nc, t]
             loss = torch.linalg.norm(
@@ -692,54 +681,66 @@ def fit_mese(settings: EmcFitSettings):
 
             l2_res[:, :, idx_z, idx_c] = vals
             t2[:, :, idx_z, idx_c] = batch_t1t2b0[..., 1].cpu()
+    return t2, l2_res
 
-    for idx_z in tqdm.trange(data_rsos_normed.shape[2], desc="Processing, slice wise with b1 reg."):
-        data_batch = data_rsos_normed[:, :, idx_z].to(device)
-        b1_batch = b1_map_rsos[:, :, idx_z]
-        # want the database to be pulled towards the b1 regularization, b1-batch [nx, ny]
-        b1_loss = torch.abs(b1_batch[None] - b1_vals[:, None, None])
-        _, b1_indices = torch.min(b1_loss, dim=0)
-        db_batch = db_pattern_normed[:, b1_indices, :]
-        # now db dims match with data batch
-        # db [t1t2b0, nx, ny, nc, t], data_batch [nx, ny, nc, t]
-        loss = torch.linalg.norm(
-            torch.abs(data_batch[None]) - torch.abs(db_batch), dim=-1
+
+def fit_mese(
+        data_xyzce: torch.Tensor, db_t1t2b1b0: torch.Tensor,
+        t1_vals: torch.Tensor, t2_vals: torch.Tensor, b1_vals: torch.Tensor, b0_vals: torch.Tensor,
+        path_out: plib.Path,
+        b1_data: torch.Tensor = None, device: torch.device = torch.get_default_device(),
+        input_affine: torch.Tensor = torch.eye(4)):
+    logger.info(f"Fit MESE")
+    # normalize data
+    data_xyzce = normalize_data(data_xyzce, dim=-1)
+    # save shape
+    db_shape = db_t1t2b1b0.shape
+    # normalise database
+    db_t1t2b1b0 = normalize_data(db_t1t2b1b0, dim=-1)
+
+    # set up values
+    t1t2b1b0_vals = torch.tensor([
+        [t1, t2, b1, b0] for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals for b0 in b0_vals
+    ], device=device)
+    t1t2b0_vals = torch.tensor([
+        [t1, t2, b0] for t1 in t1_vals for t2 in t2_vals for b0 in b0_vals
+    ], device=device)
+
+    if b1_data is None:
+        b1_data = estimate_b1_from_db(
+            data=data_xyzce, db_t1t2b1b0=db_t1t2b1b0, t1t2b1b0_vals=t1t2b1b0_vals, device=device
         )
-        vals, indices = torch.min(loss, dim=0)
+        nifti_save(b1_data, img_aff=input_affine, path_to_dir=path_out, file_name="b1_estimate_smoothed")
 
-        # loss = torch.linalg.vecdot(data_batch[None], db_batch, dim=-1)
-        # dot_mag = torch.abs(loss)
-        # dot_phase = torch.abs(torch.angle(loss))
-        # dot = (1 - phase_weighting) * dot_mag - phase_weighting * dot_phase
-        # vals, indices = torch.max(dot, dim=0)
-
-        batch_t1t2b0 = t1t2b0_vals[indices]
-
-        l2_res_rsos[:, :, idx_z] = vals
-        t2_rsos[:, :, idx_z] = batch_t1t2b0[..., 1].cpu()
-
+    t2, l2_res = regularised_fit(
+        data=data_xyzce, db_t1t2b1b0=db_t1t2b1b0, t1t2b0_vals=t1t2b0_vals,
+        b1_data=b1_data, b1_vals=b1_vals,
+        device=device
+    )
     r2 = torch.nan_to_num(1 / t2)
     t2 = 1e3 * t2
-    r2_rsos = torch.nan_to_num(1 / t2_rsos)
-    t2_rsos = 1e3 * t2_rsos
 
-    log_module.info(f"Combining channels")
-    l2_residual_upper_limit = 0.15
+    logger.info(f"Combining channels")
+    l2_res = l2_res**2
+    l2_residual_upper_limit = l2_res.median() / 3
     weights = (l2_residual_upper_limit - torch.clamp(l2_res, 0, l2_residual_upper_limit)) / l2_residual_upper_limit
     weights = smooth_map(weights, kernel_size=5)
 
-    # weighted averaging
+    # weighted averaging - would just give the same if used with rsos i.e. one channel
     r2_combined = torch.nan_to_num(
         torch.sum(weights * r2, dim=-1) / torch.sum(weights, dim=-1)
     )
+    b1_combined = torch.nan_to_num(
+        torch.sum(weights * b1_data, dim=-1) / torch.sum(weights, dim=-1)
+    )
 
-    log_module.info(f"Saving channel fits")
+    logger.info(f"Saving channel fits")
     # reshape & save
-    names = ["ch_optimize_residual", "ch_r2", "ch_t2", "weights", "r2", "r2_rsos", "t2_rsos"]
-    for i, r in enumerate([l2_res, r2, t2, weights, r2_combined, r2_rsos, t2_rsos]):
+    names = ["optimize_residual", "r2", "t2", "weights", "r2_combined", "b1_combined"]
+    for i, r in enumerate([l2_res, r2, t2, weights, r2_combined, b1_combined]):
         nifti_save(
-            r, img_aff=affine,
-            path_to_dir=path, file_name=names[i]
+            r, img_aff=input_affine,
+            path_to_dir=path_out, file_name=names[i]
         )
 
 
@@ -756,11 +757,54 @@ def main():
     settings.display()
 
     try:
-        fit_mese(settings=settings)
+        wrap_cli(settings=settings)
     except Exception as e:
         logging.exception(e)
         parser.print_help()
+#
+# def main():
+#     path = plib.Path(
+#         "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/1_invivo/2025-05-19/processing/mese_cfa/fit"
+#     )
+#     data = torch_load(
+#            "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/1_invivo/"
+#            "2025-05-19/raw/mese_cfa/k_space_rmos.pt"
+#     )
+#     data = data[:, :, data.shape[2] // 2, None].clone()
+#     b1_data, _ = nifti_load(
+#         "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/1_invivo/"
+#         "2025-05-19/processing/mese_cfa/fit/b1_estimate_smoothed.nii"
+#     )
+#     b1_data = torch.from_numpy(b1_data)
+#     affine = torch_load(
+#            "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/01_data/1_invivo/"
+#            "2025-05-19/raw/mese_cfa/affine.pt"
+#     )
+#     db = DB.load(
+#         "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/02_emc/cfa/db_mese_cfa.pkl"
+#     )
+#     # get torch tensors
+#     db_torch_mag, db_torch_phase = db.get_torch_tensors_t1t2b1b0e()
+#     # get t2 and b1 values
+#     t1_vals, t2_vals, b1_vals, b0_vals = db.get_t1_t2_b1_b0_values()
+#
+#     # fft reconned k-space
+#     data = fft_to_img(data, dims=(0, 1))
+#
+#     # set database
+#     db_pattern = db_torch_mag * torch.exp(1j * db_torch_phase)
+#
+#     fit_mese(
+#         data_xyzce=data, db_t1t2b1b0=db_pattern, b1_data=b1_data,
+#         t1_vals=t1_vals, t2_vals=t2_vals, b1_vals=b1_vals, b0_vals=b0_vals,
+#         path_out=path, device=torch.device("cuda:0"),
+#         input_affine=affine
+#     )
+
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s', datefmt='%I:%M:%S', level=logging.INFO
+    )
     main()
