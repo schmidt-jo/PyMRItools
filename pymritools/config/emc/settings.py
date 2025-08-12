@@ -106,5 +106,10 @@ class FitSettings(BaseClass):
         alias="-ps", default=False,
         help="Process middle single slice only to reduce processing time, eg. for debugging or qa."
     )
+    rsos_channel_combine: bool = field(
+        alias="-rsos", default=False,
+        help="Process combined magnitude images."
+             "Otherwise the fitting is done channel wise and a weighted averaging based on the goodness fo fit is used for combination"
+    )
 
 
