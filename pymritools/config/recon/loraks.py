@@ -45,7 +45,7 @@ class Settings(BaseClass):
         help="Convergence tolerance for the conjugate gradient algorithm."
     )
     max_num_iter: int = field(
-        alias="-mni", default=200,
+        alias="-mni", default=25,
         help="Maximum number of iterations if not converged."
     )
     batch_size: int = field(
