@@ -6,9 +6,8 @@ import numpy as np
 import torch
 import json
 
-from torch import Tensor
+from pymritools.recon.loraks.matrix_indexing import get_linear_indices
 
-from pymritools.modeling.dictionary.setup import setup_db, setup_b1, setup_path, setup_input, setup_b0
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.emc import EmcFitSettings
 from pymritools.config.database import DB
@@ -545,6 +544,9 @@ def fit_revisited():
 
 
 def wrap_cli(settings: EmcFitSettings):
+    """
+    Function to wrap the command line arguments dataclass, load data and call the core function
+    """
     device = torch.device("cuda:0") if settings.use_gpu and torch.cuda.is_available() else torch.device("cpu")
     logger.info(f"set device: {device}")
 
@@ -552,7 +554,7 @@ def wrap_cli(settings: EmcFitSettings):
     data = torch_load(settings.input_data)
 
     if settings.process_slice:
-        data = data[:, :, data.shape[2] // 2, None]
+        data = data[:, :, data.shape[2] // 3, None]
     affine = torch_load(settings.input_affine) if settings.input_affine else torch.eye(4)
 
     logger.info(f"load database")
@@ -567,7 +569,8 @@ def wrap_cli(settings: EmcFitSettings):
     t1_vals, t2_vals, b1_vals, b0_vals = db.get_t1_t2_b1_b0_values()
 
     # fft reconned k-space
-    data = fft_to_img(data, dims=(0, 1))
+    if not settings.input_in_image_space:
+        data = fft_to_img(data, dims=(0, 1))
 
     # set database
     db_pattern = db_torch_mag * torch.exp(1j * db_torch_phase)
@@ -593,7 +596,8 @@ def wrap_cli(settings: EmcFitSettings):
     fit_mese(
         data_xyzce=data, db_t1t2b1b0=db_pattern,
         t1_vals=t1_vals, t2_vals=t2_vals, b1_vals=b1_vals, b0_vals=b0_vals,
-        path_out=path, b1_data=b1_data, device=device, input_affine=affine
+        path_out=path, b1_data=b1_data, device=device, input_affine=affine,
+        lr_reg=settings.use_low_rank_regularisation
     )
 
 
@@ -636,14 +640,14 @@ def estimate_b1_from_db(
                 b1_alloc[start:end, :, idx_z, idx_c] = batch_t1t2b1b0_vals[..., 2].cpu()
 
     logger.info("B1 smoothing")
-    b1_alloc = smooth_map(b1_alloc, kernel_size=min(b1_alloc.shape[:2]) // 32)
-    return b1_alloc
+    b1_sm = smooth_map(b1_alloc, kernel_size=min(b1_alloc.shape[:2]) // 35)
+    return b1_sm, b1_alloc
 
 
 def regularised_fit(
         data: torch.Tensor, db_t1t2b1b0: torch.Tensor, b1_data: torch.Tensor,
         b1_vals: torch.Tensor, t1t2b0_vals: torch.Tensor,
-        device: torch.device) -> (torch.Tensor, torch.Tensor):
+        device: torch.device, lr_reg: bool = False) -> (torch.Tensor, torch.Tensor):
     logger.info("Regularized fit")
     # prepare the database for b1 regularization
     db_shape = db_t1t2b1b0.shape
@@ -656,8 +660,11 @@ def regularised_fit(
     t2 = torch.zeros(data.shape[:-1])
 
     # do slice wise processing
-    for idx_z in tqdm.trange(data.shape[2], desc="Processing, slice wise with b1 reg."):
-        for idx_c in range(data.shape[3]):
+    logger.info(f"Processing, slice wise with B1 reg. and low-rank regularisation set {lr_reg}")
+    for idx_z in range(data.shape[2]):
+        logger.info(f"______")
+        logger.info(f"Processing, slice wise :: Slice {idx_z + 1} / {data.shape[2]}")
+        for idx_c in tqdm.trange(data.shape[3], desc="Channel wise processing."):
             data_batch = data[:, :, idx_z, idx_c].to(device)
             b1_batch = b1_data[:, :, idx_z, idx_c].to(device)
             # want the database to be pulled towards the b1 regularization, b1-batch [nx, ny]
@@ -665,11 +672,21 @@ def regularised_fit(
             _, b1_indices = torch.min(b1_loss, dim=0)
             db_batch = db_b1_reg[:, b1_indices, :]
             # now db dims match with data batch
-            # db [t1t2b0, nx, ny, nc, t], data_batch [nx, ny, nc, t]
-            loss = torch.linalg.norm(
-                torch.abs(data_batch[None]) - torch.abs(db_batch), dim=-1
-            )
-            vals, indices = torch.min(loss, dim=0)
+            if lr_reg:
+                # use a low rank patch based constraint to stabilise the fitting
+                batch_t2, batch_l2_res = match_lr_constrained(
+                    data_batch_xyt=data_batch, db_batch_t1t2b1b0_xyt=db_batch,
+                    t1t2b0_vals=t1t2b0_vals
+                )
+            else:
+                # just match pixel wise
+                batch_t2, batch_l2_res = match(
+                    data_batch_xyt=data_batch, db_batch_t1t2b1b0_xyt=db_batch,
+                    t1t2b0_vals=t1t2b0_vals
+                )
+
+            l2_res[:, :, idx_z, idx_c] = batch_l2_res
+            t2[:, :, idx_z, idx_c] = batch_t2.cpu()
 
             # loss = torch.linalg.vecdot(data_batch[None], db_batch, dim=-1)
             # dot_mag = torch.abs(loss)
@@ -677,11 +694,100 @@ def regularised_fit(
             # dot = (1 - phase_weighting) * dot_mag - phase_weighting * dot_phase
             # vals, indices = torch.max(dot, dim=0)
 
-            batch_t1t2b0 = t1t2b0_vals[indices]
-
-            l2_res[:, :, idx_z, idx_c] = vals
-            t2[:, :, idx_z, idx_c] = batch_t1t2b0[..., 1].cpu()
     return t2, l2_res
+
+def match(data_batch_xyt: torch.Tensor, db_batch_t1t2b1b0_xyt: torch.Tensor, t1t2b0_vals: torch.Tensor):
+    loss = torch.linalg.norm(
+        torch.abs(data_batch_xyt[None]) - torch.abs(db_batch_t1t2b1b0_xyt), dim=-1
+    )
+    vals, indices = torch.min(loss, dim=0)
+
+    batch_t1t2b0 = t1t2b0_vals[indices]
+    return batch_t1t2b0, vals
+
+
+def match_lr_constrained(
+        data_batch_xyt: torch.Tensor, db_batch_t1t2b1b0_xyt: torch.Tensor, t1t2b0_vals: torch.Tensor,
+        rank: int = 2, patch_size: int = 3):
+    shape = data_batch_xyt.shape
+    # we want to rearrange the data to form small local neighborhoods,
+    # for which we presume the b1 input value of its central point (i.e. the same database batch)
+    indices, matrix_shape = get_linear_indices(
+        k_space_shape=shape[:2], patch_shape=(patch_size, patch_size), sample_directions=(1, 1)
+    )
+    # build patches via indexing
+    in_patches = data_batch_xyt.view(-1, shape[-1])
+    patches = in_patches[indices]
+    # and format to the correct matrix shape
+    patches = patches.reshape((*matrix_shape, shape[-1]))
+    # now we should have neighbrohood and temporal dims to the back, as needed for torch batch computations
+    # thus we call an svd
+    u, s, vh = torch.linalg.svd(patches, full_matrices=False)
+
+    del patches
+    torch.cuda.empty_cache()
+
+    # and truncate the singular values for a low rank approximation
+    s[..., rank:] = 0
+
+    # reconstruct the patches
+    lr_patches = u @ torch.diag_embed(s) @ vh
+    del u, s, vh
+    torch.cuda.empty_cache()
+
+    # do the fitting pixel wise within the patch
+    lr_patches = normalize_data(lr_patches, dim=-1)
+
+    db_batch_matrix = db_batch_t1t2b1b0_xyt.reshape(
+        db_batch_t1t2b1b0_xyt.shape[0],
+        -1,
+        shape[-1],
+    )[:, indices]
+    del db_batch_t1t2b1b0_xyt
+    torch.cuda.empty_cache()
+
+    db_batch_matrix = db_batch_matrix.reshape(
+        db_batch_matrix.shape[0],
+        *matrix_shape,
+        shape[-1]
+    )
+
+    loss = torch.zeros(db_batch_matrix.shape[:-1])
+    for i in range(loss.shape[0]):
+        tmp = lr_patches - db_batch_matrix[i]
+        loss[i] = torch.linalg.norm(tmp, dim=-1).cpu()
+        del tmp
+        torch.cuda.empty_cache()
+
+    vals, min_indices = torch.min(loss, dim=0)
+    del loss, db_batch_matrix
+    torch.cuda.empty_cache()
+
+    # get values
+    t2s = t1t2b0_vals[min_indices][..., 1].cpu()
+
+    # allocate outputs
+    weights = torch.zeros(in_patches[..., 0].shape, dtype=vals.dtype)
+    batch_t2 = torch.zeros(in_patches[..., 0].shape, dtype=t2s.dtype)
+    batch_res_l2 = torch.zeros(in_patches[..., 0].shape, dtype=vals.dtype)
+
+    # weighted averaging
+    weights = weights.index_add(0, indices, (1 / vals).view(-1))
+    batch_t2 = batch_t2.index_add(0, indices, (t2s / vals).view(-1))
+    batch_res_l2 = batch_res_l2.index_add(0, indices, vals.view(-1))
+    count_matrix = torch.bincount(indices)
+
+    # reshape to original
+    batch_t2 = batch_t2.reshape(shape[:-1])
+    weights = weights.reshape(shape[:-1])
+    batch_t2 = torch.nan_to_num(batch_t2 / weights, nan=0.0, posinf=0.0)
+
+    batch_res_l2 = batch_res_l2.reshape(shape[:-1])
+    count_matrix = count_matrix.reshape(shape[:-1])
+    count_matrix[count_matrix < 1e-3] = 1
+    batch_res_l2 = batch_res_l2 / count_matrix
+
+    return batch_t2, batch_res_l2
 
 
 def fit_mese(
@@ -689,15 +795,25 @@ def fit_mese(
         t1_vals: torch.Tensor, t2_vals: torch.Tensor, b1_vals: torch.Tensor, b0_vals: torch.Tensor,
         path_out: plib.Path,
         b1_data: torch.Tensor = None, device: torch.device = torch.get_default_device(),
+        lr_reg: bool = True,
         input_affine: torch.Tensor = torch.eye(4)):
+    """
+    MESE dictionary fit method.
+    """
+
     logger.info(f"Fit MESE")
+
+    # __ Some preparations
+    # for now ensure magnitude data
+    data_xyzce = data_xyzce.abs()
     # normalize data
     data_xyzce = normalize_data(data_xyzce, dim=-1)
     # save shape
     db_shape = db_t1t2b1b0.shape
+    # for now ensure magnitude data
+    db_t1t2b1b0 = db_t1t2b1b0.abs()
     # normalise database
     db_t1t2b1b0 = normalize_data(db_t1t2b1b0, dim=-1)
-
     # set up values
     t1t2b1b0_vals = torch.tensor([
         [t1, t2, b1, b0] for t1 in t1_vals for t2 in t2_vals for b1 in b1_vals for b0 in b0_vals
@@ -706,17 +822,33 @@ def fit_mese(
         [t1, t2, b0] for t1 in t1_vals for t2 in t2_vals for b0 in b0_vals
     ], device=device)
 
+    # check for B1 input if not available estimate for RSOS data
+    # (assuming B1 transmit is approximately equal for all receive channels)
     if b1_data is None:
-        b1_data = estimate_b1_from_db(
-            data=data_xyzce, db_t1t2b1b0=db_t1t2b1b0, t1t2b1b0_vals=t1t2b1b0_vals, device=device
+        # estimate the B1 always from combined channels, as we assume the transmit modulation is equal
+        # for all receive coils, this makes it somewhat noise dependent, as combination changes noise properties
+        if data_xyzce.shape[-2] > 1:
+            combined_data = root_sum_of_squares(data_xyzce, dim_channel=-2).unsqueeze(-2)
+        else:
+            combined_data = data_xyzce.clone()
+        b1_data, b1_est = estimate_b1_from_db(
+            data=combined_data, db_t1t2b1b0=db_t1t2b1b0, t1t2b1b0_vals=t1t2b1b0_vals, device=device
         )
+        nifti_save(b1_est, img_aff=input_affine, path_to_dir=path_out, file_name="b1_estimate")
         nifti_save(b1_data, img_aff=input_affine, path_to_dir=path_out, file_name="b1_estimate_smoothed")
+        if data_xyzce.shape[-2] > 1:
+            # need to expand back to channels
+            b1_data = b1_data.expand_as(data_xyzce[..., 0])
 
+
+    # now use this for input to to the regularised fit
     t2, l2_res = regularised_fit(
         data=data_xyzce, db_t1t2b1b0=db_t1t2b1b0, t1t2b0_vals=t1t2b0_vals,
-        b1_data=b1_data, b1_vals=b1_vals,
+        b1_data=b1_data, b1_vals=b1_vals, lr_reg=lr_reg,
         device=device
     )
+
+    # __ Cleanup and Combination
     r2 = torch.nan_to_num(1 / t2)
     t2 = 1e3 * t2
 
