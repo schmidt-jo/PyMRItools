@@ -111,5 +111,13 @@ class FitSettings(BaseClass):
         help="Process combined magnitude images."
              "Otherwise the fitting is done channel wise and a weighted averaging based on the goodness fo fit is used for combination"
     )
+    input_in_image_space: bool = field(
+        alias="-iimg", default=False,
+        help="if False, toggle FFT to get input to image space first for k-space input."
+    )
+    use_low_rank_regularisation: bool = field(
+        alias="-lr", default=True,
+        help="For noisy channel wise matching, we can regularise the matching by using low-rank approximations in small neighborhoods in the fitting."
+    )
 
 
