@@ -491,10 +491,13 @@ def plot_sampling_density(
 
 
 def quick_plot(data, path, name, cs:int = 8, es: int = 2):
+    plot_data = data.clone().cpu()
+    while plot_data.ndim < 4:
+        plot_data = plot_data.unsqueeze(-1)
     fig = psub.make_subplots(rows=es, cols=cs)
     for ci in range(cs):
         for ei in range(es):
-            d = data[:, :, ci, ei]
+            d = plot_data[:, :, ci, ei]
             fig.add_trace(
                 go.Heatmap(z=d.abs(), transpose=True, showscale=False, colorscale="Inferno"),
                 row=1+ei, col=1+ci
@@ -650,8 +653,11 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
         )
     )
     quick_plot(data=k_norm, path=path_out, name="k_space_weight_norm", cs=16, es=4)
-    for i, f in enumerate([1, 1 / k_norm]):
+    for i, f in enumerate([1, 1 / k_norm, -1]):
         sampling_mask = torch.full((k.shape[1], k.shape[-1]), k.shape[1], dtype=torch.int, device=device)
+        # sampling_mask = - torch.ones((k.shape[1], k.shape[-1]), dtype=torch.int, device=device)
+        sampling_mask[indices_ac] = k.shape[1]
+        fig = go.Figure()
         for n in tqdm.trange(n_to_skip):
             # for each line we want to take away
             for e in range(k.shape[-1]):
@@ -659,11 +665,13 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
                 # we take away previous lines
                 k_iter = k.clone()
                 m = sampling_mask[None, :, None, :].expand_as(k_iter)
-                k_iter[m < n+1] = 0
+                # set previously extracted lines 0
+                k_iter[m < n] = 0
+                # k_iter[m > n+1] = 0
                 # calculate the gradient and chose the phase encode line with the smalles gradient sum
                 # do the density based version
                 grad, _, _, _ = autograd_optimization_ac(
-                    k=k, device=device,
+                    k=k_iter, device=device,
                     batch_size_channels=8, rank=150
                 )
                 # we now have a gradient and are interested in its smallest amplitude along the echo were looking at,
@@ -672,26 +680,40 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
                 grad = grad.squeeze().abs()
 
                 # test normalisations normalise by k - space abs
-                grad = grad * f
+                if f < 1:
+                    grad = grad / (k_iter + 1e-9)
+                else:
+                    grad = grad * f
 
                 # aggregate across readout and channel dim
                 grad = grad.sum(dim=(0, -2))[..., e]
 
                 # set ac region highest
                 grad[indices_ac] = grad.max()
-
+                # grad[indices_ac] = 0
+                if e == 0 and n < 20:
+                    fig.add_trace(
+                        go.Scatter(y=grad, showlegend=True, name=f"{n+1}")
+                    )
                 # get indices according to the sorted amplitudes
                 _, opt_ind = torch.sort(grad, descending=False)
+                # _, opt_ind = torch.sort(grad, descending=True)
                 # now we want to get the lowest amplitude and set it 0,
                 for oo in range(opt_ind.shape[0]):
                     o = opt_ind[oo]
                     # check if this index was previously unassigned.
                     # if so take it, if not iterate
                     if sampling_mask[o, e] > n:
+                    # if sampling_mask[o, e] < 0:
                         sampling_mask[o, e] = n
                         break
+            if n % 5 == 0:
+                quick_plot(sampling_mask, path=path_tmp.parent, name=f"sampling_iteration{['', '_normed', '_input'][i]}", cs=1, es=1)
+                fn = path_tmp.parent.joinpath(f"gradient_first_echo_per_iteration{['', '_normed', '_input'][i]}").with_suffix(".html")
+                logger.info(f"Write file: {fn}")
+                fig.write_html(fn)
 
-        fn = path_tmp.parent.joinpath(f"sampling_mask{['', '_normed'][i]}").with_suffix(".pt")
+        fn = path_tmp.parent.joinpath(f"sampling_mask{['', '_normed', '_input'][i]}").with_suffix(".pt")
         logger.info(f"Write file: {fn}")
         torch.save(sampling_mask, fn)
         plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
@@ -720,7 +742,7 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
 
     # add deterministic mask too
 
-    for i, n in enumerate(['', '_normed']):
+    for i, n in enumerate(['', '_normed', '_input']):
         n_outer = sampling_mask.shape[0] - indices_ac.shape[0]
         n_to_keep = n_outer // 5
         n_th = n_outer - n_to_keep
