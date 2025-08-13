@@ -108,8 +108,8 @@ def extract_noise_stats_from_mask(
         mask = mask[..., None]
     # Expand the mask to fit the data shape
     mask = mask.expand(*data_shape).to(torch.bool)
-    # extract noise data
-    noise_voxels = input_data[mask]
+    # extract noise data - since this correction is done for magnitude data we ensure magnitude data here
+    noise_voxels = input_data.abs()[mask]
     noise_voxels = noise_voxels[noise_voxels > 0]
     sigma, num_channels = ncc_stats.from_noise_voxels(noise_voxels)
     num_channels = min(max(num_channels, 1), 32)
@@ -339,17 +339,18 @@ def core_fn(
 
 def noise_bias_correction(
         denoised_data: torch.Tensor, sigma, num_channels):
-    # correct
+    # correct - ensure magnitude data
     return torch.sqrt(
         torch.clip(
-            denoised_data ** 2 - 2 * num_channels * sigma ** 2,
+            denoised_data.abs() ** 2 - 2 * num_channels * sigma ** 2,
             min=0.0
         )
     )
 
 
 def get_noise_mask(input_data: torch.Tensor, mask_path: plib.Path | str = None):
-    if mask_path is not None:
+    if bool(mask_path):
+        # not None or empty
         mask_path = plib.Path(mask_path)
         if not mask_path.is_file():
             err = f"Mask file {mask_path} does not exist"
@@ -435,8 +436,12 @@ def save_data(
             nifti_save(
                 data=noise_mask.to(torch.int32), img_aff=nii_img, path_to_dir=path_output, file_name="noise_mask"
             )
+        torch_save(
+            data=data_denoised_nbc, path_to_file=path_output, file_name="denoised_data_nbc"
+        )
         nifti_save(
-            data=data_denoised_nbc, img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data_nbc"
+            data=root_sum_of_squares(data_denoised_nbc, dim_channel=-2),
+            path_to_dir=path_output, img_aff=nii_img, file_name="denoised_data_nbc"
         )
 
 
