@@ -251,6 +251,8 @@ class MESE(Simulation):
 def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
     # save initial settings
     name = settings.database_name
+    if name.endswith(".pkl"):
+        name = name[:-4]
     b0_list = settings.b0_list
     b0s = []
     if isinstance(b0_list, list):
