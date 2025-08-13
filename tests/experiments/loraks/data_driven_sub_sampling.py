@@ -680,8 +680,11 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
                 grad = grad.squeeze().abs()
 
                 # test normalisations normalise by k - space abs
-                if f < 1:
-                    grad = grad / (k_iter + 1e-9)
+                if isinstance(f, float):
+                    if f < 1:
+                        grad = grad / (k_iter + 1e-9)
+                    else:
+                        grad = grad * f
                 else:
                     grad = grad * f
 
