@@ -287,6 +287,24 @@ class DB:
     def get_total_num_curves(self) -> int:
         return self._num_t1s * self._num_t2s * self._num_b1s * self._num_b0s
 
+    def add_db(self, db_df: pl.DataFrame):
+        inds = db_df.columns
+        inds.remove("index")
+        if not set(self.indices) == set(inds):
+            msg = f"Data to add does not comply to DB standard, found entries: {db_df.columns}, need {self.indices}"
+            log_module.error(msg)
+            raise AttributeError(msg)
+        # check compatibilities
+        # we assume same params here (except those that are encapsulated in the dataframe),
+        # might be left for later to merge the emc_params variable
+        data = pl.concat((self.data, db_df)).sort(by=["t1", "t2", "b1", "b0", "echo_num"], descending=False).drop("index").with_row_index("index")
+        self.data = data
+        self._num_t1s: int = len(data["t1"].unique())
+        self._num_t2s: int = len(data["t2"].unique())
+        self._num_b1s: int = len(data["b1"].unique())
+        self._num_b0s: int = len(data["b0"].unique())
+        self._num_echoes: int = len(data["echo_num"].unique())
+
 
 if __name__ == '__main__':
     dl = DB.load("examples/simulation/results/database_test.pkl")
