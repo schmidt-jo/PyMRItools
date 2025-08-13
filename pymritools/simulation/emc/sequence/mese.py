@@ -6,6 +6,7 @@ import pickle
 import json
 import tqdm
 import torch
+from pymritools.config.database import DB
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.simulation.emc.core import functions, GradPulse
@@ -248,9 +249,46 @@ class MESE(Simulation):
 
 
 def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
-    sequence = MESE(params=params, settings=settings)
-    sequence.simulate()
-    sequence.save()
+    # save initial settings
+    name = settings.database_name
+    b0_list = settings.b0_list
+    b0s = []
+    if isinstance(b0_list, list):
+        for b in b0_list:
+            if isinstance(b, list):
+                bb = torch.arange(b[0], b[1], b[2])
+                b0s.extend(bb.tolist())
+            else:
+                b0s.append(b)
+    else:
+        b0s = [b0_list]
+    # iterate over b0 entries as batching to keep memory acceptable
+    dbs = []
+    for j, b0 in enumerate(b0s):
+        log_module.info(f"Batched Processing of B0")
+        log_module.info(f"Processing {b0} :: {j+1} / {len(b0s)}")
+        # we save everything separately
+        n = f"{name}_b0_{b0}".replace("-", "m").replace(".", "p")
+        settings.database_name = n
+        settings.b0_list = [b0]
+        sequence = MESE(params=params, settings=settings)
+        sequence.simulate()
+        sequence.save()
+        dbs.append(n)
+
+    database = None
+    for i, db in enumerate(dbs):
+        path = plib.Path(settings.out_path).joinpath(db).with_suffix(".pkl")
+        d = DB.load(path)
+        # remove the file
+        path.unlink()
+        if database is None:
+            database = d
+        else:
+            database.add_db(d.data)
+    # finally save the combined database
+    path = plib.Path(settings.out_path).joinpath(name)
+    database.save(path)
 
 
 def main():
