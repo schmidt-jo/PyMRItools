@@ -131,7 +131,7 @@ class Simulation(abc.ABC):
         db = DB.from_simulation_data(params=self.params, sim_data=self.data)
 
         save_path = plib.Path(self.settings.out_path).absolute()
-        save_file = save_path.joinpath("emc_settnigs").with_suffix(".json")
+        save_file = save_path.joinpath("emc_settings").with_suffix(".json")
         logging.info(f"Save Config File: {save_file.as_posix()}")
         self.settings.save_json(save_file.as_posix(), indent=2)
 
