@@ -127,24 +127,29 @@ class Simulation(abc.ABC):
         # simulate
         self._simulate()
 
-    def save(self):
-        db = DB.from_simulation_data(params=self.params, sim_data=self.data)
+    def get_db(self):
+        return DB.from_simulation_data(params=self.params, sim_data=self.data)
 
-        save_path = plib.Path(self.settings.out_path).absolute()
-        save_file = save_path.joinpath("emc_settings").with_suffix(".json")
-        logging.info(f"Save Config File: {save_file.as_posix()}")
-        self.settings.save_json(save_file.as_posix(), indent=2)
+    def save(self, save_db: bool = True, save_config: bool = True):
+        path = plib.Path(self.settings.out_path).absolute()
+        if save_config:
+            save_file = path.joinpath("emc_settings").with_suffix(".json")
+            logging.info(f"Save Config File: {save_file.as_posix()}")
+            self.settings.save_json(save_file.as_posix(), indent=2)
 
-        save_file = save_path.joinpath("emc_params").with_suffix(".json")
-        logging.info(f"Save Params File: {save_file.as_posix()}")
-        self.params.save_json(save_file.as_posix(), indent=2)
+            save_file = path.joinpath("emc_params").with_suffix(".json")
+            logging.info(f"Save Params File: {save_file.as_posix()}")
+            self.params.save_json(save_file.as_posix(), indent=2)
 
         # database
-        save_file = save_path.joinpath(self.settings.database_name)
-        logging.info(f"Save DB File: {save_file.as_posix()}")
-        db.save(save_file)
+        if save_db:
+            db = self.get_db()
+            save_file = path.joinpath(self.settings.database_name)
+            logging.info(f"Save DB File: {save_file.as_posix()}")
+            db.save(save_file)
 
         if self.settings.visualize:
+            db = self.get_db()
             # plot magnetization profile snapshots
             # sim_obj.plot_magnetization_profiles(animate=False)
             # sim_obj.plot_emc_signal()
