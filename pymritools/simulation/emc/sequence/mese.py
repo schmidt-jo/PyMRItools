@@ -255,6 +255,7 @@ def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
         name = name[:-4]
     b0_list = settings.b0_list
     b0s = []
+    # get individual b0 values
     if isinstance(b0_list, list):
         for b in b0_list:
             if isinstance(b, list):
@@ -266,28 +267,34 @@ def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
         b0s = [b0_list]
     # iterate over b0 entries as batching to keep memory acceptable
     dbs = []
+    # save intermediate results in case something goes wrong
+    path_tmp = plib.Path(settings.out_path).absolute().joinpath("tmp")
+    log_module.info(f"Set temporary path: {path_tmp}")
+    path_tmp.mkdir(exist_ok=True, parents=True)
+
     for j, b0 in enumerate(b0s):
         log_module.info(f"Batched Processing of B0")
         log_module.info(f"Processing {b0} :: {j+1} / {len(b0s)}")
-        # we save everything separately
-        n = f"{name}_b0_{b0}".replace("-", "m").replace(".", "p")
-        settings.database_name = n
         settings.b0_list = [b0]
         sequence = MESE(params=params, settings=settings)
         sequence.simulate()
-        sequence.save()
-        dbs.append(n)
+
+        # we save everything separately
+        n = f"{name}_b0_{b0}".replace("-", "m").replace(".", "p")
+        db = sequence.get_db()
+        db.save(path_tmp.joinpath(n))
+        dbs.append(db)
+        if j == len(b0s) - 1:
+            # in the end save settings
+            sequence.settings.b0_list = b0_list
+            sequence.save(save_db=False, save_config=True)
 
     database = None
     for i, db in enumerate(dbs):
-        path = plib.Path(settings.out_path).joinpath(db).with_suffix(".pkl")
-        d = DB.load(path)
-        # remove the file
-        path.unlink()
         if database is None:
-            database = d
+            database = db
         else:
-            database.add_db(d.data)
+            database.add_db(db.data)
     # finally save the combined database
     path = plib.Path(settings.out_path).joinpath(name)
     database.save(path)
