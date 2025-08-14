@@ -606,6 +606,40 @@ def normalize_data(data, dim: int = -1):
     return torch.nan_to_num(data / norm, posinf=0.0, nan=0.0)
 
 
+def unflatten_batched_indices(flat_indices, shape):
+    """
+    Convert batched flattened indices back to individual dimension indices.
+
+    Args:
+        flat_indices (torch.Tensor): Batched flattened indices with shape [b1, b2, flat_inds]
+        shape (tuple): Original tensor shape to unflatten into
+
+    Returns:
+        torch.Tensor: Indices for each dimension with shape [b1, b2, flat_inds, len(shape)]
+    """
+    # Ensure flat_indices is a tensor
+    if not isinstance(flat_indices, torch.Tensor):
+        flat_indices = torch.tensor(flat_indices)
+
+    # Prepare output tensor
+    out_indices = torch.zeros(
+        *flat_indices.shape,
+        len(shape),
+        dtype=torch.long,
+        device=flat_indices.device
+    )
+
+    # Iterate through dimensions in reverse
+    for dim in range(len(shape) - 1, -1, -1):
+        # Compute index for current dimension
+        out_indices[..., dim] = flat_indices % shape[dim]
+
+        # Update flat_indices by integer division
+        flat_indices //= shape[dim]
+
+    return out_indices
+
+
 def estimate_b1_from_db(
         data: torch.Tensor, db_t1t2b1b0: torch.Tensor, device: torch.device,
         t1t2b1b0_vals: torch.Tensor,batch_size: int = 10):
@@ -832,7 +866,8 @@ def fit_mese(
         else:
             combined_data = data_xyzce.clone()
         b1_data, b1_est = estimate_b1_from_db(
-            data=combined_data, db_t1t2b1b0=db_t1t2b1b0, t1t2b1b0_vals=t1t2b1b0_vals, device=device
+            data=combined_data, db_t1t2b1b0=db_t1t2b1b0, t1t2b1b0_vals=t1t2b1b0_vals, device=device,
+            batch_size=1
         )
         nifti_save(b1_est, img_aff=input_affine, path_to_dir=path_out, file_name="b1_estimate")
         nifti_save(b1_data, img_aff=input_affine, path_to_dir=path_out, file_name="b1_estimate_smoothed")
