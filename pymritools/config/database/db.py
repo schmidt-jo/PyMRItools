@@ -297,8 +297,20 @@ class DB:
         params = db_1.params
         if not params == db_2.params:
             msg = f"Data to add does not comply to DB standard, found different params: {params} and {db_2.params}"
+        # cast columns
+        cc = ["index", "b0"]
+        casts = [pl.Int64, pl.Float64]
+        for i, col in enumerate(cc):
+            db_1.data = db_1.data.with_columns(pl.col(col).cast(casts[i]))
+            db_2.data = db_2.data.with_columns(pl.col(col).cast(casts[i]))
 
-        data = pl.concat((db_1.data, db_2.data)).sort(by=["t1", "t2", "b1", "b0", "echo_num"], descending=False).drop("index").with_row_index("index")
+        data = pl.concat(
+            (
+                db_1.data.with_columns(pl.col("b0").cast(pl.Int64)),
+                db_2.data.with_columns(pl.col("b0").cast(pl.Int64))
+            )
+        ).sort(by=["t1", "t2", "b1", "b0", "echo_num"], descending=False).drop("index").with_row_index("index")
+
         # create instance
         db = cls(data=data, params=params)
         db._num_t1s = len(data["t1"].unique())
