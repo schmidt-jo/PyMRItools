@@ -649,11 +649,11 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
     k_norm = torch.from_numpy(
         gaussian_filter(
             k.abs().numpy(),
-            sigma=50, axes=(0, 1)
+            sigma=20, axes=(0, 1)
         )
     )
     quick_plot(data=k_norm, path=path_out, name="k_space_weight_norm", cs=16, es=4)
-    for i, f in enumerate([1, 1 / k_norm, -1]):
+    for i, f in enumerate([1 / k_norm, 5 / k_norm]):
         sampling_mask = torch.full((k.shape[1], k.shape[-1]), k.shape[1], dtype=torch.int, device=device)
         # sampling_mask = - torch.ones((k.shape[1], k.shape[-1]), dtype=torch.int, device=device)
         sampling_mask[indices_ac] = k.shape[1]
@@ -711,12 +711,12 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
                         sampling_mask[o, e] = n
                         break
             if n % 5 == 0:
-                quick_plot(sampling_mask, path=path_tmp.parent, name=f"sampling_iteration{['', '_normed', '_input'][i]}", cs=1, es=1)
-                fn = path_tmp.parent.joinpath(f"gradient_first_echo_per_iteration{['', '_normed', '_input'][i]}").with_suffix(".html")
+                quick_plot(sampling_mask, path=path_tmp.parent, name=f"sampling_iteration{['_normed', '_normed5'][i]}", cs=1, es=1)
+                fn = path_tmp.parent.joinpath(f"gradient_first_echo_per_iteration{['_normed', '_normed5'][i]}").with_suffix(".html")
                 logger.info(f"Write file: {fn}")
                 fig.write_html(fn)
 
-        fn = path_tmp.parent.joinpath(f"sampling_mask{['', '_normed', '_input'][i]}").with_suffix(".pt")
+        fn = path_tmp.parent.joinpath(f"sampling_mask{['_normed', '_normed5'][i]}").with_suffix(".pt")
         logger.info(f"Write file: {fn}")
         torch.save(sampling_mask, fn)
         plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
@@ -745,7 +745,7 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
 
     # add deterministic mask too
 
-    for i, n in enumerate(['', '_normed', '_input']):
+    for i, n in enumerate(['_normed', '_normed5']):
         n_outer = sampling_mask.shape[0] - indices_ac.shape[0]
         n_to_keep = n_outer // 5
         n_th = n_outer - n_to_keep
