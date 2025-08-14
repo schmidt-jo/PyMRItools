@@ -20,8 +20,8 @@ def smooth_map(data: torch.Tensor, kernel_size: int = 5):
     # set kernel
     kernel = torch.zeros(data.shape[:2], dtype=data.dtype, device=data.device)
     kernel[
-    (data.shape[0] - kernel_size) // 2:(data.shape[0] + kernel_size) // 2,
-    (data.shape[1] - kernel_size) // 2:(data.shape[1] + kernel_size) // 2
+        (data.shape[0] - kernel_size) // 2:(data.shape[0] + kernel_size) // 2,
+        (data.shape[1] - kernel_size) // 2:(data.shape[1] + kernel_size) // 2
     ] = 1
     while kernel.shape.__len__() < data.shape.__len__():
         kernel = kernel.unsqueeze(-1)
@@ -611,7 +611,7 @@ def unflatten_batched_indices(flat_indices, shape):
     Convert batched flattened indices back to individual dimension indices.
 
     Args:
-        flat_indices (torch.Tensor): Batched flattened indices with shape [b1, b2, flat_inds]
+        flat_indices (torch.Tensor): Batched flattened indices with shape [b1, b2, ..., flat_inds]
         shape (tuple): Original tensor shape to unflatten into
 
     Returns:
@@ -640,14 +640,15 @@ def unflatten_batched_indices(flat_indices, shape):
     return out_indices
 
 
-def estimate_b1_from_db(
+def estimate_b1_b0_from_db(
         data: torch.Tensor, db_t1t2b1b0: torch.Tensor, device: torch.device,
-        t1t2b1b0_vals: torch.Tensor,batch_size: int = 10):
+        b1_vals: torch.Tensor, b0_vals: torch.Tensor, batch_size: int = 10):
     logger.info(f"l2 fit - b1 estimate")
     num_batches = int(np.ceil(data.shape[0] / batch_size))
     b1_alloc = torch.zeros(data.shape[:-1])
+    b0_alloc = torch.zeros(data.shape[:-1])
     db_shape = db_t1t2b1b0.shape
-    db_t1t2b1b0 = db_t1t2b1b0.to(device)
+    db_t1t2b1b0 = db_t1t2b1b0.view(-1,db_t1t2b1b0.shape[-1]).to(device=device, dtype=data.dtype)
 
     if data.ndim < 5:
         msg = f"Assume 4D input data, added singular channel dim for processing"
@@ -662,20 +663,27 @@ def estimate_b1_from_db(
 
     for idx_c in tqdm.trange(data.shape[-2], desc="channel dim processing"):
         for idx_z in range(data.shape[2]):
+            # we process per B0 simulated value, otherwise the memory explodes
             for idx_x in range(num_batches):
                 start = idx_x * batch_size
                 end = min((idx_x + 1) * batch_size, data.shape[0])
                 data_batch = data[start:end, :, idx_z, idx_c, :].to(device)
+                d_shape = data_batch.shape
+                data_batch = data_batch.view(-1, d_shape[-1])
 
-                l2 = torch.linalg.norm(data_batch[:, None] - db_t1t2b1b0.view(-1, db_shape[-1])[None, :, None], dim=-1)
-                vals, indices = torch.min(l2, dim=1)
-                batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
+                l2 = torch.cdist(data_batch, db_t1t2b1b0).reshape(*d_shape[:-1], db_t1t2b1b0.shape[0])
+                vals, indices = torch.min(l2, dim=-1)
+                indices = unflatten_batched_indices(indices, db_shape[:-1])
+                # l2 = torch.linalg.norm(data_batch[:, None] - db_t1t2b1b0.view(-1, db_shape[-1])[None, :, None], dim=-1)
+                # vals, indices = torch.min(l2, dim=1)
 
-                b1_alloc[start:end, :, idx_z, idx_c] = batch_t1t2b1b0_vals[..., 2].cpu()
+                b1_alloc[start:end, :, idx_z, idx_c] = b1_vals[indices[:, :, 2].cpu()]
+                b0_alloc[start:end, :, idx_z, idx_c] = b0_vals[indices[:, :, 3].cpu()]
 
     logger.info("B1 smoothing")
-    b1_sm = smooth_map(b1_alloc, kernel_size=min(b1_alloc.shape[:2]) // 35)
-    return b1_sm, b1_alloc
+    b1_sm = smooth_map(b1_alloc, kernel_size=min(b1_alloc.shape[:2]) // 28)
+    b0_sm = smooth_map(b0_alloc, kernel_size=min(b0_alloc.shape[:2]) // 28)
+    return b1_sm, b1_alloc, b0_sm, b0_alloc
 
 
 def regularised_fit(
@@ -865,15 +873,19 @@ def fit_mese(
             combined_data = root_sum_of_squares(data_xyzce, dim_channel=-2).unsqueeze(-2)
         else:
             combined_data = data_xyzce.clone()
-        b1_data, b1_est = estimate_b1_from_db(
-            data=combined_data, db_t1t2b1b0=db_t1t2b1b0, t1t2b1b0_vals=t1t2b1b0_vals, device=device,
-            batch_size=1
+        b1_data, b1_est, b0_data, b0_est = estimate_b1_b0_from_db(
+            data=combined_data, db_t1t2b1b0=db_t1t2b1b0, b1_vals=b1_vals, b0_vals=b0_vals,
+            device=device, batch_size=1
         )
-        nifti_save(b1_est, img_aff=input_affine, path_to_dir=path_out, file_name="b1_estimate")
-        nifti_save(b1_data, img_aff=input_affine, path_to_dir=path_out, file_name="b1_estimate_smoothed")
+        for i, d in enumerate([b1_data, b1_est, b0_data, b0_est]):
+            nifti_save(
+                d, img_aff=input_affine, path_to_dir=path_out,
+                file_name=["b1_estimate_smoothed", "b1_estimate", "b0_estimate_smoothed", "b0_estimate"][i]
+            )
         if data_xyzce.shape[-2] > 1:
             # need to expand back to channels
             b1_data = b1_data.expand_as(data_xyzce[..., 0])
+            b0_data = b0_data.expand_as(data_xyzce[..., 0])
 
 
     # now use this for input to to the regularised fit
