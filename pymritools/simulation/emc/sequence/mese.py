@@ -294,7 +294,7 @@ def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
         if database is None:
             database = db
         else:
-            database.add_db(db.data)
+            database = DB.add_dbs(database, db)
     # finally save the combined database
     path = plib.Path(settings.out_path).joinpath(name)
     database.save(path)
