@@ -115,10 +115,10 @@ def main(config: Settings):
 
     logger.info("Save")
     img = fft_to_img(k_recon, dims=(0, 1))
-    nifti_save(
-        data=img.abs().squeeze(),
-        img_aff=aff, path_to_dir=path_out, file_name="recon_img"
-    )
+    # nifti_save(
+    #     data=img.abs().squeeze(),
+    #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
+    # )
     rsos = root_sum_of_squares(img, dim_channel=-2)
     nifti_save(
         data=rsos,
