@@ -115,7 +115,7 @@ class FitSettings(BaseClass):
         alias="-iimg", default=False,
         help="if False, toggle FFT to get input to image space first for k-space input."
     )
-    use_low_rank_regularisation: bool = field(
+    low_rank_regularisation: bool = field(
         alias="-lr", default=True,
         help="For noisy channel wise matching, we can regularise the matching by using low-rank approximations in small neighborhoods in the fitting."
     )

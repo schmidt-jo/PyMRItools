@@ -562,6 +562,10 @@ def wrap_cli(settings: EmcFitSettings):
 
     logger.info(f"load database")
     db = DB.load(settings.input_database)
+    vals = db.get_t1_t2_b1_b0_values()
+    logger.info(f"\t\t- Value range:")
+    for i in range(4):
+        logger.info(f"\t\t\t {['T1', 'T2', 'B1', 'B0'][i]}: {(vals[i].min().item(), vals[i].max().item())}")
 
     path = plib.Path(settings.out_path)
 
@@ -573,6 +577,7 @@ def wrap_cli(settings: EmcFitSettings):
 
     # fft reconned k-space
     if not settings.input_in_image_space:
+        logger.info(f"FFT data into image space")
         data = fft_to_img(data, dims=(0, 1))
 
     # set database
@@ -591,6 +596,7 @@ def wrap_cli(settings: EmcFitSettings):
         while b1_map.ndim < data.ndim - 2:
             b1_map = b1_map.unsqueeze(-1)
         b1_data = b1_map.expand_as(data[..., 0, 0])
+        logger.info(f"\t\t- B1 Input value range: {(b1_data[b1_data>1e-6].min().item(), b1_data.max().item())}")
 
     path_in_b0 = plib.Path(settings.input_b0)
     if not path_in_b0.is_file():
@@ -603,16 +609,17 @@ def wrap_cli(settings: EmcFitSettings):
         while b0_map.ndim < data.ndim - 2:
             b0_map = b0_map.unsqueeze(-1)
         b0_data = b0_map.expand_as(data[..., 0, 0])
+        logger.info(f"\t\t- B0 Input value range: {(b0_data.min().item(), b0_data.max().item())}")
 
     if settings.rsos_channel_combine:
-        b1_data = root_sum_of_squares(b1_data, dim_channel=-1).unsqueeze(-1) if b1_data is not None else None
+        # b1_data = root_sum_of_squares(b1_data, dim_channel=-1).unsqueeze(-1) if b1_data is not None else None
         data = root_sum_of_squares(input_data=data, dim_channel=-2).unsqueeze(-2)
 
     fit_mese(
         data_xyzce=data, db_t1t2b1b0=db_pattern,
         t1_vals=t1_vals, t2_vals=t2_vals, b1_vals=b1_vals, b0_vals=b0_vals,
         path_out=path, b1_data=b1_data, b0_data=b0_data, device=device, input_affine=affine,
-        lr_reg=settings.use_low_rank_regularisation
+        lr_reg=settings.low_rank_regularisation
     )
 
 
@@ -1028,10 +1035,13 @@ def fit_mese(
             d, img_aff=input_affine, path_to_dir=path_out,
             file_name=["b1_estimate_smoothed", "b1_estimate", "b0_estimate_smoothed", "b0_estimate"][i]
         )
-    if data_xyzce.shape[-2] > 1:
+    if data_xyzce.ndim - 1 > b1_data.ndim:
         # need to expand back to channels
         b1_data = b1_data.unsqueeze(-1).expand_as(data_xyzce[..., 0])
-        b0_data = b0_data.unsqueeze(-1).expand_as(data_xyzce[..., 0]) / np.pi
+
+    if data_xyzce.ndim - 1 > b0_data.ndim:
+        # need to expand back to channels
+        b0_data = b0_data.unsqueeze(-1).expand_as(data_xyzce[..., 0])
 
     # now use this for input to to the regularised fit
     t2, l2_res = regularised_fit(
