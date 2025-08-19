@@ -423,7 +423,7 @@ def save_data(
         data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
 
     nifti_save(data=data_denoised.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data")
-    nifti_save(data=data_noise.abs().numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
+    # nifti_save(data=data_noise.abs().numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
     # nifti_save(
     #     data=data_noise_sm_var.numpy(), img_aff=nii_img, path_to_dir=path_output,
     #            file_name="noise_data_smoothed_var"
