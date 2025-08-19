@@ -21,11 +21,12 @@ class Simulation(abc.ABC):
         log_module.info("__ Set-up Simulation __ ")
         # setup device
         if settings.use_gpu and torch.cuda.is_available():
-            device = torch.device(f"cuda:{settings.gpu_device}")
+            device = torch.device(settings.gpu_device)
+            log_module.info(f"\t\t- torch device CUDA (GPU): {torch.cuda.get_device_name(device)}")
         else:
             device = torch.device("cpu")
+            log_module.info(f"\t\t- torch device CPU")
         self.device: torch.device = device
-        log_module.info(f"\t\t- torch device: {device}")
         # simulation variables
         self.params: EmcParameters = params
         self.settings: EmcSimSettings = settings
