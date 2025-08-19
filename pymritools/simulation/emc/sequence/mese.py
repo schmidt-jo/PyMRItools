@@ -4,6 +4,8 @@ import pathlib as plib
 
 import pickle
 import json
+
+import numpy as np
 import tqdm
 import torch
 from pymritools.config.database import DB
@@ -272,15 +274,22 @@ def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
     log_module.info(f"Set temporary path: {path_tmp}")
     path_tmp.mkdir(exist_ok=True, parents=True)
 
-    for j, b0 in enumerate(b0s):
+    b0s = torch.tensor(b0s)
+    # get batch size
+    batch_size = settings.b0_batch_size
+    num_batches = int(np.ceil(b0s.shape[0] / batch_size))
+
+    for j in range(num_batches):
+        start = batch_size * j
+        end = min(batch_size * (j + 1), b0s.shape[0])
         log_module.info(f"Batched Processing of B0")
-        log_module.info(f"Processing {b0} :: {j+1} / {len(b0s)}")
-        settings.b0_list = [b0]
+        log_module.info(f"Processing values {b0s[start:end].tolist()} :: Batch {j+1} / {num_batches}")
+        settings.b0_list = b0s[start:end].tolist()
         sequence = MESE(params=params, settings=settings)
         sequence.simulate()
 
         # we save everything separately
-        n = f"{name}_b0_{b0}".replace("-", "m").replace(".", "p")
+        n = f"{name}_b0-batch_{j}".replace("-", "m").replace(".", "p")
         db = sequence.get_db()
         db.save(path_tmp.joinpath(n))
         dbs.append(db)

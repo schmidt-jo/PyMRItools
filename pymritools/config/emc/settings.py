@@ -60,6 +60,11 @@ class SimulationSettings(BaseClass):
         alias="-rptdt", default=5.0,
         help="resample pulse to lower number (duration over dt) for more efficient computations"
     )
+    b0_batch_size: int = field(
+        alias="-bs", default=1,
+        help="batch size for B0 values of database. Especially for GPU computations, "
+             "if Out of Memory error, we can loop over B0 values per computation"
+    )
 
 
 @dataclass
