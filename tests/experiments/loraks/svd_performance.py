@@ -62,7 +62,7 @@ def compute():
     mxy = torch.tensor([224 * 192]) * 2
     logger.info(f"Set Spatial dimension size: {mxy[0]}")
 
-    ms_ce = torch.linspace(200, 550, 20).to(torch.int)
+    ms_ce = torch.linspace(200, 15000, 20).to(torch.int)
     oversampling = 10
     num_timer_runs = 3
 
