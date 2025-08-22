@@ -81,7 +81,13 @@ def compute():
         rank = max(m // 10, 10)
 
         from tests.utils import create_random_matrix
-        matrix = create_random_matrix(mxy.item(), mce.item(), dtype=torch.float32, device=device, noise=None)
+        matrix = create_random_matrix(
+            mxy.item(),
+            mce.item(),
+            dtype=torch.float32,
+            device=device,
+            noise_level=1e-2,
+        )
 
         # matrix = torch.randn((mxy, mce), device=device)
         # matrix += torch.full_like(matrix, 1)
