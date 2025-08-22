@@ -43,7 +43,9 @@ def process_svd(matrix: torch.Tensor, svd_type: SVDType, rank: int, oversampling
         case SVDType.RSVD:
             _, _, _ = randomized_svd(matrix=matrix, q=rank+oversampling, power_projections=power_iterations)
         case SVDType.EIGH:
+            torch.backends.cuda.preferred_linalg_library(backend="magma")
             _, _ = torch.linalg.eigh(matrix.mH @ matrix)
+            torch.backends.cuda.preferred_linalg_library(backend="default")
         case SVDType.RANDQLP:
             _, _, _ = rand_qlp(matrix=matrix)
         case SVDType.RANDNS:
