@@ -62,7 +62,7 @@ def compute():
     mxy = torch.tensor([224 * 192]) * 2
     logger.info(f"Set Spatial dimension size: {mxy[0]}")
 
-    ms_ce = torch.linspace(200, 15000, 20).to(torch.int)
+    ms_ce = torch.linspace(200, 550, 20).to(torch.int)
     oversampling = 10
     num_timer_runs = 3
 
@@ -78,9 +78,12 @@ def compute():
         m = min(mxy.item(), mce)
         rank = max(m // 10, 10)
 
-        matrix = torch.randn((mxy, mce), device=device)
-        matrix += torch.full_like(matrix, 1)
-        matrix += torch.randn_like(matrix)**2
+        from tests.utils import create_random_matrix
+        matrix = create_random_matrix(mxy.item(), mce.item(), dtype=torch.float32, device=device)
+
+        # matrix = torch.randn((mxy, mce), device=device)
+        # matrix += torch.full_like(matrix, 1)
+        # matrix += torch.randn_like(matrix)**2
 
         # SVDS
         for svd_type in list(SVDType):
