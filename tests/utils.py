@@ -370,6 +370,6 @@ def create_random_matrix(
         # Encourage collection + release cached blocks (safe for 'out')
         import gc
         gc.collect()
-        if device.startswith("cuda"):
+        if str(device).startswith("cuda"):
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
