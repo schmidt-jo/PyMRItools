@@ -320,43 +320,56 @@ def create_random_matrix(
     if seed is not None:
         torch.manual_seed(seed)
 
-    # We use higher precision for the creation of the matrix to avoid numerical issues and cast later
     creation_dtype = torch.float64
     k = min(m, n)
-    # Orthonormal factors via reduced QR on tall-skinny Gaussians
-    QL, _ = torch.linalg.qr(torch.randn(m, k, dtype=creation_dtype, device=device), mode="reduced")
-    QR, _ = torch.linalg.qr(torch.randn(n, k, dtype=creation_dtype, device=device), mode="reduced")
+    out = None  # will hold the final tensor we return
 
-    # Geometric singular spectrum: 1 ... 1/cond
-    # (Use logspace to avoid under/overflow and keep conditioning explicit)
-    s = torch.logspace(0, -torch.log10(torch.as_tensor(cond, dtype=creation_dtype, device=device)),
-                       steps=k, dtype=creation_dtype, device=device)
-    A = QL @ (s.unsqueeze(0) * QR.mH)  # (m,k) @ (k,k) @ (k,n) -> (m,n)
+    try:
+        # Orthonormal factors via reduced QR on tall-skinny Gaussians
+        QL, _ = torch.linalg.qr(torch.randn(m, k, dtype=creation_dtype, device=device), mode="reduced")
+        QR, _ = torch.linalg.qr(torch.randn(n, k, dtype=creation_dtype, device=device), mode="reduced")
 
-    # Add non-Gaussian noise with a small amplitude
-    if noise is not None and noise_level > 0:
-        if noise == "laplace":
-            # Laplace via difference of exponentials (or torch.distributions.Laplace)
-            u = torch.rand(m, n, dtype=creation_dtype, device=device) - 0.5
-            noise_sample = -torch.sign(u) * torch.log1p(-2 * torch.abs(u))  # Laplace(0,1)
-        elif noise == "student_t":
-            dof = 3.0
-            g = torch.randn(m, n, dtype=creation_dtype, device=device)
-            chi2 = torch.distributions.Chi2(dof).sample((m, n,)).to(device=device, dtype=creation_dtype)
-            noise_sample = g / torch.sqrt(chi2 / dof + 1e-12)  # heavy-tailed
-        elif noise == "rician":
-            # Rician magnitude noise proxy around zero-mean complex: sqrt((X+mu)^2 + Y^2) - bias
-            X = torch.randn(m, n, dtype=creation_dtype, device=device)
-            Y = torch.randn(m, n, dtype=creation_dtype, device=device)
-            noise_sample = torch.sqrt(X ** 2 + Y ** 2)  # Rician(ν=0, σ=1) magnitude
-            noise_sample -= noise_sample.mean()  # center to avoid biasing spectrum
-        else:
-            raise ValueError("Unknown noise type")
+        # Geometric spectrum 1 ... 1/cond (in log-space)
+        # use a scalar tensor to avoid host<->device conversions
+        log10_cond = torch.log10(torch.as_tensor(cond, dtype=creation_dtype, device=device))
+        s = torch.logspace(0, -log10_cond.item(), steps=k, dtype=creation_dtype, device=device)
 
-        # Scale noise relative to ||A||_F / sqrt(mn) to keep magnitudes sane
-        sigma = noise_level * (A.norm() / (m * n) ** 0.5 + 1e-12)
-        A = A + sigma * noise_sample
+        A = QL @ (s.unsqueeze(0) * QR.mH)  # (m,k) @ (k,k) @ (k,n) -> (m,n)
 
-    if dtype is not creation_dtype:
-        return A.to(dtype=dtype).contiguous()
-    return A.contiguous()
+        # Add optional noise
+        if noise is not None and noise_level > 0:
+            if noise == "laplace":
+                u = torch.rand(m, n, dtype=creation_dtype, device=device) - 0.5
+                noise_sample = -torch.sign(u) * torch.log1p(-2 * torch.abs(u))
+            elif noise == "student_t":
+                dof = 3.0
+                g = torch.randn(m, n, dtype=creation_dtype, device=device)
+                chi2 = torch.distributions.Chi2(dof).sample((m, n,)).to(device=device, dtype=creation_dtype)
+                noise_sample = g / torch.sqrt(chi2 / dof + 1e-12)
+            elif noise == "rician":
+                X = torch.randn(m, n, dtype=creation_dtype, device=device)
+                Y = torch.randn(m, n, dtype=creation_dtype, device=device)
+                noise_sample = torch.sqrt(X * X + Y * Y)
+                noise_sample -= noise_sample.mean()
+            else:
+                raise ValueError("Unknown noise type")
+
+            sigma = noise_level * (A.norm() / (m * n) ** 0.5 + 1e-12)
+            A = A + sigma * noise_sample  # new tensor; old temps can be dropped
+
+        # Prepare return tensor (keep only this alive past the finally block)
+        out = A.to(dtype=dtype).contiguous() if dtype is not creation_dtype else A.contiguous()
+        return out
+
+    finally:
+        # Explicitly drop *all* temporaries so the allocator can release blocks
+        for name in ("QL","QR","s","A","u","g","chi2","X","Y","noise_sample","log10_cond"):
+            obj = locals().get(name, None)
+            if obj is not None:
+                del obj
+        # Encourage collection + release cached blocks (safe for 'out')
+        import gc
+        gc.collect()
+        if device.startswith("cuda"):
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()

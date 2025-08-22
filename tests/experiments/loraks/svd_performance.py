@@ -50,7 +50,7 @@ def process_svd(matrix: torch.Tensor, svd_type: SVDType, rank: int, oversampling
             m_dim = min(matrix.shape[-2:])
             _ = randomized_nullspace(matrix=matrix, nullity=m_dim - rank, oversample=oversampling)
 
-
+@torch.no_grad()
 def compute():
     path = plib.Path(get_test_result_output_dir("svd_performance", mode=ResultMode.EXPERIMENT))
 
@@ -75,7 +75,7 @@ def compute():
     for g in tqdm.trange(ms_ce.shape[0], desc="Processing Matrix sizes"):
         mce = ms_ce[g] * 2
         # logger.info(f"\t\tProcessing Matrix Size CE : {g+1} / {ms_ce.shape[0]}")
-        m = min(mxy.item(), mce)
+        m = min(mxy.item(), mce.item())
         rank = max(m // 10, 10)
 
         from tests.utils import create_random_matrix
