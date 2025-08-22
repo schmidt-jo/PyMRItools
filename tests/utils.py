@@ -321,55 +321,44 @@ def create_random_matrix(
         torch.manual_seed(seed)
 
     creation_dtype = torch.float64
+    creation_device = torch.device("cpu")
     k = min(m, n)
     out = None  # will hold the final tensor we return
 
-    try:
-        # Orthonormal factors via reduced QR on tall-skinny Gaussians
-        QL, _ = torch.linalg.qr(torch.randn(m, k, dtype=creation_dtype, device=device), mode="reduced")
-        QR, _ = torch.linalg.qr(torch.randn(n, k, dtype=creation_dtype, device=device), mode="reduced")
 
-        # Geometric spectrum 1 ... 1/cond (in log-space)
-        # use a scalar tensor to avoid host<->device conversions
-        log10_cond = torch.log10(torch.as_tensor(cond, dtype=creation_dtype, device=device))
-        s = torch.logspace(0, -log10_cond.item(), steps=k, dtype=creation_dtype, device=device)
+    # Orthonormal factors via reduced QR on tall-skinny Gaussians
+    QL, _ = torch.linalg.qr(torch.randn(m, k, dtype=creation_dtype, device=creation_device), mode="reduced")
+    QR, _ = torch.linalg.qr(torch.randn(n, k, dtype=creation_dtype, device=creation_device), mode="reduced")
 
-        A = QL @ (s.unsqueeze(0) * QR.mH)  # (m,k) @ (k,k) @ (k,n) -> (m,n)
+    # Geometric spectrum 1 ... 1/cond (in log-space)
+    # use a scalar tensor to avoid host<->device conversions
+    log10_cond = torch.log10(torch.as_tensor(cond, dtype=creation_dtype, device=creation_device))
+    s = torch.logspace(0, -log10_cond.item(), steps=k, dtype=creation_dtype, device=creation_device)
 
-        # Add optional noise
-        if noise is not None and noise_level > 0:
-            if noise == "laplace":
-                u = torch.rand(m, n, dtype=creation_dtype, device=device) - 0.5
-                noise_sample = -torch.sign(u) * torch.log1p(-2 * torch.abs(u))
-            elif noise == "student_t":
-                dof = 3.0
-                g = torch.randn(m, n, dtype=creation_dtype, device=device)
-                chi2 = torch.distributions.Chi2(dof).sample((m, n,)).to(device=device, dtype=creation_dtype)
-                noise_sample = g / torch.sqrt(chi2 / dof + 1e-12)
-            elif noise == "rician":
-                X = torch.randn(m, n, dtype=creation_dtype, device=device)
-                Y = torch.randn(m, n, dtype=creation_dtype, device=device)
-                noise_sample = torch.sqrt(X * X + Y * Y)
-                noise_sample -= noise_sample.mean()
-            else:
-                raise ValueError("Unknown noise type")
+    A = QL @ (s.unsqueeze(0) * QR.mH)  # (m,k) @ (k,k) @ (k,n) -> (m,n)
 
-            sigma = noise_level * (A.norm() / (m * n) ** 0.5 + 1e-12)
-            A = A + sigma * noise_sample  # new tensor; old temps can be dropped
+    # Add optional noise
+    if noise is not None and noise_level > 0:
+        if noise == "laplace":
+            u = torch.rand(m, n, dtype=creation_dtype, device=creation_device) - 0.5
+            noise_sample = -torch.sign(u) * torch.log1p(-2 * torch.abs(u))
+        elif noise == "student_t":
+            dof = 3.0
+            g = torch.randn(m, n, dtype=creation_dtype, device=creation_device)
+            chi2 = torch.distributions.Chi2(dof).sample((m, n,)).to(device=creation_device, dtype=creation_dtype)
+            noise_sample = g / torch.sqrt(chi2 / dof + 1e-12)
+        elif noise == "rician":
+            X = torch.randn(m, n, dtype=creation_dtype, device=creation_device)
+            Y = torch.randn(m, n, dtype=creation_dtype, device=creation_device)
+            noise_sample = torch.sqrt(X * X + Y * Y)
+            noise_sample -= noise_sample.mean()
+        else:
+            raise ValueError("Unknown noise type")
 
-        # Prepare return tensor (keep only this alive past the finally block)
-        out = A.to(dtype=dtype).contiguous() if dtype is not creation_dtype else A.contiguous()
-        return out
+        sigma = noise_level * (A.norm() / (m * n) ** 0.5 + 1e-12)
+        A = A + sigma * noise_sample
 
-    finally:
-        # Explicitly drop *all* temporaries so the allocator can release blocks
-        for name in ("QL","QR","s","A","u","g","chi2","X","Y","noise_sample","log10_cond"):
-            obj = locals().get(name, None)
-            if obj is not None:
-                del obj
-        # Encourage collection + release cached blocks (safe for 'out')
-        import gc
-        gc.collect()
-        if str(device).startswith("cuda"):
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
+    out = A.to(dtype=dtype).contiguous() if dtype is not creation_dtype else A.contiguous()
+    # Now move random matrix to the target device
+    return out.to(device=device)
+
