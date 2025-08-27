@@ -162,12 +162,15 @@ def processing(settings: Settings):
         b1_data=b1_data, mask=noise_mask, flip_angle_set_deg=settings.flip_angle, path_visuals=settings.out_path,
         ratio_tr_n=settings.ratio_tr2_tr1
     )
-    # calculate relative error
-    b1_rel_err = torch.nan_to_num(
-        torch.divide(
-            b1_err, b1
+    # calculate relative error - we clamp at 200 %
+    b1_rel_err = torch.clamp(
+        torch.nan_to_num(
+            torch.divide(
+                b1_err, b1
+            ),
+            nan=0.0, posinf=0.0, neginf=0.0
         ),
-        nan=0.0, posinf=0.0, neginf=0.0
+        min=-2, max = 2
     )
 
     # save
