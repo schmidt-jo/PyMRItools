@@ -18,6 +18,11 @@ from pymritools.utils import nifti_save, fft_to_img, ifft_to_k, root_sum_of_squa
 
 logger = logging.getLogger(__name__)
 
+class InputType(Enum):
+    B1 = auto()
+    B0 = auto()
+    B1ERR = auto()
+
 
 def smooth_map(data: torch.Tensor, kernel_size: int = 5):
     # set kernel
@@ -546,6 +551,42 @@ def fit_revisited():
         )
 
 
+def load_input_field(in_type: InputType, settings: EmcFitSettings, data_shape: tuple):
+    match in_type:
+        case InputType.B1:
+            p_in = settings.input_b1
+        case InputType.B0:
+            p_in = settings.input_b0
+        case InputType.B1ERR:
+            p_in = settings.input_b1_err
+        case _:
+            msg = f"Unknown input type: {in_type.name}"
+            logger.error(msg)
+            raise ValueError(msg)
+    path_in = plib.Path(p_in)
+    if not path_in.is_file():
+        logger.info(f"No {in_type.name} input given or input invalid, estimating {in_type.name} from data")
+        data = None
+    else:
+        map = torch.from_numpy(nifti_load(path_in)[0])
+        if settings.process_slice:
+            map = map[:, :, map.shape[2] // 2, None]
+        while map.ndim < len(data_shape) - 2:
+            map = map.unsqueeze(-1)
+        data = map.expand(data_shape[:-2])
+    if data is not None:
+        match in_type:
+            case InputType.B1:
+                if data.max() > 10:
+                    data /= 100
+                data /= settings.tx_factor
+            # case InputType.B1ERR:
+            #     if data.max() > 100:
+            #         data /= 100
+        logger.info(f"\t\t- {in_type.name} Input value range: {(data[data.abs() > 1e-6].min().item(), data.max().item())}")
+    return data
+
+
 def wrap_cli(settings: EmcFitSettings):
     """
     Function to wrap the command line arguments dataclass, load data and call the core function
@@ -583,33 +624,9 @@ def wrap_cli(settings: EmcFitSettings):
     # set database
     db_pattern = db_torch_mag * torch.exp(1j * db_torch_phase)
 
-    path_in_b1 = plib.Path(settings.input_b1)
-    if not path_in_b1.is_file():
-        logger.info(f"No B1 input given or input invalid, estimating B1 from data")
-        b1_data = None
-    else:
-        b1_map = torch.from_numpy(nifti_load(path_in_b1)[0])
-        if b1_map.max() > 10:
-            b1_map /= 100
-        if settings.process_slice:
-            b1_map = b1_map[:, :, b1_map.shape[2] // 2, None]
-        while b1_map.ndim < data.ndim - 2:
-            b1_map = b1_map.unsqueeze(-1)
-        b1_data = b1_map.expand_as(data[..., 0, 0])
-        logger.info(f"\t\t- B1 Input value range: {(b1_data[b1_data>1e-6].min().item(), b1_data.max().item())}")
-
-    path_in_b0 = plib.Path(settings.input_b0)
-    if not path_in_b0.is_file():
-        logger.info(f"No B0 input given or input invalid, estimating B0 from data")
-        b0_data = None
-    else:
-        b0_map = torch.from_numpy(nifti_load(path_in_b0)[0])
-        if settings.process_slice:
-            b0_map = b0_map[:, :, b0_map.shape[2] // 2, None]
-        while b0_map.ndim < data.ndim - 2:
-            b0_map = b0_map.unsqueeze(-1)
-        b0_data = b0_map.expand_as(data[..., 0, 0])
-        logger.info(f"\t\t- B0 Input value range: {(b0_data.min().item(), b0_data.max().item())}")
+    b1_data = load_input_field(in_type=InputType.B1, settings=settings, data_shape=data.shape)
+    b1_err_data = load_input_field(in_type=InputType.B1ERR, settings=settings, data_shape=data.shape)
+    b0_data = load_input_field(in_type=InputType.B0, settings=settings, data_shape=data.shape)
 
     if settings.rsos_channel_combine:
         # b1_data = root_sum_of_squares(b1_data, dim_channel=-1).unsqueeze(-1) if b1_data is not None else None
@@ -618,7 +635,9 @@ def wrap_cli(settings: EmcFitSettings):
     fit_mese(
         data_xyzce=data, db_t1t2b1b0=db_pattern,
         t1_vals=t1_vals, t2_vals=t2_vals, b1_vals=b1_vals, b0_vals=b0_vals,
-        path_out=path, b1_data=b1_data, b0_data=b0_data, device=device, input_affine=affine,
+        path_out=path, b1_data=b1_data, b1_err_data=b1_err_data, b1_err_thr=settings.b1_error_cutoff,
+        b0_data=b0_data,
+        device=device, input_affine=affine,
         lr_reg=settings.low_rank_regularisation
     )
 
@@ -639,7 +658,7 @@ def prep_dims_bg_field(data: torch.Tensor, shape):
         while data.ndim < 3:
             data = data.unsqueeze(-1)
         data = data.expand(shape[:3])
-        data_alloc = data_alloc_sm = data
+        data_alloc = data_alloc_sm = data.clone()
         fit = False
     return data_alloc, data_alloc_sm, fit
 
@@ -648,6 +667,7 @@ def estimate_fields_from_db(
         data_5d: torch.Tensor, db_t1t2b1b0: torch.Tensor, device: torch.device,
         data_b1: torch.Tensor = None, data_b0: torch.Tensor = None,
         b1_vals: torch.Tensor = None, b0_vals: torch.Tensor = None,
+        b1_err_data: torch.Tensor = None, b1_err_thr: float = 0.15,
         batch_size: int = 10):
     if data_b1 is not None and data_b0 is not None:
         return data_b1, data_b1, data_b0, data_b0
@@ -660,9 +680,13 @@ def estimate_fields_from_db(
     data_5d = normalize_data(data_5d, dim=-1)
 
     num_batches = int(np.ceil(data_5d.shape[0] / batch_size))
-    data_b1, data_b1_sm, fit_b1 = prep_dims_bg_field(data_b1, data_5d.shape)
+    data_b1_out, data_b1_sm, fit_b1 = prep_dims_bg_field(data_b1, data_5d.shape)
     data_b0, data_b0_sm, fit_b0 = prep_dims_bg_field(data_b0, data_5d.shape)
 
+    if b1_err_data is not None:
+        # if b1 error maps are given we calculate a combined b1+ map from the input, the error maps and the emc esimate,
+        # hence we want to fit b1 from the dictionary
+        fit_b1 = True
     if not fit_b1:
         b1_vals_device = b1_vals.to(device)
     if not fit_b0:
@@ -698,7 +722,7 @@ def estimate_fields_from_db(
 
                 vals, indices = torch.min(l2, dim=-1)
                 indices = unflatten_batched_indices(indices, db_shape[:-1])
-                data_b1[start:end, :, idx_z] = b1_vals[indices[..., 2].cpu()].reshape(d_shape[:-1])
+                data_b1_out[start:end, :, idx_z] = b1_vals[indices[..., 2].cpu()].reshape(d_shape[:-1])
                 data_b0[start:end, :, idx_z] = b0_vals[indices[..., 3].cpu()].reshape(d_shape[:-1])
             elif not fit_b1:
                 # b1 is given, we create a batched database which is as close as possible at each given b1 value per pixel
@@ -745,16 +769,24 @@ def estimate_fields_from_db(
                 vals, indices = torch.min(loss, dim=-1)
                 indices = unflatten_batched_indices(indices, (nt1, nt2, nb1, nb0))
 
-                data_b1[start:end, :, idx_z] = b1_vals[indices[..., 2].cpu()]
+                data_b1_out[start:end, :, idx_z] = b1_vals[indices[..., 2].cpu()]
             # field_sm[:, :, idx_z, idx_c] = smooth_map(field_alloc, kernel_size=min(field_alloc.shape[:2]) // 30)
-        if fit_b0:
-            data_b0_sm = torch.from_numpy(gaussian_filter(data_b0.numpy(), sigma=10, axes=(0, 1, 2)))
+    if fit_b0:
+        data_b0_sm = torch.from_numpy(gaussian_filter(data_b0.numpy(), sigma=10, axes=(0, 1, 2)))
+    else:
+        data_b0_sm = data_b0
+    if fit_b1:
+        if b1_err_data is not None:
+            # calculate combined map
+            # we use a weighted averaging, with a linear weighting factor between 0 and b1_err_thr the threshold.
+            # i.e. for 0 b1 error we use the b1 input, for b1_err_thr error we use the b1 emc estimate
+            weights = torch.clamp(b1_err_data.abs(), 0.0, b1_err_thr) / b1_err_thr
+            data_b1 = weights * data_b1_out + (1 - weights) * data_b1
         else:
-            data_b0_sm = data_b0
-        if fit_b1:
-            data_b1_sm = torch.from_numpy(gaussian_filter(data_b1.numpy(), sigma=10, axes=(0, 1, 2)))
-        else:
-            data_b1_sm = data_b1
+            data_b1 = data_b1_out
+        data_b1_sm = torch.from_numpy(gaussian_filter(data_b1.numpy(), sigma=10, axes=(0, 1, 2)))
+    else:
+        data_b1_sm = data_b1
     return data_b1_sm, data_b1, data_b0_sm, data_b0
 
 
@@ -797,7 +829,7 @@ def regularised_fit(
         t1_vals: torch.Tensor, t2_vals: torch.Tensor,
         b1_data: torch.Tensor, b1_vals: torch.Tensor,
         b0_data: torch.Tensor, b0_vals: torch.Tensor,
-        device: torch.device, lr_reg: bool = False) -> (torch.Tensor, torch.Tensor):
+        device: torch.device, lr_reg: int = None) -> (torch.Tensor, torch.Tensor):
     logger.info("Regularized fit")
     # prepare the database for b1 and b0 regularization
     db_shape = db_t1t2b1b0.shape
@@ -825,7 +857,7 @@ def regularised_fit(
     t2_indices = t2_indices[:, :, None, None].expand(*db_shape[:2], *data.shape[:2])
 
     # do slice wise processing
-    logger.info(f"Processing, slice wise with B1 reg. and low-rank regularisation set {lr_reg}")
+    logger.info(f"Processing, slice wise with B1 reg. and low-rank regularisation set to {lr_reg}")
     for idx_z in range(data.shape[2]):
         logger.info(f"______")
         logger.info(f"Processing, slice wise :: Slice {idx_z + 1} / {data.shape[2]}")
@@ -850,11 +882,11 @@ def regularised_fit(
             db_batch = db_t1t2b1b0[t1_indices, t2_indices, b1_indices, b0_indices, :]
 
             # now db dims match with data batch
-            if lr_reg:
+            if lr_reg is not None:
                 # use a low rank patch based constraint to stabilise the fitting
                 batch_t2, batch_l2_res = match_lr_constrained(
                     data_batch_xyt=data_batch, db_batch_t1t2xyt=db_batch,
-                    t1_vals=t1_vals, t2_vals=t2_vals
+                    t1_vals=t1_vals, t2_vals=t2_vals, rank=lr_reg
                 )
             else:
                 # just match pixel wise
@@ -1001,8 +1033,9 @@ def fit_mese(
         t1_vals: torch.Tensor, t2_vals: torch.Tensor, b1_vals: torch.Tensor, b0_vals: torch.Tensor,
         path_out: plib.Path,
         b1_data: torch.Tensor = None, b0_data = None,
+        b1_err_data: torch.Tensor = None, b1_err_thr: float = 0.15,
         device: torch.device = torch.get_default_device(),
-        lr_reg: bool = True,
+        lr_reg: int = None,
         input_affine: torch.Tensor = torch.eye(4)):
     """
     MESE dictionary fit method.
@@ -1021,6 +1054,8 @@ def fit_mese(
     # normalise database
     db_t1t2b1b0 = normalize_data(db_t1t2b1b0, dim=-1)
     # set up values
+    # if b1_data is not None:
+    #     b1_data *= 1.32
 
     # check for additional input if not available estimate for RSOS data
     # (assuming B1 transmit and B0 variation is approximately equal for all receive channels)
@@ -1028,7 +1063,8 @@ def fit_mese(
         data_5d=data_xyzce, db_t1t2b1b0=db_t1t2b1b0,
         data_b1=b1_data, b1_vals=b1_vals,
         data_b0=b0_data, b0_vals=b0_vals,
-        device=device, batch_size=1 if b0_data is not None else 20
+        b1_err_data=b1_err_data, b1_err_thr=b1_err_thr,
+        device=device, batch_size=1 # if b0_data is not None else 10
     )
     for i, d in enumerate([b1_data, b1_est, b0_data, b0_est]):
         nifti_save(
@@ -1051,7 +1087,7 @@ def fit_mese(
     )
 
     # __ Cleanup and Combination
-    r2 = torch.nan_to_num(1 / t2)
+    r2 = torch.nan_to_num(1 / t2, posinf=0.0, nan=0.0, neginf=0.0)
     t2 = 1e3 * t2
 
     logger.info(f"Combining channels")

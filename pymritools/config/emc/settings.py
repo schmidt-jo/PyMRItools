@@ -84,6 +84,12 @@ class FitSettings(BaseClass):
         alias="-b1", default="",
         help="Path to input B1+ map (.nii) file if available."
     )
+    input_b1_err: str = field(
+        alias="-b1e", default="",
+        help="Path to input B1+ error map (.nii) file if available. "
+             "If this is given, we combine the input B1+ with an estimate from EMC fitting with weighted averaging. "
+             "The weighting is using the error maps, down-weighting the B1+ input wherever the error is high."
+    )
     input_b0: str = field(
         alias="-b0", default="",
         help="Path to input B0 map (.nii) if available (only used in MEGESSE fitting)."
@@ -120,9 +126,19 @@ class FitSettings(BaseClass):
         alias="-iimg", default=False,
         help="if False, toggle FFT to get input to image space first for k-space input."
     )
-    low_rank_regularisation: bool = field(
-        alias="-lr", default=True,
+    low_rank_regularisation: int = field(
+        alias="-lr", default=None,
         help="For noisy channel wise matching, we can regularise the matching by using low-rank approximations in small neighborhoods in the fitting."
+    )
+    b1_error_cutoff: float = field(
+        alias="-b1ec", default=0.15,
+        help=f"If a B1+ error map is given, we linearly down-weight the input B1+ with increasing relative error. "
+             f"When reaching the cutoff specified here, the input is not used and the EMC estimate is trusted."
+    )
+    tx_factor: float = field(
+        alias="-txf", default=1.0,
+        help="For SAR reasons, we sometimes reduce the tx amplitude in scans. "
+             "The reduction factor can be incorporated here in order to yield correct B1+ scaling."
     )
 
 
