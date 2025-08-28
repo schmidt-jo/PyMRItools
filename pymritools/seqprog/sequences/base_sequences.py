@@ -1547,10 +1547,12 @@ def setup_sequence_cli(name: str):
         log_module.error(msg)
         raise FileNotFoundError(msg)
 
-    rf_file = plib.Path(config.pulse_file).absolute()
-    if rf_file.is_file():
-        log_module.info(f"Setting pulse file: {rf_file.as_posix()}.")
-        params.rf_file = rf_file
+    # rf_file_exc = plib.Path(config.pulse_file_excitation).absolute()
+    #
+    # rf_file_ref = plib.Path(config.pulse_file_refocusing).absolute()
+    # if rf_file.is_file():
+    #     log_module.info(f"Setting pulse file: {rf_file.as_posix()}.")
+    #     params.rf_file = rf_file
     params.display()
 
     return parser, config, specs, params

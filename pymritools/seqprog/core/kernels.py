@@ -233,7 +233,7 @@ class Kernel:
                 pulse_type='refocusing'
             )
         else:
-            log_module.info(f"rf -- build sync pulse")
+            log_module.info(f"rf -- build gauss pulse")
             rf = events.RF.make_gauss_pulse(
                 flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
                 phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
