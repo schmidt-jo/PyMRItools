@@ -18,9 +18,13 @@ class Settings(BaseClass):
         alias="-p", default="",
         help="Parameter configuration for sequence build. Fixing all necessary variables."
     )
-    pulse_file: str = field(
-        alias="-rf", default="",
-        help="Provide external pulse shape file to be used for the RF pulses."
+    pulse_file_excitation: str = field(
+        alias="-rfe", default="",
+        help="Provide external pulse shape file to be used for the excitation RF pulses."
+    )
+    pulse_file_refocusing: str = field(
+        alias="-rfr", default="",
+        help="Provide external pulse shape file to be used for the refocusing RF pulses."
     )
     # flags
     version: str = field(

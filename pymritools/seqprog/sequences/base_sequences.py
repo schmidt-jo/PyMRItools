@@ -182,7 +182,7 @@ class Sequence2D(abc.ABC):
                 pulse_num=1,
                 return_pe_time=True,
                 read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
-                pulse_file=self.config.pulse_file
+                pulse_file=self.config.pulse_file_refocusing
             )
         else:
             self.block_refocus: Kernel = NotImplemented
@@ -194,7 +194,7 @@ class Sequence2D(abc.ABC):
                 pulse_num=0,
                 return_pe_time=False,
                 read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
-                pulse_file=self.config.pulse_file
+                pulse_file=self.config.pulse_file_refocusing
             )
         else:
             self.block_refocus_1: Kernel = NotImplemented
@@ -211,7 +211,7 @@ class Sequence2D(abc.ABC):
             self.block_excitation = Kernel.excitation_slice_sel(
                 params=self.params, system=self.system,
                 adjust_ramp_area=ramp_area,
-                pulse_file=self.config.pulse_file
+                pulse_file=self.config.pulse_file_excitation
             )
         else:
             self.block_excitation: Kernel = NotImplemented
