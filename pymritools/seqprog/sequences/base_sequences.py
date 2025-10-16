@@ -1052,18 +1052,38 @@ class Sequence2D(abc.ABC):
         delta_z = self.params.z_extend * 1e-3
         if self.params.interleaved_slice_acquisition:
             log_module.info("\t\t-set interleaved acquisition")
-            # want to go through the slices alternating from beginning and middle
-            self.z.flat[:num_slices] = np.linspace((-delta_z / 2), (delta_z / 2), num_slices)
-            # reshuffle slices mid+1, 1, mid+2, 2, ...
-            self.z = self.z.transpose().flatten()[:num_slices]
+            # base (sorted) slice positions
+            z_lin = np.linspace((-delta_z / 2), (delta_z / 2), num_slices)
+
+            # Build order: [0, mid, 2, mid+2, 4, mid+4, ..., 1, mid+1, 3, mid+3, ...]
+            mid = num_slices // 2
+            even_first = list(range(0, mid, 2))
+            even_second = list(range(mid, num_slices, 2))
+            odd_first = list(range(1, mid, 2))
+            odd_second = list(range(mid + 1, num_slices, 2))
+
+            order = []
+            # interleave even indices from first and second halves
+            for i in range(max(len(even_first), len(even_second))):
+                if i < len(even_first):
+                    order.append(even_first[i])
+                if i < len(even_second):
+                    order.append(even_second[i])
+            # then interleave odd indices from first and second halves
+            for i in range(max(len(odd_first), len(odd_second))):
+                if i < len(odd_first):
+                    order.append(odd_first[i])
+                if i < len(odd_second):
+                    order.append(odd_second[i])
+            # we already know the original indices in `order`, save for later sorting of raw data
+            self.trueSliceNum = np.asarray(order, dtype=int)
+            # apply order to z positions
+            self.z = z_lin[self.trueSliceNum]
         else:
             log_module.info("\t\t-set sequential acquisition")
             self.z = np.linspace((-delta_z / 2), (delta_z / 2), num_slices)
-        # find reshuffled slice numbers
-        for idx_slice_num in range(num_slices):
-            z_val = self.z[idx_slice_num]
-            z_pos = np.where(np.unique(self.z) == z_val)[0][0]
-            self.trueSliceNum[idx_slice_num] = z_pos
+            # sequential: identity mapping
+            self.trueSliceNum = np.arange(num_slices)
 
     def _set_name_fov(self) -> str:
         fov_r = int(self.params.resolution_fov_read)
@@ -1161,9 +1181,9 @@ class Sequence2D(abc.ABC):
                 append_to_lists(start - 1e-6, 0.0, label="RF amp")
                 append_to_lists(start - 1e-6, 0.0, label="RF phase")
                 t_rf = rf.t * 1e6
-                signal = np.abs(rf.signal)
+                signal = np.real(rf.signal)
                 angle = np.angle(
-                    rf.signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
+                    signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
                 )
                 if sim_grad_moments:
                     if rf.use == "excitation":
@@ -1590,9 +1610,9 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
         logging.info("Plotting")
         # plot start
         sequence.plot_sequence(t_start_s=0, t_end_s=0.65 * sequence.params.tr * 1e-3, sim_grad_moments=True)
-        if sequence.params.resolution_slice_num < 30:
+        if sequence.params.resolution_slice_num < 15:
             n = 2
-        elif sequence.params.resolution_slice_num < 60:
+        elif sequence.params.resolution_slice_num < 30:
             n = 1
         else:
             n = 0.5
