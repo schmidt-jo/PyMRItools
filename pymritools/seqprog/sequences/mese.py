@@ -71,6 +71,7 @@ class MESE(Sequence2D):
         t_ref_2_adc = self.block_acquisition.get_duration() / 2 + self.block_refocus.get_duration() / 2
 
         self.params.esp = 2 * np.max([t_exci_ref, t_ref_1_adc, t_ref_2_adc]) * 1e3
+        self.esp = self.params.esp
         log_module.info(f"\t\t-found minimum ESP: {self.params.esp:.2f} ms")
 
         if np.abs(t_ref_1_adc - t_ref_2_adc) > 1e-6:

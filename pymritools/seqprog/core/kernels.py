@@ -361,7 +361,7 @@ class Kernel:
         # this makes pre-phasing etc. gradient calculation straight forward later on.
 
         # calculate extended read gradient flat time
-        t_adc_extended = int((params.resolution_n_read + 1) * params.oversampling) * params.dwell
+        t_adc_extended = int((params.resolution_n_read + 1) * params.oversampling) * adc.t_dwell_s
         # to get the same gradient amplitude during ADC readout we adjust the flat area to incorporate
         # this additional sample / extended flat time
         flat_area = (
@@ -422,6 +422,7 @@ class Kernel:
                     f"This would shift k-space samples to unwanted positions. check calculations.")
             log_module.warning(warn)
         adc.t_delay_s = delay
+        adc.set_on_raster()
         # finished block
         if adc.get_duration() > grad_read.get_duration():
             err = (f"adc duration longer than read gradient duration. \n"
@@ -779,8 +780,9 @@ class Kernel:
                     t_offset = e.t_delay_s
                     t_rf = self.rf.t_array_s + t_offset
                     t_rf = (1e6 * t_rf).astype(int)
-                    amp_rf = np.abs(self.rf.signal)
-                    phase_rf = np.angle(self.rf.signal) + self.rf.phase_rad
+                    amp_rf = self.rf.signal
+                    phase_rf = np.zeros_like(amp_rf)
+                    phase_rf[np.abs(amp_rf)>1e-3] = self.rf.phase_rad
                     phase_rf *= np.max(amp_rf) / np.pi
 
                     # annotate phase of plot

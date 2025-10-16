@@ -152,7 +152,7 @@ class MEGESSE(Sequence2D):
 
     def _reset_phase_blip_gradient(self):
         grad_phase = self.block_acquisition_neg_polarity.grad_phase
-        self.block_acquisition_neg_polarity.grad_phase.amplitude = np.zeros_like(grad_phase.amplitude)
+        self.block_acquisition_neg_polarity.grad_phase.signal = np.zeros_like(grad_phase.signal)
 
     def _modify_acquisition_block_neg_polarity(self):
         # we want a phase encode after the readout gradient that moves exactly one line

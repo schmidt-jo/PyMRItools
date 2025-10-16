@@ -34,7 +34,7 @@ def pulse_calibration_integral(
     rf_pulse.set_flip_angle(flip_angle_rad=flip_angle_deg / 180 * np.pi)
     # set phase in rad
     phase_rad = phase / 180 * np.pi
-    rf_amplitude = torch.from_numpy(rf_pulse.amplitude.copy())
+    rf_amplitude = torch.from_numpy(rf_pulse.signal.copy())
     rf_phase = torch.from_numpy(rf_pulse.phase.copy())
     b1_pulse = rf_amplitude * torch.exp(
         1j * (rf_phase + phase_rad)

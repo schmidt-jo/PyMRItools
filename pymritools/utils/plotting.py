@@ -47,12 +47,12 @@ def plot_gradient_pulse(
         rows=2, cols=1,
         specs=[[{"secondary_y": True}], [{}]]
     )
-    if p_cplx.shape.__len__() > 1 and p_cplx.shape[-1] > 1:
+    if p_cplx.shape.__len__() > 1 and p_cplx.shape[-1] > 1 and p_cplx.shape[0] > 1:
         cmap = plc.sample_colorscale("Inferno", p_cplx.shape[0], 0.1, 0.9)
     else:
         cmap = plc.sample_colorscale("Inferno", 2, 0.6, 0.8)
     for i, p in enumerate(p_cplx):
-        p_abs = torch.abs(p)
+        p_abs = torch.real(p)
         fig.add_trace(
             go.Scatter(
                 x=x_ax, y=p_abs,
@@ -201,32 +201,6 @@ def plot_emc_sim_data(sim_data: SimulationData, out_path: plib.Path | str, name:
     fig_file = out_path.joinpath(f"plot_emc_signal{name}").with_suffix(".html")
     logger.info(f"writing file: {fig_file.as_posix()}")
     fig.write_html(fig_file.as_posix())
-
-
-# def plot_magnetization(mag_profile_df: pl.DataFrame, out_path: plib.Path | str,
-#                        animate: bool = False, slice_thickness_mm: float = 0.0, name: str = ""):
-#     if name:
-#         name = f"_{name}"
-#     if animate:
-#         fig = px.line(
-#             data_frame=mag_profile_df, x="axis", y="profile", color="dim",
-#             animation_frame="name", labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
-#         )
-#
-#     else:
-#         fig = px.line(
-#             data_frame=mag_profile_df, x="axis", y="profile", color="dim",
-#             facet_col="name", facet_col_wrap=2, labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
-#         )
-#         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-#         if slice_thickness_mm > 1e-3:
-#             fig.add_vrect(x0=-slice_thickness_mm / 2, x1=slice_thickness_mm / 2,
-#                           annotation_text="desired slice", annotation_position="bottom right",
-#                           fillcolor="purple", opacity=0.25, line_width=0)
-#     out_path = plib.Path(out_path).absolute()
-#     fig_file = out_path.joinpath(f"plot_magnetization_propagation{name}").with_suffix(".html")
-#     log_module.info(f"writing file: {fig_file.as_posix()}")
-#     fig.write_html(fig_file.as_posix())
 
 
 def plot_slice_img_tensor(slice_image_tensor: torch.Tensor, sim_data: SimulationData,
