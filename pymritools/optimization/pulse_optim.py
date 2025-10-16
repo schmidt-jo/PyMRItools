@@ -31,22 +31,27 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
     target_m_z = pulse_sim.data.sample.clone()
     target_m_z[pulse_sim.data.sample_axis.abs() < slice_thickness / 2] = 0
 
+    # additionally introduce some target weighting towards the center
+    target_m_xy_weighting = torch.exp(-pulse_sim.data.sample_axis**2 / 0.003**2)
+    # we want to emphasise rippling reduction
+    target_m_xy_weighting[target_m_xy > 0.5] = 0.5
+    target_m_xy_weighting /= target_m_xy_weighting.max()
+
     # assume we have a constant given gradient function
     # we need to adjust the simulation itself to optimise
-    pulse_x = pulse_sim.grad_pulse.data_pulse_x.clone().requires_grad_(True)
+    # pulse_x = pulse_sim.grad_pulse.data_pulse_x.clone()
+    pulse_x = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_x)
     pulse_y = pulse_sim.grad_pulse.data_pulse_y.clone().requires_grad_(True)
     pulse_iter =[[pulse_x, pulse_y]]
 
-    loss_sar = torch.sum(torch.abs(pulse_x ** 2)) + torch.sum(torch.abs(pulse_y ** 2))
-    losses_sar = [loss_sar.item()]
-
     # set some optimisation parameters
-    max_num_iter = 10
+    max_num_iter = 100
     # lr = torch.full((max_num_iter,), 1e-11)
-    lr = torch.linspace(1e-10, 1e-12, max_num_iter)
+    lr = torch.linspace(1e-10, 5e-12, max_num_iter)
 
     losses = []
     losses_profile = []
+    losses_sar = []
 
     mag_iter = []
     bar = tqdm.trange(max_num_iter)
@@ -66,7 +71,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         mag_iter.append([m_xy, m_z])
 
         # compute losses
-        loss_profile = torch.linalg.norm(m_xy - target_m_xy) + torch.linalg.norm(m_z - target_m_z)
+        loss_profile = torch.linalg.norm((m_xy - target_m_xy) * target_m_xy_weighting) + torch.linalg.norm(m_z - target_m_z)
         losses_profile.append(loss_profile.item())
 
         loss_sar = torch.sum(torch.abs(pulse_x**2)) + torch.sum(torch.abs(pulse_y**2)) * 1e9
@@ -78,12 +83,12 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
         loss.backward()
         with torch.no_grad():
-            pulse_x -= lr[idx] * pulse_x.grad
+            # pulse_x -= lr[idx] * pulse_x.grad
             pulse_y -= lr[idx] * pulse_y.grad
 
             pulse_iter.append([pulse_x.clone().detach(), pulse_y.clone().detach()])
 
-        pulse_x.grad.zero_()
+        # pulse_x.grad.zero_()
         pulse_y.grad.zero_()
 
     fig = psub.make_subplots(
@@ -103,7 +108,20 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
                 ),
                 row=j+1, col=1
             )
-
+    # put SLR init on top
+    p = [pulse_sim.grad_pulse.data_pulse_x, pulse_sim.grad_pulse.data_pulse_y]
+    for j, pp in enumerate(p):
+        pp = pp.squeeze()
+        fig.add_trace(
+            go.Scatter(
+                y=pp.detach().cpu(),
+                mode="lines",
+                line=dict(color="teal"),
+                showlegend=False,
+                opacity=0.7
+            ),
+            row=j+1, col=1
+        )
     fn = path.joinpath("pulse").with_suffix(".html")
     logger.info(f"Write file: {fn}")
     fig.write_html(fn)
@@ -130,6 +148,16 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         plc.sample_colorscale("matter_r", len(mag_iter), 0.1, 0.9)
         ]
     fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=pulse_sim.data.sample_axis.cpu(), y=target_m_xy_weighting.cpu(),
+            name=f"Target weighting",
+            line=dict(color="violet", width=0),
+            fill="tozeroy",
+            opacity=0.4,
+            mode="lines"
+        )
+    )
     for i, m in enumerate(mag_iter):
         for j, mm in enumerate(m):
             fig.add_trace(
@@ -138,17 +166,17 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
                     name=f"Mag. {['xy', 'z'][j % 2]}",
                     line=dict(color=cmap[j][i]),
                     mode="lines",
-                    opacity = 0.3,
+                    opacity = torch.linspace(0.2, 0.5, len(mag_iter)).tolist()[i],
                     showlegend=False
                 )
             )
-    for i, t in enumerate([target_m_xy, target_m_z]):
-        targ = "Target " if i < 2 else ""
+    for i, t in enumerate([mag_iter[0][0], mag_iter[0][1], target_m_xy, target_m_z]):
+        targ = "Target " if i >= 2 else "Init "
         fig.add_trace(
             go.Scatter(
                 x=pulse_sim.data.sample_axis.cpu(), y=t.detach().cpu(),
                 name=f"{targ}Mag. {['xy', 'z'][i % 2]}",
-                line=dict(color=["teal", "salmon"][i]),
+                line=dict(color=["teal", "salmon", "cyan", "orange"][i]),
                 mode="lines"
             )
         )
@@ -165,9 +193,13 @@ if __name__ == '__main__':
         prog_name="EMC simulation - Pulse",
         dict_config_dataclasses={"settings": PulseSimulationSettings}
     )
+    # to not throw an error we set the output to the file, later we use the experiment file logic
+    args.settings.out_path = plib.Path(__file__).absolute().as_posix()
 
     settings = PulseSimulationSettings.from_cli(args=args.settings)
+    # set some additionals
     settings.visualize = False
+    settings.kernel_file = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/optimization/mese_sinc_kernels.pkl").as_posix()
     settings.display()
 
     try:
