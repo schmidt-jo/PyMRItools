@@ -54,7 +54,7 @@ class RF(Event):
         self.bandwidth_hz: float = 0.0
         self.time_bandwidth: float = 0.0
 
-        self.signal: np.ndarray = np.zeros(0, dtype=complex)
+        self.signal: np.ndarray = np.zeros(0, dtype=float)
 
     @classmethod
     def load_from_pypsi_pulse(cls, fname: str, flip_angle_rad: float, phase_rad: float, system: pp.Opts,
@@ -66,7 +66,7 @@ class RF(Event):
         rf_instance.pulse_type = pulse_type
 
         # get signal envelope
-        signal = rf.amplitude * np.exp(1j * rf.phase)
+        signal = rf.signal
         # calculate raster with assigned duration, we set the signal to be rastered on rf raster of 1 us
         delta_t = system.rf_raster_time
         # calculate mid - time points of rf
@@ -221,12 +221,14 @@ class RF(Event):
 
     def _set_central_time(self):
         """
-        calculate the central point of rf shape
+        calculate the central point of rf shape - we take this to be the midpoint of the duration,
+        as for asymetric, eg. slr pulses, the midpoint would not be considered the peak
         """
-        # Detect the excitation peak; if i is a plateau take its center
-        rf_max = np.max(np.abs(self.signal))
-        i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
-        self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
+        # # Detect the excitation peak; if i is a plateau take its center
+        # rf_max = np.max(np.abs(self.signal))
+        # i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
+        # self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
+        self.t_mid = self.t_delay_s + self.t_duration_s / 2
 
     def plot(self):
         fig = plt.figure()
@@ -775,14 +777,14 @@ class ADC(Event):
         plt.show()
 
     def set_on_raster(self):
-        raster_time = float(self.system.adc_raster_time)
+        raster_time = float(self.system.adc_raster_time) * 1e9
         to_set = ["t_dwell_s", "t_delay_s", "t_duration_s"]
         # save number of samples
         n = int(self.t_duration_s / self.t_dwell_s)
         for key in to_set:
-            value = self.__getattribute__(key)
+            value = self.__getattribute__(key) * 1e9
             if np.abs(value) % raster_time > 1e-9:
-                rastered_value = np.ceil(value / raster_time) * raster_time
+                rastered_value = np.round(value / raster_time) * raster_time * 1e-9
                 self.__setattr__(key, rastered_value)
                 if key == "t_dwell_s":
                     # if dwell changed adopt
