@@ -1,4 +1,4 @@
-from .base import Simulation, SimulationData
+from .base_sequence import Simulation, SimulationData
 from ..core import functions, GradPulse
 from pymritools.config.emc import EmcSimSettings, EmcParameters
 import torch

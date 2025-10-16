@@ -9,7 +9,30 @@ import pathlib as plib
 from pymritools.config.emc.params import SimulationData
 from pymritools.utils.colormaps import check_colormap_available, get_colormap, show_available_colormaps
 
-log_module = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+
+
+def quick_image_plot(data: torch.Tensor, path: plib.Path, name: str, cs:int = 1, es: int = 1):
+    plot_data = data.clone().cpu()
+    while plot_data.ndim > 4:
+        plot_data = plot_data[..., 0]
+
+    while plot_data.ndim < 4:
+        plot_data = plot_data.unsqueeze(-1)
+
+    fig = psub.make_subplots(rows=es, cols=cs)
+    for ci in range(cs):
+        for ei in range(es):
+            d = plot_data[:, :, ci, ei]
+            fig.add_trace(
+                go.Heatmap(z=d.abs(), transpose=True, showscale=False, colorscale="Inferno"),
+                row=1+ei, col=1+ci
+            )
+    fig.update_yaxes(visible=False)
+    fig.update_xaxes(visible=False)
+    fn = path.joinpath(name).with_suffix(".html")
+    logger.info(f"write file: {fn}")
+    fig.write_html(fn)
 
 
 def plot_gradient_pulse(
@@ -24,12 +47,12 @@ def plot_gradient_pulse(
         rows=2, cols=1,
         specs=[[{"secondary_y": True}], [{}]]
     )
-    if p_cplx.shape.__len__() > 1 and p_cplx.shape[-1] > 1:
+    if p_cplx.shape.__len__() > 1 and p_cplx.shape[-1] > 1 and p_cplx.shape[0] > 1:
         cmap = plc.sample_colorscale("Inferno", p_cplx.shape[0], 0.1, 0.9)
     else:
         cmap = plc.sample_colorscale("Inferno", 2, 0.6, 0.8)
     for i, p in enumerate(p_cplx):
-        p_abs = torch.abs(p)
+        p_abs = torch.real(p)
         fig.add_trace(
             go.Scatter(
                 x=x_ax, y=p_abs,
@@ -79,7 +102,7 @@ def plot_gradient_pulse(
 
     out_path = plib.Path(out_path).absolute()
     fig_file = out_path.joinpath(f"plot_grad_pulse_{name}").with_suffix(".html")
-    log_module.info(f"writing file: {fig_file.as_posix()}")
+    logger.info(f"writing file: {fig_file.as_posix()}")
     fig.write_html(fig_file.as_posix())
 
 
@@ -176,34 +199,8 @@ def plot_emc_sim_data(sim_data: SimulationData, out_path: plib.Path | str, name:
 
     out_path = plib.Path(out_path).absolute()
     fig_file = out_path.joinpath(f"plot_emc_signal{name}").with_suffix(".html")
-    log_module.info(f"writing file: {fig_file.as_posix()}")
+    logger.info(f"writing file: {fig_file.as_posix()}")
     fig.write_html(fig_file.as_posix())
-
-
-# def plot_magnetization(mag_profile_df: pl.DataFrame, out_path: plib.Path | str,
-#                        animate: bool = False, slice_thickness_mm: float = 0.0, name: str = ""):
-#     if name:
-#         name = f"_{name}"
-#     if animate:
-#         fig = px.line(
-#             data_frame=mag_profile_df, x="axis", y="profile", color="dim",
-#             animation_frame="name", labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
-#         )
-#
-#     else:
-#         fig = px.line(
-#             data_frame=mag_profile_df, x="axis", y="profile", color="dim",
-#             facet_col="name", facet_col_wrap=2, labels={'y': 'Mag. Profile [a.u.]', 'x': 'sample axis [mm]'}
-#         )
-#         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-#         if slice_thickness_mm > 1e-3:
-#             fig.add_vrect(x0=-slice_thickness_mm / 2, x1=slice_thickness_mm / 2,
-#                           annotation_text="desired slice", annotation_position="bottom right",
-#                           fillcolor="purple", opacity=0.25, line_width=0)
-#     out_path = plib.Path(out_path).absolute()
-#     fig_file = out_path.joinpath(f"plot_magnetization_propagation{name}").with_suffix(".html")
-#     log_module.info(f"writing file: {fig_file.as_posix()}")
-#     fig.write_html(fig_file.as_posix())
 
 
 def plot_slice_img_tensor(slice_image_tensor: torch.Tensor, sim_data: SimulationData,
@@ -275,7 +272,7 @@ def animation_volumetric_data(
         msg = (f"colormap ({cmap}) not available as plotly colorscale or in the ScientificColorMap8 package. "
                f"Available scales:\nplotly :: {plc.named_colorscales()}\nscientific colorscale ::"
                f" {show_available_colormaps()}")
-        log_module.error(msg)
+        logger.error(msg)
         raise ValueError(msg)
 
     fig = go.Figure()
@@ -370,7 +367,7 @@ def animation_volumetric_data(
         file_suffix = f".{file_suffix}"
 
     fn = path_out.joinpath(file_name).with_suffix(file_suffix)
-    log_module.info(f"Write file {fn}")
+    logger.info(f"Write file {fn}")
 
     if file_suffix == ".html":
         fig.write_html(fn)
@@ -378,5 +375,5 @@ def animation_volumetric_data(
         fig.write_image(fn)
     else:
         msg = f"file suffix ({file_suffix}) not supported. Choose from (html, svg, png, pdf)"
-        log_module.error(msg)
+        logger.error(msg)
         raise ValueError(msg)

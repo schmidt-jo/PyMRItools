@@ -34,7 +34,7 @@ def pulse_calibration_integral(
     rf_pulse.set_flip_angle(flip_angle_rad=flip_angle_deg / 180 * np.pi)
     # set phase in rad
     phase_rad = phase / 180 * np.pi
-    rf_amplitude = torch.from_numpy(rf_pulse.amplitude.copy())
+    rf_amplitude = torch.from_numpy(rf_pulse.signal.copy())
     rf_phase = torch.from_numpy(rf_pulse.phase.copy())
     b1_pulse = rf_amplitude * torch.exp(
         1j * (rf_phase + phase_rad)
@@ -189,7 +189,7 @@ def matrix_propagation_relaxation_multidim(dt_s: torch.tensor, sim_data: Simulat
     relax_matrix = torch.moveaxis(relax_matrix, -1, 0)
     relax_matrix = torch.moveaxis(relax_matrix, -1, 0)
     # rotate around b0 offset [t1, t2, b0, 4, 4]
-    b0_rot = rotation_matrix_z(- sim_data.b0_vals * 2 * np.pi * dt_s)
+    b0_rot = rotation_matrix_z(sim_data.b0_vals * 2 * np.pi * dt_s)
     relax_matrix = torch.matmul(b0_rot[None, None], relax_matrix[:, :, None])
     # cast to b1 and num samples dim
     return relax_matrix[:, :, None, :, None]

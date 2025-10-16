@@ -74,7 +74,7 @@ def cgd(
                 iter_dict["c"] = msg
                 iter_bar.set_postfix(iter_dict)
             else:
-                log_module.info(msg)
+                log_module.debug(msg) if ii > 10 else log_module.info(msg)
             break
 
         if normr_act < normrmin:

@@ -287,6 +287,39 @@ class DB:
     def get_total_num_curves(self) -> int:
         return self._num_t1s * self._num_t2s * self._num_b1s * self._num_b0s
 
+    @classmethod
+    def add_dbs(cls, db_1: 'DB', db_2: 'DB') -> 'DB':
+        if not set(db_1.indices) == set(db_2.indices):
+            msg = f"Data to add does not comply to DB standard, found entries in db1: {db_1.indices} and {db_2.indices} in db2"
+            log_module.error(msg)
+            raise AttributeError(msg)
+        # merge params
+        params = db_1.params
+        if not params == db_2.params:
+            msg = f"Data to add does not comply to DB standard, found different params: {params} and {db_2.params}"
+        # cast columns
+        cc = ["index", "b0"]
+        casts = [pl.Int64, pl.Float64]
+        for i, col in enumerate(cc):
+            db_1.data = db_1.data.with_columns(pl.col(col).cast(casts[i]))
+            db_2.data = db_2.data.with_columns(pl.col(col).cast(casts[i]))
+
+        data = pl.concat(
+            (
+                db_1.data.with_columns(pl.col("b0").cast(pl.Int64)),
+                db_2.data.with_columns(pl.col("b0").cast(pl.Int64))
+            )
+        ).sort(by=["t1", "t2", "b1", "b0", "echo_num"], descending=False).drop("index").with_row_index("index")
+
+        # create instance
+        db = cls(data=data, params=params)
+        db._num_t1s = len(data["t1"].unique())
+        db._num_t2s = len(data["t2"].unique())
+        db._num_b1s = len(data["b1"].unique())
+        db._num_b0s = len(data["b0"].unique())
+        db._num_echoes = len(data["echo_num"].unique())
+        return db
+
 
 if __name__ == '__main__':
     dl = DB.load("examples/simulation/results/database_test.pkl")

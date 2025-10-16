@@ -10,7 +10,7 @@ import torch
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.recon.loraks import Settings
 from pymritools.recon.loraks.loraks import LoraksOptions, Loraks, LoraksImplementation, OperatorType
-from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType
+from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, NullspaceAlgorithm
 from pymritools.recon.loraks.utils import (
     check_channel_batch_size_and_batch_channels, prepare_k_space_to_batches, unprepare_batches_to_k_space,
     pad_input, unpad_output
@@ -28,6 +28,7 @@ def get_options_from_cmd_config(config: Settings) -> LoraksOptions:
             opts.solver_type = SolverType.LEASTSQUARES
         else:
             opts.solver_type = SolverType.AUTOGRAD
+        opts.nullspace_algorithm = NullspaceAlgorithm.EIGH
     elif config.loraks_algorithm == "P-LORAKS":
         opts = LoraksOptions()
         opts.loraks_type = LoraksImplementation.P_LORAKS
@@ -114,10 +115,10 @@ def main(config: Settings):
 
     logger.info("Save")
     img = fft_to_img(k_recon, dims=(0, 1))
-    nifti_save(
-        data=img.abs(),
-        img_aff=aff, path_to_dir=path_out, file_name="recon_img"
-    )
+    # nifti_save(
+    #     data=img.abs().squeeze(),
+    #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
+    # )
     rsos = root_sum_of_squares(img, dim_channel=-2)
     nifti_save(
         data=rsos,

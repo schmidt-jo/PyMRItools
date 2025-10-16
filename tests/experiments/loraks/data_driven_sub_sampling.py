@@ -20,6 +20,8 @@ from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, m_op_
 from pymritools.utils.functions import fft_to_img
 from pymritools.utils import Phantom, calc_psnr, root_sum_of_squares, calc_nmse, calc_ssim
 
+from scipy.ndimage import gaussian_filter
+
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
 from tests.utils import get_test_result_output_dir, ResultMode
@@ -488,6 +490,25 @@ def plot_sampling_density(
         fig.write_image(fn)
 
 
+def quick_plot(data, path, name, cs:int = 8, es: int = 2):
+    plot_data = data.clone().cpu()
+    while plot_data.ndim < 4:
+        plot_data = plot_data.unsqueeze(-1)
+    fig = psub.make_subplots(rows=es, cols=cs)
+    for ci in range(cs):
+        for ei in range(es):
+            d = plot_data[:, :, ci, ei]
+            fig.add_trace(
+                go.Heatmap(z=d.abs(), transpose=True, showscale=False, colorscale="Inferno"),
+                row=1+ei, col=1+ci
+            )
+    fig.update_yaxes(visible=False)
+    fig.update_xaxes(visible=False)
+    fn = path.joinpath(name).with_suffix(".html")
+    logger.info(f"write file: {fn}")
+    fig.write_html(fn)
+
+
 def plot_results(results: list, path: plib.Path):
     # create figure
     fig = psub.make_subplots(
@@ -600,31 +621,43 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
 
     # Extract sampling density
     path_tmp = path_out_data.joinpath("sampling_density_data").with_suffix(".pkl")
-    if path_tmp.is_file():
-        logger.info(f"Load data: {path_tmp}")
-        with open(path_tmp, "rb") as f:
-            sd = pickle.load(f)
-        sampling_density = torch.tensor(sd["sampling_density"])
-        grad_mac = torch.tensor(sd["grad_mac"])
-        indices_ac = torch.tensor(sd["indices_ac"])
-        mask = torch.tensor(sd["mask"])
-        loraks = None
-    else:
-        # compute optimized sampling scheme
-        if not loraks_type == LoraksType.AC:
-            msg = "only implemented for AC LORAKS"
-            logger.error(msg)
-            raise AttributeError(msg)
-        # do the density based version
-        grad, prep_k, mask, loraks = autograd_optimization_ac(
-            k=k, device=device,
-            batch_size_channels=8, rank=150
+    # if path_tmp.is_file():
+    #     logger.info(f"Load data: {path_tmp}")
+    #     with open(path_tmp, "rb") as f:
+    #         sd = pickle.load(f)
+    #     sampling_density = torch.tensor(sd["sampling_density"])
+    #     grad_mac = torch.tensor(sd["grad_mac"])
+    #     indices_ac = torch.tensor(sd["indices_ac"])
+    #     mask = torch.tensor(sd["mask"])
+    #     loraks = None
+    # else:
+    # compute optimized sampling scheme
+    if not loraks_type == LoraksType.AC:
+        msg = "only implemented for AC LORAKS"
+        logger.error(msg)
+        raise AttributeError(msg)
+    # do the density based version
+    grad, prep_k, mask, loraks = autograd_optimization_ac(
+        k=k, device=device,
+        batch_size_channels=8, rank=150
+    )
+    sampling_density, grad_mac, indices_ac, importance_mask = extract_sampling_density(grad=grad, ac_mask=mask)
+    # now do the iterative version
+    # calculate how many lines to skip
+    n_to_skip = (k.shape[1] - indices_ac.shape[0])
+    # calculate a normalizing function to insert influence of k-space vaue density
+    k_norm = torch.from_numpy(
+        gaussian_filter(
+            k.abs().numpy(),
+            sigma=20, axes=(0, 1)
         )
-        sampling_density, grad_mac, indices_ac, importance_mask = extract_sampling_density(grad=grad, ac_mask=mask)
-        # now do the iterative version
-        # calculate how many lines to skip
-        n_to_skip = (k.shape[1] - indices_ac.shape[0])
+    )
+    quick_plot(data=k_norm, path=path_out, name="k_space_weight_norm", cs=16, es=4)
+    for i, f in enumerate([1 / k_norm, 5 / k_norm]):
         sampling_mask = torch.full((k.shape[1], k.shape[-1]), k.shape[1], dtype=torch.int, device=device)
+        # sampling_mask = - torch.ones((k.shape[1], k.shape[-1]), dtype=torch.int, device=device)
+        sampling_mask[indices_ac] = k.shape[1]
+        fig = go.Figure()
         for n in tqdm.trange(n_to_skip):
             # for each line we want to take away
             for e in range(k.shape[-1]):
@@ -632,38 +665,61 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
                 # we take away previous lines
                 k_iter = k.clone()
                 m = sampling_mask[None, :, None, :].expand_as(k_iter)
-                k_iter[m < n+1] = 0
+                # set previously extracted lines 0
+                k_iter[m < n] = 0
+                # k_iter[m > n+1] = 0
                 # calculate the gradient and chose the phase encode line with the smalles gradient sum
                 # do the density based version
                 grad, _, _, _ = autograd_optimization_ac(
-                    k=k, device=device,
+                    k=k_iter, device=device,
                     batch_size_channels=8, rank=150
                 )
-                # we now have a gradient and are interested in its smalles amplitude along the echo were looking at,
+                # we now have a gradient and are interested in its smallest amplitude along the echo were looking at,
                 # and along the phase encode dir
                 # first squeeze slice
                 grad = grad.squeeze().abs()
-                # normalise by k - space abs
-                grad = grad / (torch.log(k.abs()))
-                grad = grad.sum(dim=(0, -1))[..., e]
+
+                # test normalisations normalise by k - space abs
+                if isinstance(f, float):
+                    if f < 1:
+                        grad = grad / (k_iter + 1e-9)
+                    else:
+                        grad = grad * f
+                else:
+                    grad = grad * f
+
+                # aggregate across readout and channel dim
+                grad = grad.sum(dim=(0, -2))[..., e]
+
                 # set ac region highest
                 grad[indices_ac] = grad.max()
+                # grad[indices_ac] = 0
+                if e == 0 and n < 20:
+                    fig.add_trace(
+                        go.Scatter(y=grad, showlegend=True, name=f"{n+1}")
+                    )
                 # get indices according to the sorted amplitudes
                 _, opt_ind = torch.sort(grad, descending=False)
+                # _, opt_ind = torch.sort(grad, descending=True)
                 # now we want to get the lowest amplitude and set it 0,
                 for oo in range(opt_ind.shape[0]):
                     o = opt_ind[oo]
-                    # check if we this index was previously unassigned.
+                    # check if this index was previously unassigned.
                     # if so take it, if not iterate
                     if sampling_mask[o, e] > n:
+                    # if sampling_mask[o, e] < 0:
                         sampling_mask[o, e] = n
                         break
+            if n % 5 == 0:
+                quick_plot(sampling_mask, path=path_tmp.parent, name=f"sampling_iteration{['_normed', '_normed5'][i]}", cs=1, es=1)
+                fn = path_tmp.parent.joinpath(f"gradient_first_echo_per_iteration{['_normed', '_normed5'][i]}").with_suffix(".html")
+                logger.info(f"Write file: {fn}")
+                fig.write_html(fn)
 
-    fn = path_tmp.parent.joinpath("sampling_mask").with_suffix(".pt")
-    logger.info(f"Write file: {fn}")
-    # torch.save(sampling_mask, fn)
-    sampling_mask = torch.load(fn)
-    plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
+        fn = path_tmp.parent.joinpath(f"sampling_mask{['_normed', '_normed5'][i]}").with_suffix(".pt")
+        logger.info(f"Write file: {fn}")
+        torch.save(sampling_mask, fn)
+        plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
 
     logger.info(f"Save data: {path_tmp}")
     sd = {
@@ -687,26 +743,35 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
         )
         masks.append({"name": "Optimized", "data": m_opt.squeeze()})
 
-        # add deterministic mask too
+    # add deterministic mask too
+
+    for i, n in enumerate(['_normed', '_normed5']):
         n_outer = sampling_mask.shape[0] - indices_ac.shape[0]
         n_to_keep = n_outer // 5
         n_th = n_outer - n_to_keep
+
+        fn = path_tmp.parent.joinpath(f"sampling_mask{n}").with_suffix(".pt")
+        sampling_mask = torch.load(fn)
 
         mask_opt_d = sampling_mask.clone()
         mask_opt_d[mask_opt_d < n_th] = 0
         mask_opt_d[mask_opt_d >= n_th] = 1
         mask_opt_d = mask_opt_d[None, :, None, :].expand_as(k)
-        masks.append({"name": "Opt.Determ.", "data": mask_opt_d})
+        name = "Opt.Determ."
+        if n:
+            name += f"{n[1:].capitalize()}"
+        masks.append({"name": name, "data": mask_opt_d})
 
-        with open(path_tmp.as_posix(), "wb") as j_file:
-            pickle.dump(masks, j_file)
-        plot_sampling_masks(masks, path=path_out)
+    with open(path_tmp.as_posix(), "wb") as j_file:
+        pickle.dump(masks, j_file)
+    plot_sampling_masks(masks, path=path_out)
 
     if loraks_type == LoraksType.AC:
-        path_tmp = path_out_data.joinpath("ac_recon_results").with_suffix(".pkl")
+        path_tmp = path_out_data.joinpath("ac_recon_results").with_suffix(".json")
         if path_tmp.is_file():
-            with open(path_tmp.as_posix(), "rb") as  j_file:
-                results = pickle.load(j_file)
+            # with open(path_tmp.as_posix(), "rb") as  j_file:
+            #     results = pickle.load(j_file)
+            results = pl.read_ndjson(path_tmp)
         else:
             # compare sampling patterns
             options = AcLoraksOptions(
@@ -716,11 +781,9 @@ def subsampling_optimization_loraks(loraks_type: LoraksType, data_type: DataType
             options.rank.value = 150
             loraks = Loraks.create(options=options)
             results = recon_sampling_patterns(k=k, masks=masks, bet=bet, loraks=loraks)
-            df = [{"psnr": r["psnr"], "ssim": r["ssim"], "nmse": r["nmse"]} for r in results]
+            df = [{"name": r["name"], "psnr": r["psnr"], "ssim": r["ssim"], "nmse": r["nmse"]} for r in results]
             df = pl.DataFrame(df)
             df.write_ndjson(path_tmp.with_suffix(".json"))
-            with open(path_tmp.as_posix(), "wb") as j_file:
-                pickle.dump(results, j_file)
         plot_results(results, path=path_out)
         plot_rmse(results, path=path_out)
 

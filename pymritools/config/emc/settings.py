@@ -60,6 +60,11 @@ class SimulationSettings(BaseClass):
         alias="-rptdt", default=5.0,
         help="resample pulse to lower number (duration over dt) for more efficient computations"
     )
+    b0_batch_size: int = field(
+        alias="-bs", default=1,
+        help="batch size for B0 values of database. Especially for GPU computations, "
+             "if Out of Memory error, we can loop over B0 values per computation"
+    )
 
 
 @dataclass
@@ -78,6 +83,12 @@ class FitSettings(BaseClass):
     input_b1: str = field(
         alias="-b1", default="",
         help="Path to input B1+ map (.nii) file if available."
+    )
+    input_b1_err: str = field(
+        alias="-b1e", default="",
+        help="Path to input B1+ error map (.nii) file if available. "
+             "If this is given, we combine the input B1+ with an estimate from EMC fitting with weighted averaging. "
+             "The weighting is using the error maps, down-weighting the B1+ input wherever the error is high."
     )
     input_b0: str = field(
         alias="-b0", default="",
@@ -105,6 +116,29 @@ class FitSettings(BaseClass):
     process_slice: bool = field(
         alias="-ps", default=False,
         help="Process middle single slice only to reduce processing time, eg. for debugging or qa."
+    )
+    rsos_channel_combine: bool = field(
+        alias="-rsos", default=False,
+        help="Process combined magnitude images."
+             "Otherwise the fitting is done channel wise and a weighted averaging based on the goodness fo fit is used for combination"
+    )
+    input_in_image_space: bool = field(
+        alias="-iimg", default=False,
+        help="if False, toggle FFT to get input to image space first for k-space input."
+    )
+    low_rank_regularisation: int = field(
+        alias="-lr", default=None,
+        help="For noisy channel wise matching, we can regularise the matching by using low-rank approximations in small neighborhoods in the fitting."
+    )
+    b1_error_cutoff: float = field(
+        alias="-b1ec", default=0.15,
+        help=f"If a B1+ error map is given, we linearly down-weight the input B1+ with increasing relative error. "
+             f"When reaching the cutoff specified here, the input is not used and the EMC estimate is trusted."
+    )
+    tx_factor: float = field(
+        alias="-txf", default=1.0,
+        help="For SAR reasons, we sometimes reduce the tx amplitude in scans. "
+             "The reduction factor can be incorporated here in order to yield correct B1+ scaling."
     )
 
 

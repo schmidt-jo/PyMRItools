@@ -8,8 +8,8 @@ import plotly.graph_objects as go
 import tqdm
 from scipy.ndimage import binary_erosion
 
-from pymritools.config.processing import DenoiseSettingsMPPCA
-from pymritools.utils import nifti_load, nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load
+from pymritools.config.processing import DenoiseSettingsLCPCA, SettingsNBC
+from pymritools.utils import nifti_load, nifti_save, fft_to_img, ifft_to_k, root_sum_of_squares, torch_load, torch_save
 from pymritools.recon.loraks.matrix_indexing import get_linear_indices
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from pymritools.config import setup_program_logging, setup_parser
@@ -18,7 +18,7 @@ from autodmri import estimator
 log_module = logging.getLogger(__name__)
 
 
-def load_data(settings: DenoiseSettingsMPPCA):
+def load_data(settings: DenoiseSettingsLCPCA):
     # load in data
     path_in = plib.Path(settings.in_path)
     if ".nii" in path_in.suffixes:
@@ -63,7 +63,7 @@ def load_data(settings: DenoiseSettingsMPPCA):
     return input_data, input_img
 
 
-def set_device(settings: DenoiseSettingsMPPCA):
+def set_device(settings: DenoiseSettingsLCPCA):
     if settings.use_gpu and torch.cuda.is_available():
         device = torch.device(f"cuda:{settings.gpu_device}")
     else:
@@ -108,8 +108,8 @@ def extract_noise_stats_from_mask(
         mask = mask[..., None]
     # Expand the mask to fit the data shape
     mask = mask.expand(*data_shape).to(torch.bool)
-    # extract noise data
-    noise_voxels = input_data[mask]
+    # extract noise data - since this correction is done for magnitude data we ensure magnitude data here
+    noise_voxels = input_data.abs()[mask]
     noise_voxels = noise_voxels[noise_voxels > 0]
     sigma, num_channels = ncc_stats.from_noise_voxels(noise_voxels)
     num_channels = min(max(num_channels, 1), 32)
@@ -339,17 +339,18 @@ def core_fn(
 
 def noise_bias_correction(
         denoised_data: torch.Tensor, sigma, num_channels):
-    # correct
+    # correct - ensure magnitude data
     return torch.sqrt(
         torch.clip(
-            denoised_data ** 2 - 2 * num_channels * sigma ** 2,
+            denoised_data.abs() ** 2 - 2 * num_channels * sigma ** 2,
             min=0.0
         )
     )
 
 
 def get_noise_mask(input_data: torch.Tensor, mask_path: plib.Path | str = None):
-    if mask_path is not None:
+    if bool(mask_path):
+        # not None or empty
         mask_path = plib.Path(mask_path)
         if not mask_path.is_file():
             err = f"Mask file {mask_path} does not exist"
@@ -361,7 +362,7 @@ def get_noise_mask(input_data: torch.Tensor, mask_path: plib.Path | str = None):
     return mask
 
 
-def denoise(settings: DenoiseSettingsMPPCA):
+def denoise(settings: DenoiseSettingsLCPCA):
     # load data
     input_data, input_img = load_data(settings=settings)
 
@@ -371,23 +372,10 @@ def denoise(settings: DenoiseSettingsMPPCA):
     data_denoised, data_access, data_p = core_fn(input_data=input_data, p=settings.fixed_p, device=device)
 
     if settings.noise_bias_correction:
-        # get noise mask
-        mask = get_noise_mask(input_data=input_data, mask_path=settings.noise_bias_mask)
-
-        # check visuals
-        if settings.visualize:
-            v_fn = plib.Path(settings.out_path)
-        else:
-            v_fn = None
-
-        # get noise stats
-        sigma, num_channels = extract_noise_stats_from_mask(
-            input_data=input_data, mask=mask,
-            path_visuals=v_fn
-        )
-
-        data_denoised_nbc = noise_bias_correction(
-            denoised_data=data_denoised, sigma=sigma, num_channels=num_channels
+        data_denoised_nbc, mask = noise_bias_correct_data(
+            input_data=input_data, denoised_data=data_denoised,
+            mask_path=settings.noise_bias_mask,
+            path_visuals=settings.out_path if settings.visualize else None,
         )
     else:
         data_denoised_nbc = None
@@ -402,13 +390,66 @@ def denoise(settings: DenoiseSettingsMPPCA):
     )
 
 
+def noise_bias_correct_data(
+        input_data: torch.Tensor, denoised_data: torch.Tensor,
+        mask_path: plib.Path | str = None, path_visuals: plib.Path | str = None) -> (torch.Tensor, torch.Tensor):
+    # get noise mask
+    mask = get_noise_mask(input_data=input_data, mask_path=mask_path)
+
+    # get noise stats
+    sigma, num_channels = extract_noise_stats_from_mask(
+        input_data=input_data, mask=mask,
+        path_visuals=path_visuals
+    )
+
+    data_denoised_nbc = noise_bias_correction(
+        denoised_data=denoised_data, sigma=sigma, num_channels=num_channels
+    )
+    return data_denoised_nbc, mask
+
+
+def wrap_noise_bias_correct_cli(settings: SettingsNBC):
+    log_module.info(f"Load data")
+    input_data = torch_load(settings.input_data)
+    denoised_data = torch_load(settings.denoised_data)
+    aff_path = plib.Path(settings.in_affine).absolute()
+    if aff_path.is_file():
+        aff = torch_load(aff_path)
+    else:
+        aff = torch.eye(4)
+    denoised_data_nbc, mask = noise_bias_correct_data(
+        input_data=input_data,
+        denoised_data=denoised_data,
+        mask_path=settings.noise_bias_mask,
+        path_visuals=settings.out_path if settings.visualize else None,
+    )
+    save_data_nbc(
+        data_denoised_nbc=denoised_data_nbc, path_output=settings.out_path,
+        img_aff=aff, noise_mask=mask,
+    )
+
+
+def save_data_nbc(data_denoised_nbc: torch.Tensor, path_output: plib.Path | str,
+                  img_aff: nib.Nifti1Image | np.ndarray | torch.Tensor = torch.eye(4),
+                  noise_mask: torch.Tensor = None):
+    if noise_mask is not None:
+        nifti_save(
+            data=noise_mask.to(torch.int32), img_aff=img_aff, path_to_dir=path_output, file_name="noise_mask"
+        )
+    torch_save(
+        data=data_denoised_nbc, path_to_file=path_output, file_name="denoised_data_nbc"
+    )
+    nifti_save(
+        data=root_sum_of_squares(data_denoised_nbc, dim_channel=-2),
+        path_to_dir=path_output, img_aff=img_aff, file_name="denoised_data_nbc"
+    )
+
+
 def save_data(
         data_denoised: torch.Tensor, data_noise: torch.Tensor, data_p: torch.Tensor,
-        nii_img: nib.Nifti1Image, out_path: plib.Path | str,
+        nii_img: nib.Nifti1Image | np.ndarray | torch.Tensor, out_path: plib.Path | str,
         noise_mask: torch.Tensor = None, data_denoised_nbc: torch.Tensor = None):
-    if data_denoised.shape[-2] > 1:
-        # [x, y, z, ch, t]
-        data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
+
     path_output = plib.Path(out_path).absolute()
 
     # save data
@@ -417,40 +458,58 @@ def save_data(
     # data_noise_sm_var = torch.squeeze(data_noise_sm_var)
     # data_denoised *= max_val / torch.max(data_denoised)
 
+    torch_save(data_denoised, path_to_file=path_output, file_name="denoised_data")
+
+    if data_denoised.shape[-2] > 1:
+        # [x, y, z, ch, t]
+        data_denoised = root_sum_of_squares(data_denoised, dim_channel=-2)
+
     nifti_save(data=data_denoised.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data")
-    nifti_save(data=data_noise.abs().numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
+    # nifti_save(data=data_noise.abs().numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="noise_data")
     # nifti_save(
     #     data=data_noise_sm_var.numpy(), img_aff=nii_img, path_to_dir=path_output,
     #            file_name="noise_data_smoothed_var"
     # )
     nifti_save(data=data_p.numpy(), img_aff=nii_img, path_to_dir=path_output, file_name="avg_p")
 
-    #
-    # file_name = save_path.joinpath(name).with_suffix(".pt")
-    # logging.info(f"write file: {file_name.as_posix()}")
-    # torch.save(data_denoised, file_name.as_posix())
-
     if data_denoised_nbc is not None:
-        if noise_mask is not None:
-            nifti_save(
-                data=noise_mask.to(torch.int32), img_aff=nii_img, path_to_dir=path_output, file_name="noise_mask"
-            )
-        nifti_save(
-            data=data_denoised_nbc, img_aff=nii_img, path_to_dir=path_output, file_name="denoised_data_nbc"
+        save_data_nbc(
+            data_denoised_nbc=data_denoised_nbc, img_aff=nii_img, path_output=path_output,
+            noise_mask=noise_mask
         )
+
+
+def noise_bias_correct_util():
+    # set program logging
+    setup_program_logging(name="Noise Bias Correction", level=logging.INFO)
+    # set up argument parser
+    parser, prog_args = setup_parser(
+        prog_name="Noise Bias Correction",
+        dict_config_dataclasses={"settings": SettingsNBC}
+    )
+    # get settings
+    # prog_args.settings.out_path = "/data/pt_np-jschmidt/code/PyMRItools/examples/processing/denoising/results"
+    settings = SettingsNBC.from_cli(args=prog_args.settings, parser=parser)
+    settings.display()
+
+    try:
+        wrap_noise_bias_correct_cli(settings=settings)
+    except Exception as e:
+        logging.exception(e)
+        parser.print_help()
 
 
 def main():
     # set program logging
-    setup_program_logging(name="MPPCA Denoising", level=logging.INFO)
+    setup_program_logging(name="LCPCA Denoising", level=logging.INFO)
     # set up argument parser
     parser, prog_args = setup_parser(
-        prog_name="MPPCA Denoising",
-        dict_config_dataclasses={"settings": DenoiseSettingsMPPCA}
+        prog_name="LCPCA Denoising",
+        dict_config_dataclasses={"settings": DenoiseSettingsLCPCA}
     )
     # get settings
     # prog_args.settings.out_path = "/data/pt_np-jschmidt/code/PyMRItools/examples/processing/denoising/results"
-    settings = DenoiseSettingsMPPCA.from_cli(args=prog_args.settings, parser=parser)
+    settings = DenoiseSettingsLCPCA.from_cli(args=prog_args.settings, parser=parser)
     settings.display()
 
     try:

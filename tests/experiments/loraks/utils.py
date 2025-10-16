@@ -76,49 +76,61 @@ def unprep_k_space(k: torch.Tensor, padding: Tuple[int, int], batch_idx: torch.t
 
 
 def run_command(function_call: str,
-                use_valgrind: bool = False,
-                massif_output_file: str = "massif.out",
+                profile_memory: bool = True,
                 capture_output: bool = True):
     import subprocess, shlex
-    if not use_valgrind:
+    if not profile_memory:
         command_to_run = shlex.split(function_call)
     else:
-        command_to_run = [
-                             "valgrind",
-                             "--tool=massif",
-                             "--trace-children=yes",
-                             f"--massif-out-file={massif_output_file}",
-                         ] + shlex.split(function_call)
-    return subprocess.run(command_to_run, capture_output=capture_output, text=True)
+        # run the profile.sh found in the cpu_mem_profile folder
+        profile_script_path = plib.Path(__file__).absolute().parent.joinpath("cpu_mem_profile").joinpath("profile").with_suffix(".sh").as_posix()
+
+        command_to_run = [profile_script_path] + shlex.split(function_call)
+
+    command_return = subprocess.run(command_to_run, capture_output=capture_output, text=True)
+
+    if capture_output:
+        logger.warning(f"Log OUT:\n{command_return.stderr}")
+        logger.info(f"___________________________")
+        logger.info(f"OUT:\n{command_return.stdout}")
+        logger.info(f"___________________________")
+    return command_return
 
 
-def read_massif_max_memory_used(file_path: Union[str, plib.Path]):
+def read_profile_peak_memory(command_stdout):
     """
-    Reads the maximum memory usage details from a valgrind massif output file.
+    Read the peak memory from the profile log file
 
     Args:
-        file_path: The file path to the massif output file as a string.
+        command_stdout: profile.sh command std out
 
     Returns:
-        A tuple containing two floats:
-            - Maximum heap memory usage in megabytes.
-            - Maximum extra heap memory usage in megabytes.
+        int: Peak memory usage in MB
 
     Raises:
         ValueError: If the specified file does not exist or is not a file.
     """
-    file_path = plib.Path(file_path)
-    if not file_path.exists() or not file_path.is_file():
-        raise ValueError(f"File '{file_path}' does not exist or is not a file.")
-    data = msparser.parse_file(file_path)
-    peak_idx = data['peak_snapshot_index']
-    peak_snapshot = data['snapshots'][peak_idx]
-    peak_heap_memory = peak_snapshot['mem_heap']
-    peak_extra_memory = peak_snapshot['mem_heap_extra']
-    return peak_heap_memory / (1024 ** 2), peak_extra_memory / (1024 ** 2)
+    try:
+        # Read the last line which contains the peak memory
+        if command_stdout.startswith("#"):
+            # Look for peak memory in comment line
+            peak_memory = int(command_stdout.split("=")[-1].strip().split()[0])
+            return peak_memory
+        # if no comment line was found parse last data line and find last "#"
+        parts = command_stdout.split("#")
+        if len(parts) < 1:
+            raise ValueError
+        else:
+            # take last part
+            peak_memory = int(parts[-1].split("=")[-1].strip().split()[0])
+            return peak_memory
+    except (FileNotFoundError, ValueError, IndexError):
+        logger.error(f"Error reading Profile output: {command_stdout}")
+        return 0
+    return 0
 
 
-def run_ac_loraks_matlab_script(use_valgrind: bool = True,
+def run_ac_loraks_matlab_script(profile_memory: bool = True,
                                 script_args=None,
                                 script_dir=None,
                                 capture_output=True) -> dict:
@@ -126,7 +138,7 @@ def run_ac_loraks_matlab_script(use_valgrind: bool = True,
     Run AC-Loraks script with the given arguments.
 
     Parameters:
-        use_valgrind:
+        profile_memory:
         script_args: Arguments to pass to the MATLAB script
         script_dir: Directory containing the MATLAB script
                    (defaults to 'matlab' subdirectory of the current file's directory)
@@ -168,32 +180,21 @@ def run_ac_loraks_matlab_script(use_valgrind: bool = True,
 
     # For the valgrind massif output file, a temporary file is enough.
     # We return the file name together with the other return values.
-    import time
-    tmp_massif_file = tempfile.mktemp(suffix=f".out.{int(time.time())}")
     command_return = run_command(
         function_call=matlab_cmd,
-        use_valgrind=use_valgrind,
-        massif_output_file=tmp_massif_file,
+        profile_memory=profile_memory,
         capture_output=capture_output
     )
-    logger.info(command_return.stdout)
 
-    memory_usage_mb, peak_extra_memory_mb = read_massif_max_memory_used(
-        file_path=tmp_massif_file
-    )
-    return {
-        "massif_file": tmp_massif_file,
-        "peak_memory": memory_usage_mb,
-        "peak_extra_memory": peak_extra_memory_mb,
-        "command_output": None if not capture_output else command_return
-    }
+    memory_usage_mb = read_profile_peak_memory(command_return.stdout) / 1024
+    return memory_usage_mb
 
 
-def run_ac_loraks_torch_script(use_valgrind: bool = True,
-                                script_args=None,
-                                script_dir=None,
-                                data_dir=None,
-                                capture_output=True) -> dict:
+def run_ac_loraks_torch_script(profile_memory: bool = True,
+                               script_args=None,
+                               script_dir=None,
+                               data_dir=None,
+                               capture_output=True) -> dict:
     # Default script directory is 'torch' subdirectory of current file's directory
     if script_dir is None:
         script_dir = plib.Path(__file__).absolute().parent.joinpath("torch")
@@ -211,25 +212,16 @@ def run_ac_loraks_torch_script(use_valgrind: bool = True,
     rank, reg_lam, max_num_iter = script_args
 
     cmd = f"conda run --name mri_tools_env python {script.as_posix()} --file {data_dir.as_posix()} --rank {rank} --max_num_iter {max_num_iter} --regularization_lambda {reg_lam}"
-    logger.info(f"CMD: '{cmd}'")
+    c_out = "CMD:\n"
+    for i, p in enumerate(cmd.split("--")):
+         c_out += f"\t--{p}\n" if i > 0 else f"{p}\n"
+    logger.debug(c_out)
 
-    # For the valgrind massif output file, a temporary file is enough.
-    # We return the file name together with the other return values.
-    import time
-    tmp_massif_file = tempfile.mktemp(suffix=f".out.{int(time.time())}")
+    # We return profiled memory output
     command_return = run_command(
         function_call=cmd,
-        use_valgrind=use_valgrind,
-        massif_output_file=tmp_massif_file,
+        profile_memory=profile_memory,
         capture_output=capture_output
     )
-
-    memory_usage_mb, peak_extra_memory_mb = read_massif_max_memory_used(
-        file_path=tmp_massif_file
-    )
-    return {
-        "massif_file": tmp_massif_file,
-        "peak_memory": memory_usage_mb,
-        "peak_extra_memory": peak_extra_memory_mb,
-        "command_output": None if not capture_output else command_return
-    }
+    memory_usage_mb = read_profile_peak_memory(command_return.stdout) / 1024
+    return memory_usage_mb

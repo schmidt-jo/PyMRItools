@@ -6,7 +6,7 @@ log_module = logging.getLogger(__name__)
 
 
 @dataclass
-class SettingsMPPCA(BaseClass):
+class SettingsLCPCA(BaseClass):
     """
     Configuration for mppca denoising
     """
@@ -47,31 +47,28 @@ class SettingsMPPCA(BaseClass):
 
 
 @dataclass
-class SettingsMPK(BaseClass):
+class SettingsNBC(BaseClass):
     """
-    Configuration for mp - kspace filter denoising
+    Configuration for noise bias correction
     """
-    in_k_space: str = field(
+    input_data: str = field(
         alias="-i", default="",
-        help="Input k-space .pt file"
+        help="Input data .pt file"
     )
-    in_noise_scans: str = field(
+    denoised_data: str = field(
         alias="-in", default="",
-        help="Input noise scans file."
+        help="Input denoised data .pt file."
     )
     in_affine: str = field(
         alias="-ia", default="",
         help="input affine matrix, necessary if input file is .pt, optional if .nii"
     )
-    in_sampling_mask: str = field(
-        alias="-im", default="",
-        help="(optional) input sampling mask to reduce computational cost by computing only sampled pe/slice lines. "
-             "Can be deduced from k-space itself."
-    )
-
     file_prefix: str = field(
         default="d", alias="-fp",
         help=f"Output file prefix appended to name after denoising"
+    )
+    noise_bias_mask: str = field(
+        default="", alias="-nbm", help="input noise mask for noise statistics estimation if not input autodmri is used."
     )
     # flags & vars
     batch_size: int = field(
@@ -82,16 +79,6 @@ class SettingsMPK(BaseClass):
         alias="-nh", default=100,
         help="Sampling depth at which to sample the noise histogram axes for the noise scans."
     )
-    noise_mp_threshold: float = field(
-        alias="-nth", default=0.3,
-        help="The MP distribution estimated from the noise is normalized, then clamped to 1 if exceeding this threshold. "
-             "This way effectively each singular value below this threshold in the mp distribution is hard thresholded. "
-             "Above a smoothed inverted distribution curve is used"
-    )
-    noise_mp_stretch: float = field(
-        alias="-ns", default=1.0,
-        help="The estimated noise distribution is stretched by this factor above its bandwidth. "
-             "That way singular values above the distribution bandwidth will get affected by the filter"
-    )
+
 
 

@@ -3,13 +3,15 @@ import pathlib as plib
 import sys
 import torch
 import polars as pl
-
+import numpy as np
 from scipy.io import savemat
-from torch.profiler import profile, record_function, ProfilerActivity
 
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, ComputationType
 from pymritools.recon.loraks.loraks import LoraksImplementation, OperatorType, RankReduction, RankReductionMethod, \
     Loraks
+
+import plotly.graph_objects as go
+import plotly.colors as plc
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
 sys.path.append(p_tests.as_posix())
@@ -71,52 +73,6 @@ def recon_ac_loraks_gpu(
     return (mem_end - mem_start) / 1024 / 1024
 
 
-def recon_ac_loraks_cpu_profile(
-        k: torch.Tensor,
-        rank: int,
-        regularization_lambda: float,
-        max_num_iter: int = 30):
-    """
-    This measurement of the peak memory is so bad, I wouldn't even call it an estimate.
-    I try to sum allocated and freed memory over all profile events.
-    If these events actually contain all allocations in an order sorted by time,
-    this could be correct. However, the results just appear to be wildly off.
-    No clue what to do.
-    """
-
-    # it seems we need that because the profiler still tries to access the GPU, although
-    # we say during profiling that we only want to trace the CPU
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.enabled = False
-
-    device = torch.device("cpu")
-    logger.info(f"Using device: {device}")
-
-    path = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT)).joinpath("tmp")
-    path.mkdir(parents=True, exist_ok=True)
-
-    with profile(
-            activities=[torch.profiler.ProfilerActivity.CPU],
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True
-    ) as prof:
-        k_recon = torch_loraks_run(
-            k=k, device=device, rank=rank, regularization_lambda=regularization_lambda, max_num_iter=max_num_iter
-        )
-
-    events = prof.key_averages()
-    accumulated_memory = 0
-    max_memory = 0
-    for e in events:
-        accumulated_memory += e.self_cpu_memory_usage
-        max_memory = max(max_memory, accumulated_memory)
-
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.enabled = True
-    return max_memory / 1024 ** 2
-
-
 def recon_ac_loraks_cpu(
         k: torch.Tensor,
         rank: int, regularization_lambda: float,
@@ -134,12 +90,11 @@ def recon_ac_loraks_cpu(
     torch.save(k.unsqueeze(2), fn)
 
     # run torch script as cmd line script using valgrind
-    logger.info(f"Calling Torch valgrind routine")
+    logger.info(f"Calling Torch profile routine")
     result = run_ac_loraks_torch_script(
-        use_valgrind=True, data_dir=fn.as_posix(), script_args=(rank, regularization_lambda, max_num_iter)
+        profile_memory=True, data_dir=fn.as_posix(), script_args=(rank, regularization_lambda, max_num_iter)
     )
-
-    return result["peak_memory"]
+    return result
 
 
 def recon_ac_loraks_matlab(
@@ -164,9 +119,9 @@ def recon_ac_loraks_matlab(
     savemat(matlab_input_file, mat_data)
 
     logger.info("Calling MATLAB routine")
-    result = run_ac_loraks_matlab_script()
+    result = run_ac_loraks_matlab_script(profile_memory=True, capture_output=True)
 
-    return result["peak_memory"]
+    return result
 
 
 def write_df(meas, path):
@@ -180,9 +135,9 @@ def compute():
     # get path
     path_out = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT))
     # do loops for different data sizes
-    ms_xy = torch.linspace(100*100, 240*240, 5)
-    ncs = torch.arange(4, 33, 8)
-    nes = torch.arange(2, 6, 2)
+    ms_xy = torch.linspace(100*100, 280*280, 10)
+    ncs = torch.arange(4, 37, 4)
+    nes = torch.arange(2, 6, 1)
     # ms_xy = torch.tensor([10000])
     # ncs = torch.tensor([4])
     # nes = torch.tensor([2])
@@ -229,7 +184,7 @@ def compute():
                         )
                     except Exception as e:
                         logger.warning(e)
-                        mem_usage = "Maxed Out"
+                        mem_usage = -1
                     meas.append({
                         "Mode": "torch", "Device": "GPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
                     })
@@ -237,37 +192,228 @@ def compute():
                 logger.info(f"__ Processing Torch CPU\n")
                 write_df(meas, path_out)
 
-                # mem_usage = recon_ac_loraks_cpu(
-                #     k=k_us.clone(),
-                #     rank=rank, regularization_lambda=regularization_lambda,
-                #     max_num_iter=max_num_iter
-                # )
-                #
-                # meas.append({
-                #     "Mode": "torch", "Device": "CPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
-                # })
-                #
-                # df = pl.DataFrame(meas)
-                # fn = path_out.joinpath("results_df_latest").with_suffix(".json")
-                # logger.info(f"Writing to {fn}")
-                # df.write_ndjson(fn)
+                mem_usage = recon_ac_loraks_cpu(
+                    k=k_us.clone(),
+                    rank=rank, regularization_lambda=regularization_lambda,
+                    max_num_iter=max_num_iter
+                )
 
-                # logger.info(f"__ Processing Matlab CPU\n")
-                # mem_usage = recon_ac_loraks_matlab(
-                #     k=k_us, rank=rank, regularization_lambda=regularization_lambda,
-                #     max_num_iter=max_num_iter
-                # )
-                # meas.append({
-                #     "Mode": "matlab", "Device": "CPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
-                # })
-                #
-                # df = pl.DataFrame(meas)
-                # fn = path_out.joinpath("results_df_latest").with_suffix(".json")
-                # logger.info(f"Writing to {fn}")
-                # df.write_ndjson(fn)
+                meas.append({
+                    "Mode": "torch", "Device": "CPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
+                })
+
+                df = pl.DataFrame(meas)
+                fn = path_out.joinpath("results_df_latest").with_suffix(".json")
+                logger.info(f"Writing to {fn}")
+                df.write_ndjson(fn)
+
+                logger.info(f"__ Processing Matlab CPU\n")
+                mem_usage = recon_ac_loraks_matlab(
+                    k=k_us, rank=rank, regularization_lambda=regularization_lambda,
+                    max_num_iter=max_num_iter
+                )
+                meas.append({
+                    "Mode": "matlab", "Device": "CPU", "mxy": mxy, "mce": mce, "Memory": mem_usage
+                })
+
+                df = pl.DataFrame(meas)
+                fn = path_out.joinpath("results_df_latest").with_suffix(".json")
+                logger.info(f"Writing to {fn}")
+                df.write_ndjson(fn)
+
+# --- PLOTTING
+def load_df(path: plib.Path, name: str = ""):
+    if name and not name.startswith("_"):
+        name = f"_{name}"
+    fn = path.joinpath(f"results_df{name}").with_suffix(".json")
+    logger.info(f"Loading from {fn}")
+
+    df = pl.read_ndjson(fn)
+    df = df.with_columns(
+        pl.col('mxy').cast(pl.Int32),
+        pl.col('mce').cast(pl.Int32)
+    )
+
+    df_plot = df.with_columns(
+        pl.concat_str(
+            [pl.col("Mode"), pl.col("Device")],
+            separator=" - "
+        ).alias("plot_mode")
+    )
+    df_plot = df_plot.sort(by="mxy", descending=False)
+
+    df_plot = df_plot.with_columns(
+        pl.concat_str(
+            [pl.col("mxy"), pl.col("mce")],
+            separator=" x "
+        ).alias("plot_size")
+    )
+    # average across same matrix sizes but different nc / ne parameters
+    df_plot = df_plot.group_by(["Mode", "Device", "mxy", "mce", "plot_mode", "plot_size"]).agg([
+        pl.col("Memory").mean().alias("Memory"),
+    ])
+    return df_plot.sort(by=["mxy", "plot_mode"], descending=False)
+
+
+def plot_table_per_mode():
+    path_out = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT))
+
+    # df_gpu = load_df(path=path_out, name="latest")
+    # df_cpu = load_df(path=path_out, name="latest_cpu")
+    # df = pl.concat([df_gpu, df_cpu])
+    df = load_df(path=path_out, name="latest")
+
+    # get df time normalized by matlab time
+    # create lookup reference
+    reference_values = (
+        df.filter(pl.col("Mode") == "matlab").group_by(
+            ["mxy", "mce", "plot_size"]
+        ).agg(pl.col("Memory").first().alias("ref_mem"))
+    )
+    df_norm = (
+        df.join(reference_values, on=["mxy", "mce", "plot_size"], how="left").
+        with_columns(
+            (pl.col("Memory") / pl.col("ref_mem")).alias("Memory Savings")
+        )
+        .drop("ref_mem")
+    )
+    df_norm = df_norm.filter(
+        (pl.col("Memory").is_not_null()) &
+        (pl.col("mce") > 400) &
+        (pl.col("mce") < 2600)
+    )
+    df_norm = df_norm.with_columns(
+        pl.col("Memory") / 1000
+    )
+
+    df_norm.write_ndjson(
+        path_out.joinpath("df_performance_benchmark").with_suffix(".json")
+    )
+
+    for l, t in enumerate(["Memory", "Memory Savings"]):
+        fig = go.Figure()
+
+        ann_m = []
+        zmin = 0
+        for i, m in enumerate(df_norm["plot_mode"].unique().sort(descending=True)):
+            cm = "Inferno"
+            # if i == 0:
+            #     cm = "Purples"
+            # if i == 0:
+            #     cm = "deep_r"
+            # else:
+            #     # continue
+            #     cm = "Greys"
+            ddd = df_norm.filter(pl.col("plot_mode") == m)
+            mxys = ddd["mxy"].unique().sort(descending=False).to_numpy()
+            mces = ddd["mce"].unique().sort(descending=False).to_numpy()
+            # mmax = ddd[t].max() * 0.85
+            mmax = 0.5 if l == 1 else 46
+            # build tensor to ensure order
+            mem = torch.zeros((mxys.shape[0], mces.shape[0]))
+            for g, mxy in enumerate(mxys):
+                for h, mce in enumerate(mces):
+                    df_tmp = df_norm.filter(
+                        (pl.col("plot_mode") == m) & (pl.col("mxy") == mxy) & (pl.col("mce") == mce)
+                    )
+                    if len(df_tmp) < 1:
+                        logger.warning(f"Found no entry for mode {m}, and {mxy} x {mce} combination!")
+                        continue
+                    zm = df_tmp[t]
+                    if len(zm) > 1:
+                        logger.warning("Found more than one acceleration value for mode, mxy, mce combination!")
+                    if zm[0] is None:
+                        logger.warning(f"Found null acceleration value for mode, {mxy}, {mce} combination!")
+                    mem[g, h] = zm[0] if zm[0] > 1e-3 else torch.nan
+            fig.add_trace(
+                go.Surface(
+                    x=mxys * 2, y=mces * 2,
+                    z=mem.mT.numpy(), opacity=0.82,
+                    cmin=zmin, cmax=mmax,
+                    colorscale=cm, showscale=True,
+                    colorbar=dict(
+                        titleside="right",
+                        # title="Memory [GB]",
+                        title="",
+                        thickness=20,
+                    )
+                )
+            )
+        # add a point for a modern scan sizes
+        df_pts = df_norm.filter(
+            (pl.col("mxy") == 33800) & (pl.col("mce") == 1400)
+        ).drop(["Mode", "plot_mode", "plot_size"])
+
+        df_pt = df_pts.filter(pl.col("Device").is_in(["GPU"]))
+        # fig.add_trace(
+        #     go.Scatter3d(
+        #         x=df_pt["mxy"] * 2, y=df_pt["mce"] * 2, z=df_pt[t] , marker=dict(color="red", symbol="x", size=3),
+        #         showlegend=False
+        #     )
+        # )
+        # val = df_pt[t].unique().sort(descending=True)[0]
+        # d = dict(
+        #     text=f"{val:.1f} {['GB', 'Saving'][l]}", x=70800 * 2, y=1400 * 2, z=val * 1.2,
+        #     showarrow=False, yanchor="bottom", font=dict(color="red")
+        # )
+        # ann_m.append(d)
+        scene = dict(
+            camera=dict(
+                up=dict(x=0, y=0, z=1),
+                center=dict(x=0, y=0, z=-0.2),
+                eye=dict(x=-2.1, y=1.05, z=0.8)
+            ),
+            # annotations=ann_m,
+            xaxis=dict(
+                # title="Matrix size N<sub>x</sub> x N<sub>y</sub>",
+                title="",
+                tickmode="array",
+                tickvals=np.arange(40000, 121000, 40000),
+                ticktext=[f"{val}k" for val in np.arange(40, 121, 40)]
+            ),
+            # yaxis=dict(title="Matrix size N<sub>c</sub> x N<sub>e</sub> x N<sub>b</sub>",),
+            yaxis=dict(title=""),
+            # zaxis=dict(title="Acceleration     " if i==0 else "Memory [GB]     ")
+            zaxis=dict(title="", range=(0, mmax))
+        )
+
+        fig.update_scenes(
+            scene
+        )
+        fig.update_layout(
+            width=450, height=450,
+            margin=dict(t=20, b=20, l=0, r=0)
+
+        )
+        fn = path_out.joinpath(f"performance_benchmark_{t}".replace(" ", "-").lower()).with_suffix(".html")
+        logger.info(f"write file: {fn}")
+        fig.write_html(fn)
+        for suff in [".pdf", ".png"]:
+            fn = fn.with_suffix(suff)
+            logger.info(f"write file: {fn}")
+            fig.write_image(fn)
+
+
+def print_table():
+    path_out = plib.Path(get_test_result_output_dir("comparison_memory", mode=ResultMode.EXPERIMENT))
+    df = pl.read_ndjson(path_out.joinpath("df_performance_benchmark").with_suffix(".json"))
+
+    logger.info(df.filter(pl.col("Device") == "GPU")["Memory Savings"].mean())
+    logger.info(df.filter((pl.col("Device") == "CPU") & (pl.col("Mode") == "torch"))["Memory Savings"].mean())
+
+    logger.info(df["mxy"].unique())
+    logger.info(df["mce"].unique())
+    df = df.filter(
+        (pl.col("mxy").is_in([48000, 78400])) &
+        (pl.col("mce").is_in([800, 2500]))
+    ).sort(by=["mxy", "mce", "Mode", "Device"], descending=False)
+    logger.info(df)
+    df.write_ndjson(path_out.joinpath("df_performance_benchmark_filtered").with_suffix(".json"))
 
 
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
                         datefmt='%I:%M:%S', level=logging.INFO)
-    compute()
+    # compute()
+    plot_table_per_mode()
+    print_table()

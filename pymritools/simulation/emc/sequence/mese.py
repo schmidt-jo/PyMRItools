@@ -4,8 +4,11 @@ import pathlib as plib
 
 import pickle
 import json
+
+import numpy as np
 import tqdm
 import torch
+from pymritools.config.database import DB
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.simulation.emc.core import functions, GradPulse
@@ -248,9 +251,62 @@ class MESE(Simulation):
 
 
 def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
-    sequence = MESE(params=params, settings=settings)
-    sequence.simulate()
-    sequence.save()
+    # save initial settings
+    name = settings.database_name
+    if name.endswith(".pkl"):
+        name = name[:-4]
+    b0_list = settings.b0_list
+    b0s = []
+    # get individual b0 values
+    if isinstance(b0_list, list):
+        for b in b0_list:
+            if isinstance(b, list):
+                bb = torch.arange(b[0], b[1], b[2])
+                b0s.extend(bb.tolist())
+            else:
+                b0s.append(b)
+    else:
+        b0s = [b0_list]
+    # iterate over b0 entries as batching to keep memory acceptable
+    dbs = []
+    # save intermediate results in case something goes wrong
+    path_tmp = plib.Path(settings.out_path).absolute().joinpath("tmp")
+    log_module.info(f"Set temporary path: {path_tmp}")
+    path_tmp.mkdir(exist_ok=True, parents=True)
+
+    b0s = torch.tensor(b0s)
+    # get batch size
+    batch_size = settings.b0_batch_size
+    num_batches = int(np.ceil(b0s.shape[0] / batch_size))
+
+    for j in range(num_batches):
+        start = batch_size * j
+        end = min(batch_size * (j + 1), b0s.shape[0])
+        log_module.info(f"Batched Processing of B0")
+        log_module.info(f"Processing values {b0s[start:end].tolist()} :: Batch {j+1} / {num_batches}")
+        settings.b0_list = b0s[start:end].tolist()
+        sequence = MESE(params=params, settings=settings)
+        sequence.simulate()
+
+        # we save everything separately
+        n = f"{name}_b0-batch_{j}".replace("-", "m").replace(".", "p")
+        db = sequence.get_db()
+        db.save(path_tmp.joinpath(n))
+        dbs.append(db)
+        if j == len(b0s) - 1:
+            # in the end save settings
+            sequence.settings.b0_list = b0_list
+            sequence.save(save_db=False, save_config=True)
+
+    database = None
+    for i, db in enumerate(dbs):
+        if database is None:
+            database = db
+        else:
+            database = DB.add_dbs(database, db)
+    # finally save the combined database
+    path = plib.Path(settings.out_path).joinpath(name)
+    database.save(path)
 
 
 def main():

@@ -21,15 +21,12 @@ class RFPulse(Serializable):
     time_bandwidth: float = bandwidth_in_Hz * duration_in_us * 1e-6
     num_samples: int = int(duration_in_us)
 
-    amplitude: np.ndarray = dc.field(default_factory=lambda: np.zeros(0))
-    phase: np.ndarray = dc.field(default_factory=lambda: np.zeros(0))
+    signal: np.ndarray = dc.field(default_factory=lambda: np.zeros(0))
 
     def __post_init__(self):
         # check array sizes - for some reason this is not working properly when creating class with input args
-        if self.amplitude.shape[0] != self.num_samples:
-            self.amplitude = np.zeros(self.num_samples)
-        if self.phase.shape[0] != self.num_samples:
-            self.phase = np.zeros(self.num_samples)
+        if self.signal.shape[0] != self.num_samples:
+            self.signal = np.zeros(self.num_samples)
 
     def display(self):
         columns = {
@@ -44,15 +41,10 @@ class RFPulse(Serializable):
     def set_shape_on_raster(self, raster_time_s):
         # interpolate shape to duration raster
         N = int(self.duration_in_s / raster_time_s)
-        self.amplitude = np.interp(
-            np.linspace(0, self.amplitude.shape[0], N),
-            np.arange(self.amplitude.shape[0]),
-            self.amplitude
-        )
-        self.phase = np.interp(
-            np.linspace(0, self.phase.shape[0], N),
-            np.arange(self.phase.shape[0]),
-            self.phase
+        self.signal = np.interp(
+            np.linspace(0, self.signal.shape[0], N),
+            np.arange(self.signal.shape[0]),
+            self.signal
         )
         self.num_samples = N
 
@@ -60,11 +52,11 @@ class RFPulse(Serializable):
         gamma_pi = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6 * 2 * np.pi
         delta_t_us = self.duration_in_us / self.num_samples
         # normalize shape
-        normalized_shape = self.amplitude / np.linalg.norm(self.amplitude)
+        normalized_shape = self.signal / np.linalg.norm(self.signal)
         # calculate flip angle
         flip_angle_normalized_shape = np.sum(np.abs(normalized_shape * gamma_pi)) * delta_t_us * 1e-6
         # set to new flip angle
-        self.amplitude = np.asarray(flip_angle_rad / flip_angle_normalized_shape * normalized_shape)
+        self.signal = np.asarray(flip_angle_rad / flip_angle_normalized_shape * normalized_shape)
 
     @classmethod
     def load_from_txt(cls, f_name: typing.Union[str, plib.Path],
@@ -124,13 +116,12 @@ class RFPulse(Serializable):
             temp_amp = np.array([float(line.strip().split('\t')[0]) for line in content])
             temp_phase = np.array([float(line.strip().split('\t')[1]) for line in content])
 
-            rf_cls.amplitude = temp_amp
-            rf_cls.phase = temp_phase
+            rf_cls.signal = temp_amp
         else:
             err = f"no file ({t_name}) found or non valid file type"
             log_module.error(err)
             raise AttributeError(err)
-        if rf_cls.amplitude.shape[0] != rf_cls.phase.shape[0]:
+        if rf_cls.signal.shape[0] != rf_cls.phase.shape[0]:
             err = "shape of amplitude and phase do not match"
             log_module.error(err)
             raise AttributeError(err)
@@ -139,7 +130,7 @@ class RFPulse(Serializable):
                    f"set duration: {rf_cls.duration_in_us:.1f}.\n" \
                    f"-> sub us sampling. We crop the arrays to make them sampled per us ({int(rf_cls.duration_in_us)})"
             log_module.info(info)
-            rf_cls.amplitude = rf_cls.amplitude[:int(rf_cls.duration_in_us)]
+            rf_cls.signal = rf_cls.signal[:int(rf_cls.duration_in_us)]
             rf_cls.phase = rf_cls.phase[:int(rf_cls.duration_in_us)]
             rf_cls.num_samples = int(rf_cls.duration_in_us)
         return rf_cls
@@ -185,7 +176,7 @@ class RFPulse(Serializable):
         fig = go.Figure()
         fig.add_trace(
             go.Scattergl(
-                x=np.arange(self.num_samples) * dt, y=self.amplitude / np.max(self.amplitude),
+                x=np.arange(self.num_samples) * dt, y=self.signal / np.max(self.signal),
                 name="Amplitude",
                 mode="lines",
             )

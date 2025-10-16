@@ -26,14 +26,14 @@ class Settings(BaseClass):
         alias="-p", default=5,
         help="Loraks neighborhood square patch size."
     )
-    rank: int = field(alias="-rank", default=250)
+    rank: int = field(alias="-rank", default=180)
     reg_lambda: float = field(
         alias="-l", default=0.0,
         help=f"regularization parameter for Loraks matrix "
              f"rank minimization. Set 0.0 to use true data consistency (default)."
     )
     loraks_algorithm: str = choice(
-        "AC-LORAKS", "P-LORAKS", "AC-LORAKS-ls", alias="-alg", default="P-LORAKS",
+        "AC-LORAKS", "P-LORAKS", "AC-LORAKS-ls", alias="-alg", default="AC-LORAKS-ls",
         help="LORAKS algorithm to be used"
     )
     matrix_type: str = choice(
@@ -45,7 +45,7 @@ class Settings(BaseClass):
         help="Convergence tolerance for the conjugate gradient algorithm."
     )
     max_num_iter: int = field(
-        alias="-mni", default=200,
+        alias="-mni", default=25,
         help="Maximum number of iterations if not converged."
     )
     batch_size: int = field(

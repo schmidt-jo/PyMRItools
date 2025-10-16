@@ -9,8 +9,8 @@ from scipy.ndimage import gaussian_filter
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.basic import BaseClass
-from pymritools.utils import nifti_load, nifti_save
-from pymritools.processing.denoising.mppca import extract_noise_mask, extract_noise_stats_from_mask
+from pymritools.utils import nifti_load, nifti_save, torch_load
+from pymritools.processing.denoising.lcpca import extract_noise_mask, extract_noise_stats_from_mask
 log_module = logging.getLogger(__name__)
 
 
@@ -30,6 +30,10 @@ class Settings(BaseClass):
     )
     smoothing_kernel: float = field(
         alias="-s", default=3,
+    )
+    noise_mask: str = field(
+        alias="-m", default="",
+        help="Noise mask file. Otherwise We try to deduce this from the input"
     )
 
 
@@ -78,7 +82,8 @@ def variance_b1(value_sigma_alpha, value_set_alpha: float = 60.0):
 
 
 def calculate_error_map(
-        b1_data: torch.Tensor, mask: torch.Tensor, flip_angle_set_deg: float,  path_visuals: plib.Path | str = None):
+        b1_data: torch.Tensor, mask: torch.Tensor, flip_angle_set_deg: float,  ratio_tr_n: float | int,
+        path_visuals: plib.Path | str = None):
     # get individual echoes
     signal_afi_e1 = b1_data[..., 0]
     signal_afi_e2 = b1_data[..., 1]
@@ -92,7 +97,8 @@ def calculate_error_map(
     # calculate error map
     map_err_alpha = variance_alpha(
         signal_e1=signal_afi_e1, signal_e2=signal_afi_e2,
-        sig_se1=noise_sigma_1, sig_se2=noise_sigma_2
+        sig_se1=noise_sigma_1, sig_se2=noise_sigma_2,
+        ratio_tr_n=ratio_tr_n
     )
 
     return torch.sqrt(variance_b1(value_sigma_alpha=map_err_alpha, value_set_alpha=flip_angle_set_deg))
@@ -127,9 +133,16 @@ def processing(settings: Settings):
     b1_data = torch.from_numpy(b1_data)
 
     # estimate noise voxels
-    noise_mask = extract_noise_mask(input_data=b1_data, erode_iter=1)
-    nifti_save(data=noise_mask.to(torch.int), img_aff=b1_img, path_to_dir=settings.out_path, file_name="noise_mask")
-
+    noise_mask_path = plib.Path(settings.noise_mask).absolute()
+    if not noise_mask_path.is_file():
+        log_module.info(f"No valid Noise Mask input, deducing from AFI data")
+        noise_mask = extract_noise_mask(input_data=b1_data, erode_iter=1)
+        nifti_save(data=noise_mask.to(torch.int), img_aff=b1_img, path_to_dir=settings.out_path, file_name="noise_mask")
+    else:
+        if ".pt" in noise_mask_path.suffixes:
+            noise_mask = torch_load(noise_mask_path)
+        else:
+            noise_mask, _ = nifti_load(noise_mask_path)
     # calculate b1
     b1 = calculate_b1(
         b1_data=b1_data, r_tr21=settings.ratio_tr2_tr1,
@@ -146,14 +159,18 @@ def processing(settings: Settings):
 
     # calculate error map
     b1_err = calculate_error_map(
-        b1_data=b1_data, mask=noise_mask, flip_angle_set_deg=settings.flip_angle, path_visuals=settings.out_path
+        b1_data=b1_data, mask=noise_mask, flip_angle_set_deg=settings.flip_angle, path_visuals=settings.out_path,
+        ratio_tr_n=settings.ratio_tr2_tr1
     )
-    # calculate relative error
-    b1_rel_err = torch.nan_to_num(
-        torch.divide(
-            b1, b1_err
+    # calculate relative error - we clamp at 200 %
+    b1_rel_err = torch.clamp(
+        torch.nan_to_num(
+            torch.divide(
+                b1_err, b1
+            ),
+            nan=0.0, posinf=0.0, neginf=0.0
         ),
-        nan=0.0, posinf=0.0, neginf=0.0
+        min=-2, max = 2
     )
 
     # save
@@ -169,7 +186,6 @@ def main():
     # get cli args
     settings = Settings.from_cli(args=args.settings, parser=parser)
     settings.display()
-
     try:
         processing(settings=settings)
     except Exception as e:
