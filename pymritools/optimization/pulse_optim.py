@@ -72,7 +72,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         loss_sar = torch.sum(torch.abs(pulse_x**2)) + torch.sum(torch.abs(pulse_y**2)) * 1e9
         losses_sar.append(loss_sar.item())
 
-        loss = loss_profile + 1e-2 * loss_sar
+        loss = loss_profile + loss_sar
         losses.append(loss.item())
 
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
