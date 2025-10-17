@@ -7,6 +7,7 @@ from pymritools.config import setup_program_logging, setup_parser, BaseClass
 from pymritools.config.emc import EmcSimSettings, EmcParameters
 import torch
 import logging
+import numpy as np
 import pathlib as plib
 import pickle
 import plotly.graph_objects as go
@@ -56,20 +57,33 @@ class Pulse:
         with open(kernel_file, "rb") as f:
             kernels = pickle.load(f)
 
-        k = kernels[settings.pulse_name]
+        k = kernels["excitation"]
         k_ref = kernels["refocus_1"]
         self.name = settings.pulse_name
         self.out_path = plib.Path(settings.out_path)
-        # if self.name == "excitation":
-        #     # no crushing - rephasing to calculate
-        #     area_slice_select = k.grad_slice.area[1]
-        #     area_rephase = - 0.5 * area_slice_select
-        #     t1 = k.grad_slice.t_array_s[-2] - k.grad_slice.t_array_s[-3]
-        #     t2 = k.grad_slice.t_array_s[-1] - k.grad_slice.t_array_s[-2]
-        #     a = k.grad_slice.amplitude[2]
-        #     b = (2 * area_rephase - a * t1) / (t1 + t2)
-        #     k.grad_slice.amplitude[-2] = b
-        #     k.grad_slice.area[-1] = area_rephase
+        if self.name == "excitation":
+            # no crushing - rephasing to calculate
+            # get slice select area
+            area_slice_select = k.grad_slice.area[1]
+            # calculate rephasing area
+            area_rephase = - 0.5 * area_slice_select
+            # extract time durations for ramps
+            t1 = k.grad_slice.t_array_s[-2] - k.grad_slice.t_array_s[-3]
+            t2 = k.grad_slice.t_array_s[-1] - k.grad_slice.t_array_s[-2]
+            # get amplitude of slice select
+            a = abs(k.grad_slice.amplitude[2])
+            # get amplitude of rephaser - the sign change makes this slightly more complex to calculate
+            p = t1 + t2
+            q = a * t2 - 2 * area_rephase
+            r = - (a**2*t1 + 2 * area_rephase * a)
+
+            bp = (-q + np.sqrt(q**2 - 4 * p * r)) / (2 * p)
+            bm = (-q + np.sqrt(q**2 + 4 * p * r)) / (2 * p)
+
+            b = max(bp, bm)
+            # b = (2 * area_rephase - a * t1) / (t1 + t2)
+            k.grad_slice.amplitude[-2] = b
+            k.grad_slice.area[-1] = area_rephase
 
         self.device = torch.device(
             f"cuda:{settings.gpu_device}" if torch.cuda.is_available() and settings.use_gpu else "cpu"
