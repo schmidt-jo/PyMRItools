@@ -1,13 +1,18 @@
 import logging
+import json
+
 import torch
+import numpy as np
 import pathlib as plib
 import tqdm
 
 import plotly.graph_objects as go
 import plotly.colors as plc
 import plotly.subplots as psub
+from matplotlib.pyplot import colorbar
 
 from pymritools.config.rf import RFPulse
+from pymritools.seqprog.core.events import RF
 from pymritools.simulation.emc.sequence.pulse import PulseSimulationSettings, Pulse
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.simulation.emc.core import functions
@@ -18,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def optimise_excitation_pulse(settings: PulseSimulationSettings):
-    path = plib.Path(get_test_result_output_dir("pulse_optim_exc", mode=ResultMode.OPTIMIZATION)).absolute()
+    path = plib.Path(get_test_result_output_dir("pulse_optim_sinc_exc", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
     settings.pulse_name = "excitation"
@@ -45,12 +50,12 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
     pulse_mask = torch.abs(pulse_sim.grad_pulse.data_pulse_x + 1j * pulse_sim.grad_pulse.data_pulse_y).squeeze() > 1e-12
     # grad = grad_init.clone().requires_grad_(True)
     # we need to adjust the simulation itself to optimise
-    # pulse_x_init = pulse_sim.grad_pulse.data_pulse_x.clone()
-    pulse_x_init = pulse_sim.grad_pulse.data_pulse_x.squeeze()[pulse_mask].clone()
+    pulse_x_init = pulse_sim.grad_pulse.data_pulse_x.clone()
+    # pulse_x_init = pulse_sim.grad_pulse.data_pulse_x.squeeze()[pulse_mask].clone()
     # pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.clone()
     pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.squeeze()[pulse_mask].clone()
 
-    pulse_x = pulse_x_init.clone().requires_grad_(True)
+    # pulse_x = pulse_x_init.clone().requires_grad_(True)
     pulse_y = pulse_y_init.clone().requires_grad_(True)
 
     # set some optimisation parameters
@@ -71,12 +76,12 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         # we set up the pulse simulation object
         pulse_sim = Pulse(settings=settings)
         # pulse
-        px = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_x)
-        px[0, pulse_mask] = pulse_x
+        # px = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_x)
+        # px[0, pulse_mask] = pulse_x
         py = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_y)
         py[0, pulse_mask] = pulse_y
         data = functions.propagate_gradient_pulse_relax(
-            pulse_x=px, pulse_y=py,
+            pulse_x=pulse_x_init, pulse_y=py,
             grad=pulse_sim.grad_pulse.data_grad, sim_data=pulse_sim.data,
             dt_s=pulse_sim.grad_pulse.dt_sampling_steps_us * 1e-6
         )
@@ -91,7 +96,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         loss_profile = torch.nn.MSELoss()(m_xy * target_m_weighting, target_mag_xy) + torch.nn.MSELoss()(m_z, target_mag_z)
         losses_profile.append(loss_profile.item())
 
-        loss_sar = (torch.sum(torch.abs(pulse_x**2)) + torch.sum(torch.abs(pulse_y**2))) * 1e7
+        loss_sar = torch.sum(torch.abs(pulse_y**2)) * 1e7
         losses_sar.append(loss_sar.item())
 
         loss = loss_profile + 0.67 * loss_sar
@@ -100,14 +105,14 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
         loss.backward()
         with torch.no_grad():
-            pulse_x -= lr[idx] * pulse_x.grad
+            # pulse_x -= lr[idx] * pulse_x.grad
             pulse_y -= lr[idx] * pulse_y.grad
             # grad -= lr[idx] * grad.grad
 
-            pulse_iter.append([px.clone().detach(), py.clone().detach()])
+            pulse_iter.append([pulse_x_init.clone().detach(), py.clone().detach()])
             # grad_iter.append(grad)
 
-        pulse_x.grad.zero_()
+        # pulse_x.grad.zero_()
         pulse_y.grad.zero_()
         # grad.grad.zero_()
 
@@ -121,21 +126,21 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         target_mag=[target_mag_xy, target_ph_xy, target_mag_z]
     )
 
-
     rf_optim = RFPulse(
         name="excitation",
         duration_in_us=2000,
         time_bandwidth=2.5,
-        num_samples=pulse_x_init.shape[0],
+        num_samples=pulse_y_init.shape[0],
         signal=pulse_y.detach().cpu().numpy()
     )
-    fn = path.joinpath("SLR_optim_exc").with_suffix(".json")
-    logger.info(f"Write File: {fn}")
-    rf_optim.save_json(path=fn, indent=2)
+    save(
+        rf_optim=rf_optim, losses=losses, losses_profile=losses_profile, losses_sar=losses_sar,
+         mag_iter=mag_iter, pulse_iter=pulse_iter, path=path
+    )
 
 
 def optimise_refocusing_pulse(settings: PulseSimulationSettings):
-    path = plib.Path(get_test_result_output_dir("pulse_optim_ref", mode=ResultMode.OPTIMIZATION)).absolute()
+    path = plib.Path(get_test_result_output_dir("pulse_optim_sinc_ref", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
     settings.pulse_name = "refocusing"
@@ -154,7 +159,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
     # additionally introduce some target weighting towards the center
     target_m_weighting = torch.exp(-pulse_sim.data.sample_axis**2 / 0.005**2)
     # we want to emphasise rippling reduction
-    target_m_weighting *= 1.5 / target_m_weighting.max()
+    target_m_weighting *= 1.3 / target_m_weighting.max()
     target_m_weighting[target_mag_xy > 0.5] = 1
 
     # assume we have a constant given gradient function
@@ -228,7 +233,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         loss_sar = (torch.sum(torch.abs(pulse_x**2))) * 1e7
         losses_sar.append(loss_sar.item())
 
-        loss = loss_profile + 0.2 * loss_sar
+        loss = loss_profile + 0.15 * loss_sar
         losses.append(loss.item())
 
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
@@ -265,9 +270,38 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         num_samples=pulse_x_init.shape[0],
         signal=pulse_x.detach().cpu().numpy()
     )
-    fn = path.joinpath("SLR_optim_ref").with_suffix(".json")
+
+    save(
+        rf_optim=rf_optim, losses=losses, losses_profile=losses_profile, losses_sar=losses_sar,
+         mag_iter=mag_iter, pulse_iter=pulse_iter, path=path
+    )
+
+
+def save(rf_optim, losses, losses_profile, losses_sar, mag_iter, pulse_iter, path):
+    fn = path.joinpath("optim_pulse").with_suffix(".json")
     logger.info(f"Write File: {fn}")
     rf_optim.save_json(path=fn, indent=2)
+
+    results = {
+        "losses": losses,
+        "losses_profile": losses_profile,
+        "losses_sar": losses_sar
+    }
+    fn = path.joinpath("optimisation_losses").with_suffix(".json")
+    logger.info(f"Write File: {fn}")
+    with open(fn.as_posix(), mode="w") as f:
+        json.dump(results, f, indent=2)
+
+    fn = path.joinpath("optimisation_mag_iter").with_suffix(".pt")
+    logger.info(f"Write File: {fn}")
+
+    mag_iter = torch.stack([torch.stack(m) for m in mag_iter])
+    torch.save(mag_iter, fn)
+
+    fn = path.joinpath("optimisation_pulse_iter").with_suffix(".pt")
+    logger.info(f"Write File: {fn}")
+    pulse_iter = torch.stack([torch.stack(p) for p in pulse_iter])
+    torch.save(pulse_iter, fn)
 
 
 def plot_pulse_iter(pulse_iter: list, path: plib.Path, p_init=(None, None, None)):
@@ -324,7 +358,7 @@ def plot_losses(losses_profile, losses_sar, losses, path):
     fig = psub.make_subplots(
         rows=3, cols=1,
         row_titles=["Profile", "SAR", "Total"],
-        shared_xaxes=True
+        shared_xaxes=True, vertical_spacing=0.01
     )
     for i, l in enumerate([losses_profile, losses_sar, losses]):
         fig.add_trace(
@@ -389,6 +423,83 @@ def plot_mag_iter(mag_iter: list, path: plib.Path, sample_axis: torch.Tensor, ta
     fig.write_html(fn)
 
 
+def plot_results(settings: PulseSimulationSettings):
+    path_ref = plib.Path(get_test_result_output_dir("pulse_optim_slr_ref", mode=ResultMode.OPTIMIZATION)).absolute()
+    path_exc = plib.Path(get_test_result_output_dir("pulse_optim_slr_exc", mode=ResultMode.OPTIMIZATION)).absolute()
+
+    settings.out_path = path_ref.as_posix()
+    settings.visualize = False
+    settings.pulse_name = "excitation"
+
+    # we set up the pulse simulation object
+    pulse_sim = Pulse(settings=settings)
+
+    pulse_iter_ref = torch.load(path_ref.joinpath("optimisation_pulse_iter").with_suffix(".pt"))
+    pulse_iter_exc = torch.load(path_exc.joinpath("optimisation_pulse_iter").with_suffix(".pt"))
+
+    # Create figure with secondary y-axis
+    fig = psub.make_subplots(
+        rows=2, cols=1,
+        specs=[
+            [{"secondary_y":True}],
+            [{"secondary_y":True}]
+        ]
+    )
+    for i, gp in enumerate([pulse_sim.grad_pulse, pulse_sim.grad_pulse_ref]):
+        g = gp.data_grad
+        fig.add_trace(
+            go.Scatter(
+                x=np.arange(g.shape[0])*5e-3, y=g.cpu(),
+                showlegend=False,
+                fill="tozeroy",
+                mode="lines",
+                line=dict(color="teal")
+            ),
+            row=1+i, col=1,
+            secondary_y=False
+        )
+    cmap = plc.sample_colorscale("Inferno", pulse_iter_exc.shape[0], 0.1, 0.9)
+    for i, pulse_iter in enumerate([pulse_iter_exc, pulse_iter_ref]):
+        pulse_iter.squeeze_()
+        for j, pp in enumerate(pulse_iter):
+            ppp = pp[1-i%2]
+            fig.add_trace(
+                go.Scatter(
+                    x=np.arange(ppp.shape[0])*5e-3, y=ppp.cpu(),
+                    showlegend=False,
+                    mode="lines",
+                    line=dict(color=cmap[j])
+                ),
+                row=1+i, col=1,
+                secondary_y=True
+            )
+    # adjust midlines, RF
+    fig.update_yaxes(
+        row=1, col=1, secondary_y=True, range=(-6e-6, 6e-6),
+        tickmode="array", tickvals=np.linspace(-5e-6, 5e-6, 5),
+        title="RF amplitude [a.u.]"
+    )
+    fig.update_yaxes(
+        row=2, col=1, secondary_y=True, range=(-7.5e-6, 7.5e-6),
+        tickmode="array", tickvals=np.linspace(-6e-6, 6e-6, 7),
+        title="RF amplitude [a.u.]"
+    )
+    # Grad
+    fig.update_yaxes(
+        row=1, col=1, secondary_y=False, range=(-120, 120),
+        tickmode="array", tickvals=np.linspace(-100, 100, 5).astype(int),
+        color="teal", title="g<sub>slice</sub> [mT/m]"
+    )
+    fig.update_yaxes(
+        row=2, col=1, secondary_y=False, range=(-75, 75),
+        tickmode="array", tickvals=np.linspace(-60, 60, 7).astype(int),
+        color="teal", title="g<sub>slice</sub> [mT/m]"
+    )
+
+    fn = path_ref.joinpath("pulse_optim_combined").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
+
 
 if __name__ == '__main__':
     # setup logging
@@ -408,9 +519,12 @@ if __name__ == '__main__':
     settings.display()
 
     try:
+        plot_results(settings=settings)
         # optimise_excitation_pulse(settings)
-        optimise_refocusing_pulse(settings)
+        # optimise_refocusing_pulse(settings)
     except Exception as e:
         parser.print_usage()
         logger.exception(e)
         exit(-1)
+
+
