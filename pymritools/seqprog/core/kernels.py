@@ -233,8 +233,10 @@ class Kernel:
                 pulse_type='refocusing'
             )
         else:
-            log_module.info(f"rf -- build gauss pulse")
-            rf = events.RF.make_gauss_pulse(
+            # log_module.info(f"rf -- build gauss pulse")
+            # rf = events.RF.make_gauss_pulse(log_module.info(f"rf -- build gauss pulse")
+            log_module.info(f"rf -- build sinc pulse")
+            rf = events.RF.make_sinc_pulse(
                 flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
                 phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
                 pulse_type="refocusing",
@@ -242,7 +244,8 @@ class Kernel:
                 duration_s=params.refocusing_duration * 1e-6,
                 time_bw_prod=params.excitation_rf_time_bw_prod,
                 freq_offset_hz=0.0, phase_offset_rad=0.0,
-                system=system
+                system=system,
+                apodization=0.5,
             )
         if pulse_num == 0:
             pre_moment = 0.0

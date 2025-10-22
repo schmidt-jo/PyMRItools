@@ -108,7 +108,7 @@ class RF(Event):
                         pulse_type: str = 'excitation',
                         delay_s: float = 0.0, duration_s: float = 2e-3,
                         freq_offset_hz: float = 0.0, phase_offset_rad: float = 0.0,
-                        time_bw_prod: float = 2):
+                        time_bw_prod: float = 2, apodization: float = 0.0,):
         rf_instance = cls()
         rf_instance.system = system
         rf_simple_ns = pp.make_sinc_pulse(
@@ -120,6 +120,7 @@ class RF(Event):
             phase_offset=phase_offset_rad + phase_rad,
             return_gz=False,
             time_bw_product=time_bw_prod,
+            apodization=apodization,
             system=system
         )
         rf_instance.flip_angle_deg = flip_angle_rad * 180.0 / np.pi
