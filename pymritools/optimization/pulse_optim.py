@@ -9,7 +9,6 @@ import tqdm
 import plotly.graph_objects as go
 import plotly.colors as plc
 import plotly.subplots as psub
-from matplotlib.pyplot import colorbar
 
 from pymritools.config.rf import RFPulse
 from pymritools.seqprog.core.events import RF
@@ -434,17 +433,27 @@ def plot_results(settings: PulseSimulationSettings):
     # we set up the pulse simulation object
     pulse_sim = Pulse(settings=settings)
 
-    pulse_iter_ref = torch.load(path_ref.joinpath("optimisation_pulse_iter").with_suffix(".pt"))
-    pulse_iter_exc = torch.load(path_exc.joinpath("optimisation_pulse_iter").with_suffix(".pt"))
+    pulse_iter_ref = torch.load(path_ref.joinpath("optimisation_pulse_iter").with_suffix(".pt"), weights_only=False)
+    pulse_iter_exc = torch.load(path_exc.joinpath("optimisation_pulse_iter").with_suffix(".pt"), weights_only=False)
 
-    # Create figure with secondary y-axis
+    mag_iter_ref = torch.load(path_ref.joinpath("optimisation_mag_iter").with_suffix(".pt"), weights_only=False).cpu()
+    mag_iter_exc = torch.load(path_exc.joinpath("optimisation_mag_iter").with_suffix(".pt"), weights_only=False).cpu()
+    sample_axis = pulse_sim.data.sample_axis.cpu()
+
     fig = psub.make_subplots(
-        rows=2, cols=1,
+        rows=4, cols=2,
+        shared_xaxes=True,
+        horizontal_spacing=0.12, vertical_spacing=0.05,
+        row_titles=["M<sub>z</sub>", "M<sub>xy</sub>", "M<sub>z</sub>", "M<sub>xy</sub>"],
+        column_titles=["Pulse", "Magnetisation Profile"],
         specs=[
-            [{"secondary_y":True}],
-            [{"secondary_y":True}]
+            [{"secondary_y": True, "rowspan": 2}, {}],
+            [None, {}],
+            [{"secondary_y": True, "rowspan": 2}, {}],
+            [None, {}],
         ]
     )
+    # Create figure with secondary y-axis
     for i, gp in enumerate([pulse_sim.grad_pulse, pulse_sim.grad_pulse_ref]):
         g = gp.data_grad
         fig.add_trace(
@@ -455,33 +464,37 @@ def plot_results(settings: PulseSimulationSettings):
                 mode="lines",
                 line=dict(color="teal")
             ),
-            row=1+i, col=1,
+            row=1+2*i, col=1,
             secondary_y=False
         )
     cmap = plc.sample_colorscale("Inferno", pulse_iter_exc.shape[0], 0.1, 0.9)
     for i, pulse_iter in enumerate([pulse_iter_exc, pulse_iter_ref]):
         pulse_iter.squeeze_()
         for j, pp in enumerate(pulse_iter):
+            if j % 2 == 1:
+                continue
             ppp = pp[1-i%2]
             fig.add_trace(
                 go.Scatter(
-                    x=np.arange(ppp.shape[0])*5e-3, y=ppp.cpu(),
+                    x=np.arange(ppp.shape[0])*5e-3, y=ppp.cpu()*1e6,
                     showlegend=False,
                     mode="lines",
                     line=dict(color=cmap[j])
                 ),
-                row=1+i, col=1,
+                row=1+2*i, col=1,
                 secondary_y=True
             )
+    # style time axis
+    fig.update_xaxes(row=3, col=1, title="Time [ms]")
     # adjust midlines, RF
     fig.update_yaxes(
-        row=1, col=1, secondary_y=True, range=(-6e-6, 6e-6),
-        tickmode="array", tickvals=np.linspace(-5e-6, 5e-6, 5),
+        row=1, col=1, secondary_y=True, range=(-6, 6),
+        tickmode="array", tickvals=np.linspace(-5, 5, 5),
         title="RF amplitude [a.u.]"
     )
     fig.update_yaxes(
-        row=2, col=1, secondary_y=True, range=(-7.5e-6, 7.5e-6),
-        tickmode="array", tickvals=np.linspace(-6e-6, 6e-6, 7),
+        row=3, col=1, secondary_y=True, range=(-7.5, 7.5),
+        tickmode="array", tickvals=np.linspace(-6, 6, 5),
         title="RF amplitude [a.u.]"
     )
     # Grad
@@ -491,14 +504,92 @@ def plot_results(settings: PulseSimulationSettings):
         color="teal", title="g<sub>slice</sub> [mT/m]"
     )
     fig.update_yaxes(
-        row=2, col=1, secondary_y=False, range=(-75, 75),
-        tickmode="array", tickvals=np.linspace(-60, 60, 7).astype(int),
+        row=3, col=1, secondary_y=False, range=(-75, 75),
+        tickmode="array", tickvals=np.linspace(-60, 60, 5).astype(int),
         color="teal", title="g<sub>slice</sub> [mT/m]"
     )
 
+    # plot mags
+    for i, mag_iter in enumerate([mag_iter_exc, mag_iter_ref]):
+        # plot end line once for filling
+        for k in range(2):
+            fig.add_trace(
+                go.Scatter(
+                    x=sample_axis * 1e3, y=mag_iter.cpu().detach()[-1][2 * (1 - k)],
+                    name=[f"Mag. xy", "Mag z"][k],
+                    line=dict(
+                        color="rgba(248, 214, 71, 0.05)",
+                        width=0
+                    ),
+                    mode="lines",
+                    showlegend=False,
+                    fill="tozeroy",
+                ),
+                row=1 + 2 * i + k, col=2,
+                secondary_y=False
+            )
+        for j, m in enumerate(mag_iter.squeeze().cpu().detach()):
+            if j % 2 == 1:
+                continue
+            for k in range(2):
+                fig.add_trace(
+                    go.Scatter(
+                        x=sample_axis*1e3, y=m[2*(1-k)],
+                        name=[f"Mag. xy", "Mag z"][k],
+                        line=dict(
+                            color=cmap[j],
+                            width=1.5
+                        ),
+                        mode="lines",
+                        showlegend=False,
+                    ),
+                    row=1+2*i+k, col=2,
+                    secondary_y=False
+                )
+    fig.update_xaxes(row=4, col=2, title="Slice dimension position [mm]")
+
+    # add dummy trace for colorbar
+    fig.add_trace(
+        go.Scatter(
+            x=[None], y=[None],
+            mode="markers",
+            showlegend=False,
+            marker=dict(
+                color=[0],
+                colorscale="Inferno",
+                showscale=True,
+                cmin=0, cmax=pulse_iter_exc.shape[0],
+                colorbar=dict(
+                    thickness=10,
+                    title=dict(
+                        text="Optimisation iteration",
+                        side="right",
+                    )
+                )
+            )
+        ),
+        row=1, col=1
+    )
+    tex_linewidth_pt = 650.0
+    px_per_inch = 96.0
+    tex_to_plotly_px = int(tex_linewidth_pt * px_per_inch / 72.27)
+
+    width = tex_to_plotly_px
+    height = 300
+    fig.update_layout(
+        width=width, height=height,
+        margin=dict(t=25, l=0, b=5, r=0)
+    )
     fn = path_ref.joinpath("pulse_optim_combined").with_suffix(".html")
     logger.info(f"Write file: {fn}")
     fig.write_html(fn)
+    for suff in [".pdf", ".png"]:
+        fn = fn.with_suffix(suff)
+        print(f"Writing {fn}")
+        fig.write_image(
+            fn,
+            width=width, height=height, scale=1
+        )
 
 
 if __name__ == '__main__':
@@ -515,7 +606,7 @@ if __name__ == '__main__':
     settings = PulseSimulationSettings.from_cli(args=args.settings)
     # set some additionals
     settings.visualize = False
-    settings.kernel_file = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/optimization/mese_slr_bpr5m_kernels.pkl").as_posix()
+    settings.kernel_file = plib.Path("C:\\Daten_Jo\\Daten\\03_work\\04_code\\PyMRItools\\pymritools\\optimization\\mese_slr_bpr5m_kernels.pkl").as_posix()
     settings.display()
 
     try:
