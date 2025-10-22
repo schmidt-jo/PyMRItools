@@ -72,8 +72,9 @@ class MESE(Simulation):
 
         # extract params from acquisition kernel
         self.params.acquisition_number = 1
-        self.params.bw = 1 / kernels["acq"].adc.get_duration()
+        self.params.bw = 1.0 / kernels["acq"].adc.get_duration()
         self.gp_acquisition = GradPulse.prep_acquisition(params=self.params)
+        self.params.esp = self.tes[0]
         # prep sim data due to etl change - we spawn on cpu and use the GPU memory in the batching
         # self.data = SimulationData(params=self.params, settings=self.settings, device=torch.device("cpu"))
 
