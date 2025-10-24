@@ -1181,10 +1181,10 @@ class Sequence2D(abc.ABC):
                 append_to_lists(start - 1e-6, 0.0, label="RF amp")
                 append_to_lists(start - 1e-6, 0.0, label="RF phase")
                 t_rf = rf.t * 1e6
-                signal = np.real(rf.signal)
                 angle = np.angle(
-                    signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
+                    rf.signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
                 )
+                signal = np.abs(rf.signal)
                 if sim_grad_moments:
                     if rf.use == "excitation":
                         identifier = 1
