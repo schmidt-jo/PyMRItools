@@ -394,7 +394,7 @@ class Kernel:
         n_adc_mid = int((params.resolution_n_read / 2 - int(invert_grad_read_dir) / 2) * params.oversampling)
         # calculate the time to the midpoint
         t_adc_mid = n_adc_mid * adc.t_dwell_s
-        if np.abs(t_adc_mid) % system.adc_raster_time > 1e-9:
+        if not (np.abs(t_adc_mid) / system.adc_raster_time).is_integer():
             err = f"Found adc samples to not be aligned to adc raster time"
             log_module.error(err)
             raise ValueError(err)
@@ -403,19 +403,27 @@ class Kernel:
         # calculate the right adc start delay
         # sanity check if the adc half sample time still falls on adc raster
         t_adc_half_dwell = adc.t_dwell_s / 2
-        if np.abs(t_adc_half_dwell) % system.adc_raster_time > 1e-9:
+        if not (np.abs(t_adc_half_dwell) / system.adc_raster_time).is_integer():
             err = f"Found adc samples to not be aligned to adc raster time"
             log_module.error(err)
             raise ValueError(err)
 
         delay = t_mid_grad - t_adc_mid - t_adc_half_dwell
+        if delay % system.adc_raster_time > 1e-9:
+            # adc delay not fitting on adc raster
+            warn = "adc delay set not multiple of adc raster. might lead to small timing deviations in actual .seq file"
+            log_module.warning(warn)
+        factor = 1000
+        delay = int(np.round(delay / system.adc_raster_time * factor)) * system.adc_raster_time
+        delay /= factor
+
 
         if delay < 0:
             err = f"adc longer than read gradient"
             log_module.error(err)
             raise ValueError(err)
         # sanity check
-        if delay % system.adc_raster_time > 1e-9:
+        if not (delay / system.adc_raster_time).is_integer():
             # adc delay not fitting on adc raster
             warn = "adc delay set not multiple of adc raster. might lead to small timing deviations in actual .seq file"
             log_module.warning(warn)
