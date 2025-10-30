@@ -252,7 +252,7 @@ def subspace_orbit_randomized_svd(matrix: torch.Tensor, q: int = 6, power_projec
 
     # 7) Form the SOR-SVD-based low-rank approximation
     a_1 = torch.matmul(q1, u_k)
-    a_2 = torch.matmul(q2, v_k.H).H
+    a_2 = torch.matmul(q2, v_k.mH).mH
     return a_1, s_k, a_2
 
 
