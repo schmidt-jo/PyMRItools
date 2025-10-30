@@ -222,8 +222,8 @@ def adaptive_combine(
     num_batches = int(np.ceil(nb / batch_size))
     bar = tqdm.trange(num_batches, desc="Batch processing : ")
     len_sub_bar = int(cc / 10)
-    sub = 0
     for idx_b in bar:
+        sub = 0
         bar.postfix = "Adaptive channel combine " + "_"*len_sub_bar
         start = idx_b * batch_size
         end = min((idx_b + 1) * batch_size, nb)
@@ -240,10 +240,10 @@ def adaptive_combine(
             local_cov = F.conv2d(prod, kernel, padding=pad)
             cov[..., i, j] = local_cov[:, 0] / num_pix
 
-            if ccc % len_sub_bar == 0:
+            if ccc % 10 == 0:
                 sub += 1
                 name = "%" * sub
-                bar.postfix = f"Adaptive channel combine {name.ljust(len_sub_bar - sub, '_')}"
+                bar.postfix = f"Adaptive channel combine {name.ljust(len_sub_bar, '_')}"
 
         # batched eigen-decomposition
         eigvals, eigvecs = torch.linalg.eigh(cov)
