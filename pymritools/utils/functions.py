@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import logging
+import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,96 @@ def root_sum_of_squares(input_data: np.ndarray | torch.Tensor, dim_channel: int 
             )
         )
 
+
+def adaptive_combine(
+    channel_img_data_rpsct: np.ndarray | torch.Tensor, window_size: int = 5, batch_size: int = 1000,
+    use_gpu: bool = True) -> (np.ndarray | torch.Tensor):
+    """
+    Adaptive Coil Combination
+    Walsh et al. 2000
+    -----------------------------------------------------------
+    coil_images: torch.Tensor
+        Complex tensor of shape [N read, N phase, N slices, N channels, N echoes]
+
+    window_size: int
+        Size of local window (e.g., 5 or 7).
+
+    Returns:
+    --------
+    combined_image: torch.Tensor
+        Complex combined image [B, H, W]
+    """
+    # check if numpy
+    if not torch.is_tensor(channel_img_data_rpsct):
+        channel_img_data_rpsct = torch.from_numpy(channel_img_data_rpsct)
+        from_numpy = True
+    else:
+        from_numpy = False
+
+    device = torch.device("cuda:0") if use_gpu else torch.device("cpu")
+
+    # can use complex data
+    nx, ny, nz, nc, nt = channel_img_data_rpsct.shape
+
+    # batch combine
+    channel_img_data_rpsct = torch.reshape(
+        torch.permute(channel_img_data_rpsct, (2, 4, 0, 1, 3)),
+        (-1, nx, ny, nc)
+    )
+    nb = channel_img_data_rpsct.shape[0]
+
+    # shape b, nx, ny, nc
+    pad = window_size // 2
+
+    # Apply local averaging filter to generate local covariance estimates
+    kernel = torch.ones(1, 1, window_size, window_size, dtype=channel_img_data_rpsct.dtype, device=device)
+    num_pix = window_size * window_size
+
+    cc = nc*nc
+
+    # use batched computations
+    output = torch.zeros_like(channel_img_data_rpsct[..., 0])
+    num_batches = int(np.ceil(nb / batch_size))
+    bar = tqdm.trange(num_batches, desc="Batch processing : ")
+    len_sub_bar = int(cc / 10)
+    for idx_b in bar:
+        sub = 0
+        bar.postfix = "Adaptive channel combine " + "_"*len_sub_bar
+        start = idx_b * batch_size
+        end = min((idx_b + 1) * batch_size, nb)
+        b = end - start
+        # Initialize covariance storage - spawn on cpu
+        cov = torch.zeros(b, ny, nx, nc, nc, dtype=channel_img_data_rpsct.dtype, device=device)
+        # adaptive combine
+        batch = channel_img_data_rpsct[start:end].to(device=device)
+        for ccc in range(cc):
+            i = ccc % nc
+            j = ccc // nc
+            prod = batch[..., i] * batch[..., j].conj()
+            prod = prod.unsqueeze(1)  # [B,1,H,W]
+            local_cov = F.conv2d(prod, kernel, padding=pad)
+            cov[..., i, j] = local_cov[:, 0] / num_pix
+
+            if ccc % 10 == 0:
+                sub += 1
+                name = "%" * sub
+                bar.postfix = f"Adaptive channel combine {name.ljust(len_sub_bar, '_')}"
+
+        # batched eigen-decomposition
+        eigvals, eigvecs = torch.linalg.eigh(cov)
+
+        # Pick dominant eigenvector
+        w = eigvecs[..., -1]  # [B*H*W, C]
+        w = w / (torch.linalg.norm(w, dim=-1, keepdim=True) + 1e-8)
+
+        # Optional: phase normalization (zero-phase reference)
+        w = w * torch.exp(-1j * torch.angle(w[:, 0:1]))
+
+        # Combine coil images using adaptive weights
+        output[start:end] = (batch * w.conj()).sum(dim=-1).to(output.device)  # [nb, nx, ny]
+    # reverse batch combine
+    output = torch.reshape(output, (nz, nt, nx, ny)).permute(2, 3, 0, 1)
+    return output
 
 def gaussian_window(size: int, sigma: float, center: int = None) -> torch.Tensor:
     """
@@ -486,6 +577,3 @@ def calc_ssim(original_input: torch.Tensor, compressed_input: torch.Tensor,
 
         # Return average SSIM
         return ssim_map.mean().item()
-
-
-
