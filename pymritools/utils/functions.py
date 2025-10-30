@@ -172,7 +172,7 @@ def root_sum_of_squares(input_data: np.ndarray | torch.Tensor, dim_channel: int 
 
 
 def adaptive_combine(
-    channel_img_data_rpsct: np.ndarray | torch.Tensor, window_size: int = 5, batch_size: int = 1000,
+    channel_img_data_rpsct: np.ndarray | torch.Tensor, window_size: int = 5, batch_size: int = 10,
     use_gpu: bool = True) -> (np.ndarray | torch.Tensor):
     """
     Adaptive Coil Combination
@@ -229,7 +229,7 @@ def adaptive_combine(
         end = min((idx_b + 1) * batch_size, nb)
         b = end - start
         # Initialize covariance storage - spawn on cpu
-        cov = torch.zeros(b, ny, nx, nc, nc, dtype=channel_img_data_rpsct.dtype, device=device)
+        cov = torch.zeros(b, nx, ny, nc, nc, dtype=channel_img_data_rpsct.dtype, device=device)
         # adaptive combine
         batch = channel_img_data_rpsct[start:end].to(device=device)
         for ccc in range(cc):
@@ -259,6 +259,8 @@ def adaptive_combine(
         output[start:end] = (batch * w.conj()).sum(dim=-1).to(output.device)  # [nb, nx, ny]
     # reverse batch combine
     output = torch.reshape(output, (nz, nt, nx, ny)).permute(2, 3, 0, 1)
+    if from_numpy:
+        output = output.numpy()
     return output
 
 def gaussian_window(size: int, sigma: float, center: int = None) -> torch.Tensor:
