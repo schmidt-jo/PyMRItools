@@ -15,7 +15,7 @@ from pymritools.recon.loraks.utils import (
     check_channel_batch_size_and_batch_channels, prepare_k_space_to_batches, unprepare_batches_to_k_space,
     pad_input, unpad_output
 )
-from pymritools.utils import torch_load, fft_to_img, nifti_save, torch_save, root_sum_of_squares
+from pymritools.utils import torch_load, fft_to_img, nifti_save, torch_save, root_sum_of_squares, adaptive_combine
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +120,16 @@ def main(config: Settings):
     #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
     # )
     rsos = root_sum_of_squares(img, dim_channel=-2)
+    ac = adaptive_combine(channel_img_data_rpsct=img)
     nifti_save(
         data=rsos,
         img_aff=aff, path_to_dir=path_out, file_name="recon_img_rsos"
     )
+    for i, f in enumerate([torch.abs, torch.angle]):
+        nifti_save(
+            data=f(ac),
+            img_aff=aff, path_to_dir=path_out, file_name=f"recon_img_adac_{['mag', 'phase'][i]}"
+        )
 
     torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
 
