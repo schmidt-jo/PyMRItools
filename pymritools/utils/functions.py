@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import logging
 import tqdm
 
+from pymritools.utils.algorithms import subspace_orbit_randomized_svd
+
 logger = logging.getLogger(__name__)
 
 
@@ -173,7 +175,7 @@ def root_sum_of_squares(input_data: np.ndarray | torch.Tensor, dim_channel: int 
 
 def adaptive_combine(
     channel_img_data_rpsct: np.ndarray | torch.Tensor, window_size: int = 5, batch_size: int = 10,
-    use_gpu: bool = True) -> (np.ndarray | torch.Tensor):
+    use_gpu: bool = True, use_eigh: bool = True) -> (np.ndarray | torch.Tensor):
     """
     Adaptive Coil Combination
     Walsh et al. 2000
@@ -227,7 +229,7 @@ def adaptive_combine(
     num_batches = int(np.ceil(nb / batch_size))
     bar = tqdm.trange(num_batches, desc="Batch processing : ")
     len_sub_bar = 20
-    div = cc // len_sub_bar
+    div = max(cc // len_sub_bar, 1)
     for idx_b in bar:
         sub = 0
         bar.postfix = "Adaptive channel combine " + "_"*len_sub_bar
@@ -256,12 +258,15 @@ def adaptive_combine(
 
         cov_shape = cov.shape
         # for some reason cpu implementation is quicker on larger matrices
-        if nc > 32:
-            _, eigvecs = torch.linalg.eigh(cov.cpu())
+        if not use_eigh:
+            _, _, v = subspace_orbit_randomized_svd(cov, q=min(5, nc), power_projections=1)
+            w = v[..., 0, :]
         else:
+            cov = cov.cpu() if nc > 16 else cov
             _, eigvecs = torch.linalg.eigh(cov)
-        # Pick dominant eigenvector
-        w = eigvecs[..., -1].to(device)  # [B*H*W, C]
+            # Pick dominant eigenvector
+            w = eigvecs[..., -1]
+        w = w.to(device)
         w = w / (torch.linalg.norm(w, dim=-1, keepdim=True) + 1e-8)
 
         # Optional: phase normalization (zero-phase reference)
