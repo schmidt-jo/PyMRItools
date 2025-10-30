@@ -197,7 +197,13 @@ def adaptive_combine(
         from_numpy = False
 
     device = torch.device("cuda:0") if use_gpu else torch.device("cpu")
+    # reduce bitdepth
+    if torch.is_complex(channel_img_data_rpsct):
+        channel_img_data_rpsct = channel_img_data_rpsct.to(torch.complex64)
+    else:
+        channel_img_data_rpsct = channel_img_data_rpsct.to(torch.float32)
 
+    channel_img_data_rpsct = channel_img_data_rpsct
     # can use complex data
     nx, ny, nz, nc, nt = channel_img_data_rpsct.shape
 
@@ -214,14 +220,14 @@ def adaptive_combine(
     # Apply local averaging filter to generate local covariance estimates
     kernel = torch.ones(1, 1, window_size, window_size, dtype=channel_img_data_rpsct.dtype, device=device)
     num_pix = window_size * window_size
-
     cc = nc*nc
 
     # use batched computations
     output = torch.zeros_like(channel_img_data_rpsct[..., 0])
     num_batches = int(np.ceil(nb / batch_size))
     bar = tqdm.trange(num_batches, desc="Batch processing : ")
-    len_sub_bar = int(cc / 10)
+    len_sub_bar = 20
+    div = cc // len_sub_bar
     for idx_b in bar:
         sub = 0
         bar.postfix = "Adaptive channel combine " + "_"*len_sub_bar
@@ -240,20 +246,27 @@ def adaptive_combine(
             local_cov = F.conv2d(prod, kernel, padding=pad)
             cov[..., i, j] = local_cov[:, 0] / num_pix
 
-            if ccc % 10 == 0:
+            if ccc % div == 0:
                 sub += 1
                 name = "%" * sub
                 bar.postfix = f"Adaptive channel combine {name.ljust(len_sub_bar, '_')}"
 
         # batched eigen-decomposition
-        eigvals, eigvecs = torch.linalg.eigh(cov)
+        bar.postfix = "Batched eigendecomposition"
 
+        cov_shape = cov.shape
+        # for some reason cpu implementation is quicker on larger matrices
+        if nc > 32:
+            _, eigvecs = torch.linalg.eigh(cov.cpu())
+        else:
+            _, eigvecs = torch.linalg.eigh(cov)
         # Pick dominant eigenvector
-        w = eigvecs[..., -1]  # [B*H*W, C]
+        w = eigvecs[..., -1].to(device)  # [B*H*W, C]
         w = w / (torch.linalg.norm(w, dim=-1, keepdim=True) + 1e-8)
 
         # Optional: phase normalization (zero-phase reference)
-        w = w * torch.exp(-1j * torch.angle(w[:, 0:1]))
+        w = w * torch.exp(-1j * torch.angle(w[..., 0:1]))
+        w = w.view(cov_shape[:-1])
 
         # Combine coil images using adaptive weights
         output[start:end] = (batch * w.conj()).sum(dim=-1).to(output.device)  # [nb, nx, ny]
