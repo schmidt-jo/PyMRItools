@@ -3,7 +3,7 @@ import logging
 import tqdm
 
 from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D
-from pymritools.seqprog.core import Kernel, DELAY, ADC
+from pymritools.seqprog.core import Kernel, DELAY, ADC, events
 from pymritools.seqprog.sequences import Sequence2D, setup_sequence_cli, build
 
 log_module = logging.getLogger(__name__)
@@ -179,6 +179,137 @@ class MESE(Sequence2D):
             self.sequence.add_block(*self.block_spoil_end.list_events_to_ns())
             # insert slice delay
             self.sequence.add_block(self.delay_slice.to_simple_ns())
+
+    def _loop_calibration_sequence(self):
+        # we first set the calibration object
+        self.use_calibration_seq = True
+        # we here we want to create a sequence for slice checks
+        # we need to move the readout gradient into the z direction, and prephase it for k-space traversing
+        # compute the extent (in mm), take adjacent 10 slices right and left
+        fov_slice = self.params.resolution_slice_thickness * (
+            self.params.resolution_slice_num + (self.params.resolution_slice_num - 1) * self.params.resolution_slice_gap / 100
+        )
+        # we sample this with ~ 0.5 mm
+        resolution_n_slice = int(np.round(2 * fov_slice))
+        # set the oversampling to reduce foldover from body
+        os = 2
+        # set sampling time
+        dwell = self.block_acquisition.grad_read.t_flat_time_s / resolution_n_slice / os
+
+        # make adc
+        adc = events.ADC.make_adc(
+            num_samples=resolution_n_slice * os,
+            dwell=dwell,
+            system=self.system,
+            delay_s=self.system.adc_dead_time
+        )
+        delta_k = 1e3 / fov_slice
+
+        # calculate amplitude - we use a negative amplitude, s.th. we can use positive pre and rephasers,
+        # reducing grad stress for the slice spoiling gradients
+        slice_read_grad = events.GRAD.make_trapezoid(
+            channel="z", system=self.system, flat_area=-delta_k * resolution_n_slice,
+            flat_time=self.block_acquisition.grad_read.t_flat_time_s
+        )
+        acq_block = Kernel(adc=adc, grad_slice=slice_read_grad)
+
+        # rebuild spoiling gradients, i.e. insert (p)rephasing slice area
+        re_area = slice_read_grad.area / 2
+        min_re_grad_time = np.sum(np.diff(self.block_refocus.grad_slice.t_array_s[-4:]))
+
+        grad_slice, grad_slice_delay, grad_slice_spoil_re_time = events.GRAD.make_slice_selective(
+            pulse_bandwidth_hz=-self.block_refocus_1.rf.bandwidth_hz,
+            slice_thickness_m=self.params.refocusing_grad_slice_scale * self.params.resolution_slice_thickness * 1e-3,
+            duration_s=self.params.refocusing_duration * 1e-6,
+            system=self.system,
+            pre_moment=0,
+            re_spoil_moment=-self.params.grad_moment_slice_spoiling - re_area,
+            t_minimum_re_grad=min_re_grad_time
+        )
+
+        import pathlib as plib
+        import plotly.graph_objects as go
+        path = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/scratches/calibration_data_mese").absolute()
+        fig = go.Figure()
+        for i, g in enumerate([self.block_refocus_1.grad_slice, grad_slice]):
+            fig.add_trace(
+                go.Scatter(
+                    x=g.t_array_s, y=g.amplitude,
+                    name=["orig.", "slice-sampling"][i])
+            )
+        fig.write_html(path.joinpath("pulse_grads.html"))
+        
+        # adopt slice gradients
+        self.block_refocus_1.grad_slice = grad_slice
+        self.block_refocus.grad_slice.amplitude[:4] = grad_slice.amplitude[-4:][::-1]
+        self.block_refocus.grad_slice.amplitude[-4:] = grad_slice.amplitude[-4:]
+
+        # reset all kernels
+        self._set_fa_and_update_slice_offset(
+            rf_idx=0, slice_idx=1, excitation=True
+        )
+        # set fa
+        self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=1)
+
+        # __ build sequence
+        # small start delay
+        self.sequence_calibration.add_block(DELAY().make_delay(delay_s=1.0).to_simple_ns())
+        # use 10 avgs
+        for n in range(10):
+            # add excitation pulse with mid slice
+            self.sequence_calibration.add_block(*self.block_excitation.list_events_to_ns())
+            # delay if necessary
+            if self.delay_exci_ref1.get_duration() > 1e-7:
+                self.sequence_calibration.add_block(self.delay_exci_ref1.to_simple_ns())
+
+            # first refocus
+            # want to set a 0 phase encode and read gradient
+            self.block_refocus_1.grad_phase.amplitude = np.zeros_like(self.block_refocus_1.grad_phase.amplitude)
+            self.block_refocus_1.grad_read.amplitude = np.zeros_like(self.block_refocus_1.grad_read.amplitude)
+
+            self.sequence_calibration.add_block(*self.block_refocus_1.list_events_to_ns())
+
+            # delay if necessary
+            if self.delay_ref_adc.get_duration() > 1e-7:
+                self.sequence_calibration.add_block(self.delay_ref_adc.to_simple_ns())
+
+            # prephaser included in refocus block
+            # self.sequence_calibration.add_block(*slice_read_pre.list_events_to_ns())
+            # readout
+            self.sequence_calibration.add_block(*acq_block.list_events_to_ns())
+            # rephaser included in rephocus block
+            # self.sequence_calibration.add_block(*slice_read_post.list_events_to_ns())
+
+            # delay if necessary
+            if self.delay_ref_adc.get_duration() > 1e-7:
+                self.sequence_calibration.add_block(self.delay_ref_adc.to_simple_ns())
+
+            # want to set a 0 phase encode and read gradient
+            self.block_refocus.grad_phase.amplitude = np.zeros_like(self.block_refocus.grad_phase.amplitude)
+            self.block_refocus.grad_read.amplitude = np.zeros_like(self.block_refocus.grad_read.amplitude)
+
+            # pulse train loop
+            for echo_idx in np.arange(1, self.params.etl):
+                # set fa
+                self._set_fa_and_update_slice_offset(rf_idx=echo_idx, slice_idx=1)
+                # add block
+                self.sequence_calibration.add_block(*self.block_refocus.list_events_to_ns())
+                # delay if necessary
+                if self.delay_ref_adc.get_duration() > 1e-7:
+                    self.sequence_calibration.add_block(self.delay_ref_adc.to_simple_ns())
+
+                # prephaser
+                # self.sequence_calibration.add_block(*slice_read_pre.list_events_to_ns())
+                # readout
+                self.sequence_calibration.add_block(*acq_block.list_events_to_ns())
+                # rephaser
+                # self.sequence_calibration.add_block(*slice_read_post.list_events_to_ns())
+
+                # delay if necessary
+                if self.delay_ref_adc.get_duration() > 1e-7:
+                    self.sequence_calibration.add_block(self.delay_ref_adc.to_simple_ns())
+            # delay in end
+            self.sequence_calibration.add_block(DELAY().make_delay(delay_s=8.0).to_simple_ns())
 
 
 def main():

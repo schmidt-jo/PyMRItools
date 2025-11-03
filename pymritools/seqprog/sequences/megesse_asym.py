@@ -10,6 +10,7 @@ log_module = logging.getLogger(__name__)
 
 
 class MEGESSE(Sequence2D):
+
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D):
         # init Base class - relax gradient stress
         super().__init__(config=config, specs=specs, params=params, relax_read_grad_stress=True)
@@ -100,6 +101,9 @@ class MEGESSE(Sequence2D):
         # this would allow joint recon of t2 and t2* contrasts independently
         # but we could also benefit even more from joint recon of all echoes and
         # hence switch up the phase encode scheme even further also in between gesse samplings
+
+    def _loop_calibration_sequence(self):
+        pass
 
     # __ pypsi __
     # sampling + k-traj

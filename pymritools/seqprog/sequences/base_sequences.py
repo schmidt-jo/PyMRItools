@@ -145,6 +145,9 @@ class Sequence2D(abc.ABC):
         # set pypulseq sequence as var -> thats actually whats been build throughout the code and
         # later shipped to a .seq file
         self.sequence: Sequence = Sequence(system=self.system)
+        # we add a second sequence object, we can use this to do some slice profile checks
+        self.sequence_calibration = Sequence(system=self.system)
+        self.use_calibration_seq: bool = False
 
         # set sampling object as var -> allows to register k-space trajectories and sampling pattern
         self.sampling: Sampling = Sampling()
@@ -368,6 +371,16 @@ class Sequence2D(abc.ABC):
         self.set_pulseq_definitions()
         self.sequence.write(save_file.as_posix())
 
+        # write calibration sequence if used
+        if self.use_calibration_seq:
+            # write sequence file
+            save_file = path.joinpath(f"{name}_calibration_sequence").with_suffix(".seq")
+            log_module.info(f"writing file: {save_file.as_posix()}")
+            # write sequence after setting some header definitions (i.e. for correct FOV display on scanner
+            self.set_pulseq_definitions(calib=True)
+            self.sequence_calibration.write(save_file.as_posix())
+
+
         # write pulseq file
         save_file = path.joinpath(f"{name}_pulseq_config").with_suffix(".json")
         log_module.info(f"writing file: {save_file.as_posix()}")
@@ -419,24 +432,25 @@ class Sequence2D(abc.ABC):
         #     with open(save_file.as_posix(), "w") as j_file:
         #         json.dump(j_dict, j_file, indent=2)
 
-    def set_pulseq_definitions(self):
-        self.sequence.set_definition(
+    def set_pulseq_definitions(self, calib: bool = False):
+        seq = self.sequence if not calib else self.sequence_calibration
+        seq.set_definition(
             "FOV",
             [*self.params.get_fov()]
         )
-        self.sequence.set_definition(
+        seq.set_definition(
             "Name",
             f"mese_{self.config.version}".replace(".", "p")
         )
-        self.sequence.set_definition(
+        seq.set_definition(
             "AdcRasterTime",
             1e-07
         )
-        self.sequence.set_definition(
+        seq.set_definition(
             "GradientRasterTime",
             self.specs.grad_raster_time
         )
-        self.sequence.set_definition(
+        seq.set_definition(
             "RadiofrequencyRasterTime",
             self.specs.rf_raster_time
         )
@@ -495,6 +509,8 @@ class Sequence2D(abc.ABC):
         # prescan for noise correlation
         self._noise_pre_scan()
         self._loop_lines()
+        log_module.info(f"build -- profiler sequence")
+        self._loop_calibration_sequence()
         log_module.info(f"set recon info data")
         # sampling + k traj
         self._set_k_trajectories()  # raises error if not implemented
@@ -516,6 +532,11 @@ class Sequence2D(abc.ABC):
     @abc.abstractmethod
     def _loop_slices(self, idx_pe_n: int, no_adc: bool = False):
         # to be implemented for each variant, looping through the phase encodes
+        pass
+
+    @abc.abstractmethod
+    def _loop_calibration_sequence(self):
+        # to be implemented for each variant, looping through the additional sequence object for calibration
         pass
 
     def _noise_pre_scan(self):
@@ -1113,7 +1134,12 @@ class Sequence2D(abc.ABC):
         #     fig.write_html(fig_path.as_posix())
 
     def plot_sequence(self, t_start_s: float = 0.0, t_end_s: float = 10.0,
-                      sim_grad_moments: bool = False, file_suffix: str = "html"):
+                      sim_grad_moments: bool = False, file_suffix: str = "html",
+                      plot_calibration_sequence: bool = False
+                      ):
+        if plot_calibration_sequence and not self.use_calibration_seq:
+            log_module.info("\t\t-no calibration sequence, exciting plotting")
+        seq = self.sequence if not plot_calibration_sequence else self.sequence_calibration
         gamma = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6
         logging.debug(f"plot_seq")
         # transform to us
@@ -1129,12 +1155,12 @@ class Sequence2D(abc.ABC):
         t_cum_us = 0
 
         # go through blocks - find start block
-        for block_idx, block_duration in self.sequence.block_durations.items():
+        for block_idx, block_duration in seq.block_durations.items():
             t_cum_us += 1e6 * block_duration
             if t_cum_us > t_start_us:
                 start_idx = block_idx
                 break
-            if block_idx == len(self.sequence.block_durations) - 1:
+            if block_idx == len(seq.block_durations) - 1:
                 err = (f"looped through sequence blocks to get to {t_cum_us} us, "
                        f"and didnt arrive at starting time given {t_start_us} us")
                 log_module.error(err)
@@ -1163,14 +1189,14 @@ class Sequence2D(abc.ABC):
                 labels.extend([label] * len(time))
 
         # start with first block after start time
-        for block_idx, block_duration in self.sequence.block_durations.items():
+        for block_idx, block_duration in seq.block_durations.items():
             if block_idx < start_idx:
                 continue
-            if block_idx >= len(self.sequence.block_durations):
+            if block_idx >= len(seq.block_durations):
                 break
             # set start block
             t0 = t_cum_us
-            block = self.sequence.get_block(block_idx + 1)
+            block = seq.get_block(block_idx + 1)
             if t_cum_us + 1e6 * block_duration > t_total_us:
                 break
             # add data to the lists
@@ -1349,8 +1375,8 @@ class Sequence2D(abc.ABC):
             width=1000,
             height=800
         )
-
-        name = f"sequence_t-{int(t_start_s):d}_to_t-{int(t_end_s):d}"
+        name = f"calib_" if plot_calibration_sequence else ""
+        name = f"{name}sequence_t-{int(t_start_s):d}_to_t-{int(t_end_s):d}"
         fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
         log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
         if file_suffix in ["png", "pdf"]:
@@ -1608,6 +1634,11 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
 
     if config.visualize:
         logging.info("Plotting")
+
+        sequence.plot_sequence(
+            t_start_s=0, t_end_s=50, sim_grad_moments=True, plot_calibration_sequence=True
+        )
+
         # plot start
         sequence.plot_sequence(t_start_s=0, t_end_s=0.65 * sequence.params.tr * 1e-3, sim_grad_moments=True)
         if sequence.params.resolution_slice_num < 15:
@@ -1631,3 +1662,6 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
             sim_grad_moments=True
         )
         sequence.plot_sampling()
+
+
+

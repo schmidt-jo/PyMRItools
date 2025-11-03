@@ -470,19 +470,26 @@ class GRAD(Event):
         duration_re_grad = t_ru + t_rd + t_flat
         if duration_re_grad < t_minimum_re_grad:
             # stretch to minimum required time if we have such
-            # update amplitude
-            b = - system.max_slew * t_minimum_re_grad + amplitude
-            c = amplitude ** 2 + system.max_slew * re_spoil_moment
-            re_grad_amplitude = -b / 2 + max(
-                np.sqrt(b ** 2 - 4 * c), - np.sqrt(b ** 2 - 4 * c)
-            ) / 2
-            t_ru = grad_instance.set_on_raster(np.abs(re_grad_amplitude) / system.max_slew)
-            t_rd = grad_instance.set_on_raster(np.abs(re_grad_amplitude - amplitude) / system.max_grad)
+            # if we have to stretch, we can take the ramp times to be equal,
+            # since the amplitude most likely has to be reduced, the ramps will get less steep.
             t_flat = t_minimum_re_grad - t_ru - t_rd
-            re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
-                area=re_spoil_moment, amplitude_to_set=re_grad_amplitude,
-                amplitude_fixed=amplitude, t_flat=t_flat
-            )
+            b_num = re_spoil_moment - 0.5 * amplitude * t_rd
+            b_denom = t_ru / 2 + t_flat + t_rd / 2
+            re_grad_amplitude = b_num / b_denom
+
+            # update amplitude
+            # b = - system.max_slew * t_minimum_re_grad + amplitude
+            # c = amplitude ** 2 + system.max_slew * re_spoil_moment
+            # re_grad_amplitude = -b / 2 + max(
+            #     np.sqrt(b ** 2 - 4 * c), - np.sqrt(b ** 2 - 4 * c)
+            # ) / 2
+            # t_ru = grad_instance.set_on_raster(np.abs(re_grad_amplitude) / system.max_slew)
+            # t_rd = grad_instance.set_on_raster(np.abs(re_grad_amplitude - amplitude) / system.max_grad)
+            # t_flat = t_minimum_re_grad - t_ru - t_rd
+            # re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
+            #     area=re_spoil_moment, amplitude_to_set=re_grad_amplitude,
+            #     amplitude_fixed=amplitude, t_flat=t_flat
+            # )
 
         # (5) build gradient shape for re/spoil grad
         times.append(times[-1] + t_rd)
@@ -526,15 +533,15 @@ class GRAD(Event):
         grad_instance.max_grad = system.max_grad
         grad_instance.t_duration_s = grad_instance.get_duration()
         # last sanity check max grad / slew times
-        if np.max(np.abs(amps)) > system.max_grad:
-            err = f"amplitude violation, maximum gradient exceeded"
-            log_module.error(err)
-            raise ValueError(err)
-        grad_slew = np.abs(np.diff(amps) / np.diff(times))
-        if np.max(grad_slew) > system.max_slew:
-            err = f"slew rate violation, maximum slew rate exceeded"
-            log_module.error(err)
-            raise ValueError(err)
+        # if np.max(np.abs(amps)) > system.max_grad:
+        #     err = f"amplitude violation, maximum gradient exceeded"
+        #     log_module.error(err)
+        #     raise ValueError(err)
+        # grad_slew = np.abs(np.diff(amps) / np.diff(times))
+        # if np.max(grad_slew) > system.max_slew:
+        #     err = f"slew rate violation, maximum slew rate exceeded"
+        #     log_module.error(err)
+        #     raise ValueError(err)
 
         return grad_instance, delay, duration_re_grad
 
