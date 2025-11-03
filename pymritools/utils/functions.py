@@ -175,7 +175,7 @@ def root_sum_of_squares(input_data: np.ndarray | torch.Tensor, dim_channel: int 
 
 def adaptive_combine(
     channel_img_data_rpsct: np.ndarray | torch.Tensor, window_size: int = 5, batch_size: int = 10,
-    use_gpu: bool = True, use_eigh: bool = True) -> (np.ndarray | torch.Tensor):
+    use_gpu: bool = True) -> (np.ndarray | torch.Tensor):
     """
     Adaptive Coil Combination
     Walsh et al. 2000
@@ -258,11 +258,10 @@ def adaptive_combine(
 
         cov_shape = cov.shape
         # for some reason cpu implementation is quicker on larger matrices
-        if not use_eigh:
+        if nc > 32:
             _, _, v = subspace_orbit_randomized_svd(cov, q=min(5, nc), power_projections=1)
             w = v[..., 0, :]
         else:
-            cov = cov.cpu() if nc > 16 else cov
             _, eigvecs = torch.linalg.eigh(cov)
             # Pick dominant eigenvector
             w = eigvecs[..., -1]
