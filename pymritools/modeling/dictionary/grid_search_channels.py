@@ -595,11 +595,26 @@ def wrap_cli(settings: EmcFitSettings):
     logger.info(f"set device: {device}")
 
     logger.info(f"Load data")
-    data = torch_load(settings.input_data)
+    in_path = plib.Path(settings.input_data).absolute()
+    if ".nii" in in_path.suffixes:
+        data, img = nifti_load(in_path)
+        data = torch.from_numpy(data)
+        affine = torch.from_numpy(img.affine)
+        logger.info(f"\t\t- found data dims: {data.shape}")
+        if data.ndim < 5:
+            # first assume combined channel input
+            data.unsqueeze_(-2)
+            logger.info(f"\t\t- assumed compressed channel dim: {data.shape}")
+        if data.ndim < 5:
+            # assume compressed slices
+            data.unsqueeze_(2)
+            logger.info(f"\t\t- assumed compressed slice dim: {data.shape}")
+    else:
+        data = torch_load(settings.input_data)
+        affine = torch_load(settings.input_affine) if settings.input_affine else torch.eye(4)
 
     if settings.process_slice:
         data = data[:, :, data.shape[2] // 3, None]
-    affine = torch_load(settings.input_affine) if settings.input_affine else torch.eye(4)
 
     logger.info(f"load database")
     db = DB.load(settings.input_database)
