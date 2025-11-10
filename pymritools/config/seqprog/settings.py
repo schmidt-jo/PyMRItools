@@ -259,12 +259,15 @@ class Parameters2D(Serializable):
 
         # dwell needs to be on adc raster time, acquisition time is flexible -> leads to small deviations in bandwidth
         # adc raster here hardcoded
-        adc_raster = 1e-7
-        kf = 1 / (2 * self.bandwidth * adc_raster * self.resolution_n_read * self.oversampling)
-        k = int(np.floor(kf)) + 1e-8
+        #       note that ADC samples must be on ADC raster time, but the ADC start time must be on RF raster time!
+        #       see https://github.com/pulseq/pulseq/blob/master/doc%2Fpulseq_shapes_and_times.pdf for details,
+        #       thus set raster time
+        adc_raster = 1e-6
+        kf = 1 / (4 * self.bandwidth * adc_raster * self.resolution_n_read * self.oversampling)
+        k = int(np.round(kf)) + 1e-12
         if np.abs(k - kf) > 1e-7:
             bw = self.bandwidth
-            self.bandwidth = 1 / (2 * k * self.resolution_n_read * self.oversampling * adc_raster)
+            self.bandwidth = 1 / (4 * k * self.resolution_n_read * self.oversampling * adc_raster)
             log_module.info(f"setting dwell time on adc raster -> small bw adoptions (set bw: {bw:.3f}; new bw: {self.bandwidth:.3f})")
         log_module.debug(f"Bandwidth: {self.bandwidth:.3f} Hz/px; "
                          f"Readout time: {self.acquisition_time * 1e3:.1f} ms; "
