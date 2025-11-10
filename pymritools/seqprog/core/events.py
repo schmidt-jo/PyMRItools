@@ -138,7 +138,8 @@ class RF(Event):
         rf_instance.t_duration_s = duration_s
         rf_instance.t_ringdown_s = system.rf_ringdown_time
         rf_instance.t_dead_time_s = system.rf_dead_time
-        rf_instance.t_array_s = rf_instance.set_on_raster(np.linspace(0, duration_s, rf_simple_ns.signal.shape[0]))
+        # rf_instance.t_array_s = rf_instance.set_on_raster(np.linspace(0, duration_s, rf_simple_ns.signal.shape[0]))
+        rf_instance.t_array_s = rf_simple_ns.t
 
         rf_instance.bandwidth_hz = time_bw_prod / duration_s
         rf_instance.time_bandwidth = time_bw_prod
