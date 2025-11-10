@@ -18,6 +18,13 @@ log_module = logging.getLogger(__name__)
 def set_on_grad_raster_time(system: Opts, time: float):
     return np.ceil(time / system.grad_raster_time) * system.grad_raster_time
 
+def set_on_rf_raster_time(system: Opts, time: float):
+    return np.ceil(time / system.rf_raster_time) * system.rf_raster_time
+
+def check_raster(value, raster):
+    round_val = value // raster
+    rounded_val = round_val * raster
+    return np.allclose(rounded_val, value)
 
 class Kernel:
     """
@@ -153,9 +160,9 @@ class Kernel:
                 system=system, pulse_type='excitation'
             )
         else:
-            log_module.info(f"rf -- build gauss pulse")
+            log_module.info(f"rf -- build sinc pulse")
             time_bw_prod = params.excitation_rf_time_bw_prod
-            rf = events.RF.make_gauss_pulse(
+            rf = events.RF.make_sinc_pulse(
                 flip_angle_rad=params.excitation_rf_rad_fa,
                 phase_rad=params.excitation_rf_rad_phase,
                 pulse_type="excitation",
@@ -163,7 +170,8 @@ class Kernel:
                 duration_s=params.excitation_duration * 1e-6,
                 time_bw_prod=time_bw_prod,
                 freq_offset_hz=0.0, phase_offset_rad=0.0,
-                system=system
+                system=system,
+                apodization=0.5
             )
         # build slice selective gradient
         grad_slice, grad_slice_delay, _ = events.GRAD.make_slice_selective(
@@ -323,6 +331,8 @@ class Kernel:
         # 3) the adc delay needs to match the adc dead time (coded like this in the pypulseq code),
         #       afaik this only needs to be taken into account when trying to apply multiple ADCs consecutively,
         #       but since its only a couple of nanoseconds we will use this regardless
+        #       note that ADC samples must be on ADC raster time, but the ADC start time must be on RF raster time!
+        #       see https://github.com/pulseq/pulseq/blob/master/doc%2Fpulseq_shapes_and_times.pdf for details
 
         # we are given the number of readout samples (resolution_n_read), an oversampling factor and the delta_k_read
         # the k-space resolution we need to cover between (effective, non oversampled) samples.
@@ -364,11 +374,11 @@ class Kernel:
         # this makes pre-phasing etc. gradient calculation straight forward later on.
 
         # calculate extended read gradient flat time
-        t_adc_extended = int((params.resolution_n_read + 1) * params.oversampling) * adc.t_dwell_s
+        t_adc_extended = int((params.resolution_n_read + 2) * params.oversampling) * adc.t_dwell_s
         # to get the same gradient amplitude during ADC readout we adjust the flat area to incorporate
         # this additional sample / extended flat time
         flat_area = (
-            params.delta_k_read * (params.resolution_n_read + 1)
+            params.delta_k_read * (params.resolution_n_read + 2)
         ) * np.power(-1, int(invert_grad_read_dir))
         # calculate amplitude
         amp = flat_area / t_adc_extended
@@ -390,11 +400,12 @@ class Kernel:
 
         # want to set adc symmetrically into grad read, and we want the middle adc sample to hit k space center.
         t_mid_grad = grad_read.t_mid
+
         # calculate number of points before midpoint is hit (dependent on readout polarity)
         n_adc_mid = int((params.resolution_n_read / 2 - int(invert_grad_read_dir) / 2) * params.oversampling)
         # calculate the time to the midpoint
         t_adc_mid = n_adc_mid * adc.t_dwell_s
-        if not (np.abs(t_adc_mid) / system.adc_raster_time).is_integer():
+        if not check_raster(t_adc_mid, system.adc_raster_time):
             err = f"Found adc samples to not be aligned to adc raster time"
             log_module.error(err)
             raise ValueError(err)
@@ -403,13 +414,15 @@ class Kernel:
         # calculate the right adc start delay
         # sanity check if the adc half sample time still falls on adc raster
         t_adc_half_dwell = adc.t_dwell_s / 2
-        if not (np.abs(t_adc_half_dwell) / system.adc_raster_time).is_integer():
+        if not check_raster(t_adc_half_dwell, system.adc_raster_time):
             err = f"Found adc samples to not be aligned to adc raster time"
             log_module.error(err)
             raise ValueError(err)
 
+        # note that ADC samples must be on ADC raster time, but the ADC start time must be on RF raster time!
+        # see https://github.com/pulseq/pulseq/blob/master/doc%2Fpulseq_shapes_and_times.pdf for details
         delay = t_mid_grad - t_adc_mid - t_adc_half_dwell
-        if delay % system.adc_raster_time > 1e-9:
+        if not check_raster(delay, system.adc_raster_time):
             # adc delay not fitting on adc raster
             warn = "adc delay set not multiple of adc raster. might lead to small timing deviations in actual .seq file"
             log_module.warning(warn)
@@ -417,13 +430,12 @@ class Kernel:
         delay = int(np.round(delay / system.adc_raster_time * factor)) * system.adc_raster_time
         delay /= factor
 
-
         if delay < 0:
             err = f"adc longer than read gradient"
             log_module.error(err)
             raise ValueError(err)
         # sanity check
-        if not (delay / system.adc_raster_time).is_integer():
+        if not check_raster(delay, system.adc_raster_time):
             # adc delay not fitting on adc raster
             warn = "adc delay set not multiple of adc raster. might lead to small timing deviations in actual .seq file"
             log_module.warning(warn)
