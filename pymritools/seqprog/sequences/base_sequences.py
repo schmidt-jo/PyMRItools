@@ -369,7 +369,7 @@ class Sequence2D(abc.ABC):
         log_module.info(f"writing file: {save_file.as_posix()}")
         # write sequence after setting some header definitions (i.e. for correct FOV display on scanner
         self.set_pulseq_definitions()
-        self.sequence.write(save_file.as_posix())
+        _, err_report = self.sequence.write(save_file.as_posix())
 
         # write calibration sequence if used
         if self.use_calibration_seq:
@@ -380,6 +380,14 @@ class Sequence2D(abc.ABC):
             self.set_pulseq_definitions(calib=True)
             self.sequence_calibration.write(save_file.as_posix())
 
+
+        # write error report
+        if err_report is not None:
+            d = [err.__dict__ for err in err_report]
+            save_file = path.joinpath(f"{name}_pulseq_report").with_suffix(".json")
+            log_module.info(f"writing file: {save_file.as_posix()}")
+            with open(save_file.as_posix(), "w") as f:
+                json.dump(d, f)
 
         # write pulseq file
         save_file = path.joinpath(f"{name}_pulseq_config").with_suffix(".json")
@@ -573,7 +581,8 @@ class Sequence2D(abc.ABC):
             # take phase as given in options
             phase_rad = self.params.refocusing_rf_rad_phase[rf_idx]
         # calculate the flip angle provided by rf shape
-        flip = sbb.rf.t_duration_s / sbb.rf.signal.shape[0] * np.sum(np.abs(sbb.rf.signal)) * 2 * np.pi
+        # flip = sbb.rf.t_duration_s / sbb.rf.signal.shape[0] * np.sum(np.abs(sbb.rf.signal)) * 2 * np.pi
+        flip = sbb.rf.t_duration_s / sbb.rf.signal.shape[0] * np.sum(sbb.rf.signal) * 2 * np.pi
         # set rf to produce actually wanted fa.
         # additionally we can multiply with slice adaptive fa scaling - we need true slice position here!
         sbb.rf.signal *= fa_rad / flip * self.rf_slice_adaptive_scaling[self.trueSliceNum[slice_idx]]
@@ -1210,6 +1219,7 @@ class Sequence2D(abc.ABC):
                 angle = np.angle(
                     rf.signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
                 )
+                angle[angle < -np.pi + 1e-7] = np.pi
                 signal = np.abs(rf.signal)
                 if sim_grad_moments:
                     if rf.use == "excitation":
