@@ -323,18 +323,21 @@ class GRAD(Event):
             system=system
         )
         grad_instance.channel = channel
-        grad_instance.amplitude = np.array([
-            0.0, grad_simple_ns.amplitude,
-            grad_simple_ns.amplitude, 0.0
-        ])
-        grad_instance.area = grad_simple_ns.area
-        grad_instance.flat_area = grad_simple_ns.flat_area
-
-        grad_instance.t_array_s = np.array([
+        amps = [0.0, grad_simple_ns.amplitude, grad_simple_ns.amplitude, 0.0]
+        times = [
             0.0, grad_simple_ns.rise_time,
             grad_simple_ns.rise_time + grad_simple_ns.flat_time,
             grad_simple_ns.rise_time + grad_simple_ns.flat_time + grad_simple_ns.fall_time
-        ])
+        ]
+        if grad_simple_ns.flat_time < system.grad_raster_time:
+            amps.pop(2)
+            times.pop(2)
+
+        grad_instance.amplitude = np.array(amps)
+        grad_instance.area = grad_simple_ns.area
+        grad_instance.flat_area = grad_simple_ns.flat_area
+
+        grad_instance.t_array_s = np.array(times)
         grad_instance.t_delay_s = delay_s
         grad_instance.t_fall_time_s = grad_simple_ns.rise_time
         grad_instance.t_rise_time_s = grad_simple_ns.rise_time
