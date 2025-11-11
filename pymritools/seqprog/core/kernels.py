@@ -10,21 +10,10 @@ import plotly.graph_objects as go
 
 from pypulseq import Opts
 from . import events
+from .utils import set_on_grad_raster_time, set_on_rf_raster_time, check_raster
 from pymritools.config.seqprog import PulseqParameters2D
 
 log_module = logging.getLogger(__name__)
-
-
-def set_on_grad_raster_time(system: Opts, time: float):
-    return np.ceil(time / system.grad_raster_time) * system.grad_raster_time
-
-def set_on_rf_raster_time(system: Opts, time: float):
-    return np.ceil(time / system.rf_raster_time) * system.rf_raster_time
-
-def check_raster(value, raster):
-    round_val = value // raster
-    rounded_val = round_val * raster
-    return np.allclose(rounded_val, value)
 
 class Kernel:
     """

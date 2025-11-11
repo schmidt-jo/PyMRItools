@@ -12,6 +12,7 @@ import numpy as np
 import logging
 import copy
 
+from .utils import check_raster
 log_module = logging.getLogger(__name__)
 
 
@@ -271,7 +272,7 @@ class GRAD(Event):
         if double:
             # helps with maintaining raster when calculating esp
             raster_time *= 2.0
-        if np.abs(value) % raster_time < 1e-9:
+        if check_raster(value, raster_time):
             rastered_value = value
         else:
             rastered_value = np.ceil(value / raster_time) * raster_time
