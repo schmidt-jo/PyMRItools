@@ -69,14 +69,18 @@ class MESE(Sequence2D):
         t_ref_1_adc = self.block_refocus_1.get_duration() - self.block_refocus_1.rf.t_delay_s - \
                       self.block_refocus_1.rf.t_duration_s / 2 + self.block_acquisition.get_duration() / 2
         t_ref_2_adc = self.block_acquisition.get_duration() / 2 + self.block_refocus.get_duration() / 2
+        
+        t_exci_ref = np.round(t_exci_ref * 1e12) / 1e12
+        t_ref_1_adc = np.round(t_ref_1_adc * 1e12) / 1e12
+        t_ref_2_adc = np.round(t_ref_2_adc * 1e12) / 1e12
 
         self.params.esp = 2 * np.max([t_exci_ref, t_ref_1_adc, t_ref_2_adc]) * 1e3
         self.esp = self.params.esp
         log_module.info(f"\t\t-found minimum ESP: {self.params.esp:.2f} ms")
 
-        if np.abs(t_ref_1_adc - t_ref_2_adc) > 1e-6:
+        if np.abs(t_ref_1_adc - t_ref_2_adc) > 1e-9:
             log_module.error(f"refocus to adc timing different from adc to refocus. Systematic error in seq. creation")
-        t_half_esp = self.params.esp * 1e-3 / 2
+        t_half_esp = np.round(self.params.esp * 1e-3 / 2 * 1e12) / 1e12
         # add delays
         if t_exci_ref < t_half_esp:
             self.delay_exci_ref1 = DELAY.make_delay(t_half_esp - t_exci_ref, system=self.system)

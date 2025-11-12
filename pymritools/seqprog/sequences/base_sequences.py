@@ -17,6 +17,8 @@ from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqPar
 from pymritools.config import setup_program_logging, setup_parser
 from pypulseq import Opts, Sequence
 
+from pymritools.seqprog.core.utils import check_raster
+
 log_module = logging.getLogger(__name__)
 
 
@@ -113,7 +115,7 @@ class Sequence2D(abc.ABC):
 
     def __init__(self, config: PulseqConfig, specs: PulseqSystemSpecs, params: PulseqParameters2D,
                  create_excitation_kernel: bool = True, create_refocus_1_kernel: bool = True,
-                 create_refocus_kernel: bool = True, relax_read_grad_stress: bool = False, ):
+                 create_refocus_kernel: bool = True, relax_read_grad_stress: bool = False, mese_sequence: bool = True):
 
         self.config: PulseqConfig = config
         self.visualize: bool = config.visualize
@@ -149,12 +151,33 @@ class Sequence2D(abc.ABC):
         # easy implementation is to just lower the max slew rate, this way we affect all gradients
         self.system: Opts = self._set_system_specs()
 
+        # for mese sequences we get into trouble if any delays set between excitation and
+        # first refocus or between refocus and adc are not on the grad raster ->
+        # automatically will be prolonged and lead to sequence timing errors.
+        # easy way to prevent this is to just manually double the grad raster in the system and
+        # make sure the RF lengths are divisible by this new value,
+        # since we dont want this to be shipped to the global pypulseq object we set this first
         # set pypulseq sequence as var -> thats actually whats been build throughout the code and
         # later shipped to a .seq file
         self.sequence: Sequence = Sequence(system=self.system)
         # we add a second sequence object, we can use this to do some slice profile checks
         self.sequence_calibration = Sequence(system=self.system)
         self.use_calibration_seq: bool = False
+
+        if mese_sequence:
+            self.system.grad_raster_time *= 2
+            exc_dur = self.params.excitation_duration * 1e-6
+            if not check_raster(exc_dur, self.system.grad_raster_time):
+                dur = int(
+                    np.ceil(self.params.excitation_duration / self.system.grad_raster_time)
+                ) * self.system.grad_raster_time
+                self.params.excitation_duration = int(1e6 * dur)
+            ref_dur = self.params.refocusing_duration * 1e-6
+            if not check_raster(ref_dur, self.system.grad_raster_time):
+                dur = int(
+                    np.ceil(self.params.refocusing_duration / self.system.grad_raster_time)
+                ) * self.system.grad_raster_time
+                self.params.refocusing_duration = int(1e6 * dur)
 
         # set sampling object as var -> allows to register k-space trajectories and sampling pattern
         self.sampling: Sampling = Sampling()
