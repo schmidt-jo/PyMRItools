@@ -135,7 +135,14 @@ class Sequence2D(abc.ABC):
 
         # set pulseq parameter configuration
         self.params: PulseqParameters2D = params
-
+        log_module.info(
+            f"\n\t\tBandwidth: {self.params.bandwidth:.3f} Hz/px;\n"
+            f"\t\tReadout time: {self.params.acquisition_time * 1e3:.1f} ms;\n"
+            f"\t\tDwellTime: {self.params.readout_dwell_us:.1f} us;\n"
+            f"\t\tNumber of Freq Encodes: {self.params.resolution_n_read};¸\n"
+            f"\t\tOversampling: {self.params.oversampling}"
+        )
+        # make refocusing pulses list of length etl
         # get system specs
         self.specs: PulseqSystemSpecs = specs
         # ToDo: introduce a relax factor to relax gradient stress and pns in parameters
@@ -591,7 +598,7 @@ class Sequence2D(abc.ABC):
         self._apply_slice_offset(sbb=sbb, idx_slice=slice_idx)
 
     def _apply_slice_offset(self, sbb: Kernel, idx_slice: int):
-        grad_slice_amplitude_hz = sbb.grad_slice.amplitude[sbb.grad_slice.t_array_s >= sbb.rf.t_delay_s][0]
+        grad_slice_amplitude_hz = -sbb.grad_slice.amplitude[sbb.grad_slice.t_array_s >= sbb.rf.t_delay_s][0]
         sbb.rf.freq_offset_hz = grad_slice_amplitude_hz * self.z[idx_slice]
         # we are setting the phase of a pulse here into its phase offset var.
         # To merge both: given phase parameter and any complex signal array data

@@ -139,8 +139,8 @@ class Parameters2D(Serializable):
     acq_phase_dir: str = field(
         default="RL", choices=["RL", "PA"], help="Set phase encode direction."
     )
-    bandwidth: float = field(
-        default=302.3705853119224, help="Readout bandwidth [Hz/px]."
+    readout_dwell_us: int = field(
+        default=4, help="Readout dwell time [us]."
     )
     oversampling: int = field(
         default=2, help="Readout oversampling factor."
@@ -208,12 +208,23 @@ class Parameters2D(Serializable):
         )
 
     @property
-    def acquisition_time(self) -> float:
-        return 1 / self.bandwidth
+    def dwell(self) -> float:
+        return self.readout_dwell_us * 1e-6
 
     @property
-    def dwell(self) -> float:
-        return self.acquisition_time / self.resolution_n_read / self.oversampling
+    def acquisition_time(self) -> float:
+        return self.resolution_n_read * self.oversampling * self.dwell
+
+    @property
+    def bandwidth(self) -> float:
+        return 1 / self.acquisition_time
+
+    @property
+    def read_grad_fid_spoil_samples(self) ->int:
+        # we want to use some FID spoiling of readout gradients,
+        # i.e. some additional gradient area before the actual readout, we take this in multiples of readout samples
+        # (i.e. multiplied by oversampling and dwell)
+        return 56
 
     @property
     def excitation_rf_rad_fa(self) -> float:
@@ -261,18 +272,30 @@ class Parameters2D(Serializable):
         # adc raster here hardcoded
         #       note that ADC samples must be on ADC raster time, but the ADC start time must be on RF raster time!
         #       see https://github.com/pulseq/pulseq/blob/master/doc%2Fpulseq_shapes_and_times.pdf for details,
-        #       thus set raster time
-        adc_raster = 1e-6
-        kf = 1 / (4 * self.bandwidth * adc_raster * self.resolution_n_read * self.oversampling)
-        k = int(np.round(kf)) + 1e-12
-        if np.abs(k - kf) > 1e-7:
-            bw = self.bandwidth
-            self.bandwidth = 1 / (4 * k * self.resolution_n_read * self.oversampling * adc_raster)
-            log_module.info(f"setting dwell time on adc raster -> small bw adoptions (set bw: {bw:.3f}; new bw: {self.bandwidth:.3f})")
-        log_module.debug(f"Bandwidth: {self.bandwidth:.3f} Hz/px; "
-                         f"Readout time: {self.acquisition_time * 1e3:.1f} ms; "
-                         f"DwellTime: {self.dwell * 1e6:.1f} us; "
-                         f"Number of Freq Encodes: {self.resolution_n_read}")
+        #       thus set raster time to adc raster, assume us
+        # since we shift the adc start about half a sample, according to pulseq info the samples are taken at dwell mitpoint
+        # this together makes an even dwell time preferable
+        if self.readout_dwell_us % 2 > 0:
+            # take next higher
+            self.readout_dwell_us += 1
+            log_module.warning(
+                f"Readout sampling is done at half the dwell time. Thus ADCs are shifted about half Dwell time. "
+                f"According to Pulseq, ADCs should start at RF raster time, hence adopting dwell time (from {self.readout_dwell_us -1} to {self.readout_dwell_us} us\n"
+                f"If your RF raster time is < 1us you can and need to change this behaviour in code.\n"
+                f"Details: https://github.com/pulseq/pulseq/blob/master/doc%2Fpulseq_shapes_and_times.pdf"
+            )
+        # kf = 1 / (4 * self.bandwidth * adc_raster * self.resolution_n_read * self.oversampling)
+        # k = int(np.round(kf)) + 1e-12
+        # if np.abs(k - kf) > 1e-7:
+        #     bw = self.bandwidth
+        #     self.bandwidth = 1 / (4 * k * self.resolution_n_read * self.oversampling * adc_raster)
+        #     log_module.info(f"setting dwell time on adc raster -> small bw adoptions (set bw: {bw:.3f}; new bw: {self.bandwidth:.3f})")
+        log_module.debug(
+            f"\n\t\tBandwidth: {self.bandwidth:.3f} Hz/px;\n"
+            f"\t\tReadout time: {self.acquisition_time * 1e3:.1f} ms;\n"
+            f"\t\tDwellTime: {self.readout_dwell_us:.1f} us;\n"
+            f"\t\tNumber of Freq Encodes: {self.resolution_n_read};¸\n"
+            f"\t\tOversampling: {self.oversampling}")
         # make refocusing pulses list of length etl
         if not isinstance(self.refocusing_rf_fa, list):
             self.refocusing_rf_fa = [self.refocusing_rf_fa]

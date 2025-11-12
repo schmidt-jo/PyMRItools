@@ -78,7 +78,7 @@ class Kernel:
 
     def list_events(self):
         event_list = [self.rf, self.grad_read, self.grad_slice, self.grad_phase, self.adc, self.delay]
-        return [ev for ev in event_list if ev.get_duration() > 5e-6]
+        return [ev for ev in event_list if ev.get_duration() > 1e-6]
 
     def get_duration(self):
         return np.max([t.get_duration() for t in self.list_events()])
@@ -190,12 +190,15 @@ class Kernel:
                                 read_gradient_to_prephase: float = None):
         if read_gradient_to_prephase is None:
             # calculate read gradient in order to use correct area (corrected for ramps)
+            t_adc_grad_flat = int(
+                (params.resolution_n_read + params.read_grad_fid_spoil_samples) * params.oversampling
+            ) * params.dwell
             grad_read = events.GRAD.make_trapezoid(
                 channel=params.read_dir, system=system,
-                flat_area=params.delta_k_read * params.resolution_n_read,
-                flat_time=params.acquisition_time
+                flat_area=params.delta_k_read * (params.resolution_n_read + params.read_grad_fid_spoil_samples),
+                flat_time=t_adc_grad_flat
             )
-            read_gradient_to_prephase = 1 / 2 * grad_read.area
+            read_gradient_to_prephase = grad_read.area / 2
         grad_read_pre = events.GRAD.make_trapezoid(
             channel=params.read_dir, system=system,
             area=-read_gradient_to_prephase
@@ -362,12 +365,16 @@ class Kernel:
         # If we make sure the central sample is in the middle of the gradient,
         # this makes pre-phasing etc. gradient calculation straight forward later on.
 
-        # calculate extended read gradient flat time
-        t_adc_extended = int((params.resolution_n_read + 2) * params.oversampling) * adc.t_dwell_s
+        # We want to build in some readout grad spoiling (~500 us).
+        # We can do so by just extending the readout gradient and start sampling later.
+        # The prephasing readout is automatically adjusted since its calculated from the gradient area.
+        # we incorporate this by just using 100*dwell (might be 300 - 700 us depending on the used bandwidth / dwell)
+        # assuming oversampling of 2
+        t_adc_extended = int((params.resolution_n_read + params.read_grad_fid_spoil_samples) * params.oversampling) * adc.t_dwell_s
         # to get the same gradient amplitude during ADC readout we adjust the flat area to incorporate
-        # this additional sample / extended flat time
+        # this additional samples / extended flat time
         flat_area = (
-            params.delta_k_read * (params.resolution_n_read + 2)
+            params.delta_k_read * (params.resolution_n_read + params.read_grad_fid_spoil_samples)
         ) * np.power(-1, int(invert_grad_read_dir))
         # calculate amplitude
         amp = flat_area / t_adc_extended
@@ -411,9 +418,9 @@ class Kernel:
         # note that ADC samples must be on ADC raster time, but the ADC start time must be on RF raster time!
         # see https://github.com/pulseq/pulseq/blob/master/doc%2Fpulseq_shapes_and_times.pdf for details
         delay = t_mid_grad - t_adc_mid - t_adc_half_dwell
-        if not check_raster(delay, system.adc_raster_time):
+        if not check_raster(delay, system.rf_raster_time):
             # adc delay not fitting on adc raster
-            warn = "adc delay set not multiple of adc raster. might lead to small timing deviations in actual .seq file"
+            warn = "adc delay set not multiple of rf raster. might lead to small timing deviations in actual .seq file"
             log_module.warning(warn)
         factor = 1000
         delay = int(np.round(delay / system.adc_raster_time * factor)) * system.adc_raster_time
