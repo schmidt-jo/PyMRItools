@@ -234,8 +234,14 @@ def load_pulseq_rd(
         sampled_lines = sampling_config.df_sampling_pattern.filter(pl.col("acquisition") == acq)
         # get scan numbers
         sampled_scan_numbers = sampled_lines["scan_number"].to_list()
-        # get corresponding data
-        data = np.array([data_mdbs[k].data for k in sampled_scan_numbers])
+        if acq == "noise_scan":
+            data = np.array([data_mdbs[k].data for k in sampled_scan_numbers])
+        else:
+            # get corresponding data
+            data = np.zeros((len(sampled_scan_numbers), num_coils, n_read * os_factor), dtype=complex)
+            for i, k in tqdm.tqdm(enumerate(sampled_scan_numbers), desc="extract data"):
+                if k < len(data_mdbs):
+                    data[i] = data_mdbs[k].data
         if acq == "noise_scan":
             # save separately, no further sorting necessary
             noise_scans = data
