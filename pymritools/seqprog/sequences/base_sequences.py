@@ -165,6 +165,7 @@ class Sequence2D(abc.ABC):
         self.use_calibration_seq: bool = False
 
         if mese_sequence:
+            log_module.info(f"multi-echo sequence flag set - ensuring grad raster delays!")
             self.system.grad_raster_time *= 2
             exc_dur = self.params.excitation_duration * 1e-6
             if not check_raster(exc_dur, self.system.grad_raster_time):
