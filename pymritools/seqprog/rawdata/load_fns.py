@@ -327,7 +327,7 @@ def load_pulseq_rd(
         k_space = k_space.cpu().numpy()
 
     # correct gradient directions - at the moment we have reversed z dir
-    k_space = np.flip(k_space, axis=2)
+    # k_space = np.flip(k_space, axis=2)
 
     log_module.info(f"Extract geometry & affine information")
     # this is very dependent on the geom object from pulseq, can change with different pulseg.dll on scanner,
