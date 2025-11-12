@@ -718,28 +718,36 @@ class Kernel:
 
     @classmethod
     def spoil_all_grads(cls, params: PulseqParameters2D, system: Opts):
+        # calculate readout gradient
+        t_adc_grad_flat = int(
+            (params.resolution_n_read + params.read_grad_fid_spoil_samples) * params.oversampling
+        ) * params.dwell
         grad_read = events.GRAD.make_trapezoid(
             channel=params.read_dir, system=system,
-            flat_area=params.delta_k_read * params.resolution_n_read,
-            flat_time=params.acquisition_time
+            flat_area=params.delta_k_read * (params.resolution_n_read + params.read_grad_fid_spoil_samples),
+            flat_time=t_adc_grad_flat,
         )
+        # set spoiling gradient area
         grad_read_spoil = events.GRAD.make_trapezoid(
             channel=params.read_dir,
             area=-params.read_grad_spoiling_factor * grad_read.area,
             system=system
         )
+        # set phase spoil grad
         grad_phase = events.GRAD.make_trapezoid(
             channel=params.phase_dir,
             area=params.resolution_n_phase / 2 * params.delta_k_phase,
             system=system
         )
+        # set slice spoil grad
         grad_slice = events.GRAD.make_trapezoid(
             channel='z',
             system=system,
             area=params.grad_moment_slice_spoiling_end
         )
+        # find longest duration, insert some stress relax factor
         duration = grad_phase.set_on_raster(
-            np.max([grad_slice.get_duration(), grad_phase.get_duration(), grad_read_spoil.get_duration()])
+            2 * np.max([grad_slice.get_duration(), grad_phase.get_duration(), grad_read_spoil.get_duration()])
         )
         # set longest for all
         grad_read_spoil = events.GRAD.make_trapezoid(
