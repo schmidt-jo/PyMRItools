@@ -164,8 +164,7 @@ class Parameters2D(Serializable):
     # define a bunch of properties (we dont want to serialize those)
     @property
     def resolution_n_read(self) -> int:
-        # resolution, number of fe and pe. we want this to be a multiple of 2 for FFT reasoning (have 0 line)
-        return int(np.ceil(self.resolution_base / 2) * 2)  # number of freq encodes
+        return self.resolution_base  # number of freq encodes
 
     @property
     def resolution_n_phase(self) -> int:
@@ -224,7 +223,7 @@ class Parameters2D(Serializable):
         # we want to use some FID spoiling of readout gradients,
         # i.e. some additional gradient area before the actual readout, we take this in multiples of readout samples
         # (i.e. multiplied by oversampling and dwell)
-        return 56
+        return 48
 
     @property
     def excitation_rf_rad_fa(self) -> float:
@@ -250,6 +249,15 @@ class Parameters2D(Serializable):
         log_module.info(s)
 
     def __post_init__(self):
+        # resolution, number of fe and pe. we want this to be a multiple of 2 for FFT reasoning (have 0 line)
+        # on Siemens the number of ADC samples need to be divisible by 4, as of Pulseq docs
+        resolution_base = int(np.ceil(self.resolution_base / 4) * 4)
+        if np.abs(resolution_base - self.resolution_base) > 1e-6:
+            log_module.info(
+                f"updating base resolution to {resolution_base} (from {self.resolution_base}) "
+                f"due to some FFT and Siemens constraints."
+            )
+            self.resolution_base = resolution_base
         # if we need to up one freq encode point, we need to update the fov to keep desired voxel resolution
         if np.abs(self.resolution_n_read - self.resolution_base) > 1e-6:
             log_module.info(
