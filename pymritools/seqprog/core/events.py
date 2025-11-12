@@ -516,9 +516,8 @@ class GRAD(Event):
         amps = np.array(amps)
         times = np.array(times)
 
-        times = np.array(times)
         grad_instance.channel = 'z'
-        grad_instance.amplitude = np.array(amps)
+        grad_instance.amplitude = amps
         grad_instance.area = np.array(areas)
         grad_instance.flat_area = np.zeros(3)
 
