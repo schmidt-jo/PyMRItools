@@ -39,12 +39,14 @@ class MESE(Sequence2D):
     # __ pypsi __
     # sampling + k traj
     def _set_k_trajectories(self):
-        # read direction is always fully oversampled, no trajectories to register
+        # read direction is always fully (over)sampled, no special trajectories to register
+        # prephasing is done in refocusing blocks
         grad_pre_area = float(np.sum(self.block_refocus.grad_read.area) / 2)
         # calculate trajectory for se readout
         self._register_k_trajectory(
             self.block_acquisition.get_k_space_trajectory(
-                pre_read_area=grad_pre_area, fs_grad_area=self.params.resolution_n_read * self.params.delta_k_read
+                pre_read_area=grad_pre_area,
+                fs_grad_area=self.params.resolution_n_read * self.params.delta_k_read
             ),
             identifier=self.id_acq_se
         )
@@ -83,7 +85,8 @@ class MESE(Sequence2D):
         t_half_esp = np.round(self.params.esp * 1e-3 / 2 * 1e12) / 1e12
         # add delays
         if t_exci_ref < t_half_esp:
-            self.delay_exci_ref1 = DELAY.make_delay(t_half_esp - t_exci_ref, system=self.system)
+            delay = t_half_esp - t_exci_ref
+            self.delay_exci_ref1 = DELAY.make_delay(delay, system=self.system)
             if not self.delay_exci_ref1.check_on_block_raster():
                 err = f"exci ref delay not on block raster"
                 log_module.error(err)
@@ -117,7 +120,7 @@ class MESE(Sequence2D):
             aq_block.adc = ADC()
         else:
             aq_block = self.block_acquisition
-        for idx_slice in np.arange(0, self.params.resolution_slice_num):
+        for idx_slice in np.arange(0, self.params.resolution_slice_num).astype(int):
             self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice, excitation=True)
             # looping through slices per phase encode
             self._set_phase_grad(phase_idx=idx_pe_n, echo_idx=0)
