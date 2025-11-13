@@ -166,20 +166,15 @@ class Sequence2D(abc.ABC):
 
         if mese_sequence:
             log_module.info(f"multi-echo sequence flag set - ensuring grad raster delays!")
-            self.system.grad_raster_time *= 2
+            adopt_raster_time = 2  * self.system.grad_raster_time
             exc_dur = self.params.excitation_duration * 1e-6
-            if not check_raster(exc_dur, self.system.grad_raster_time):
-                dur = int(
-                    np.ceil(self.params.excitation_duration / self.system.grad_raster_time)
-                ) * self.system.grad_raster_time
+            if not check_raster(exc_dur, adopt_raster_time):
+                dur = int(np.ceil(exc_dur / adopt_raster_time)) * adopt_raster_time
                 self.params.excitation_duration = int(1e6 * dur)
             ref_dur = self.params.refocusing_duration * 1e-6
-            if not check_raster(ref_dur, self.system.grad_raster_time):
-                dur = int(
-                    np.ceil(self.params.refocusing_duration / self.system.grad_raster_time)
-                ) * self.system.grad_raster_time
+            if not check_raster(ref_dur, adopt_raster_time):
+                dur = int(np.ceil(ref_dur / adopt_raster_time)) * adopt_raster_time
                 self.params.refocusing_duration = int(1e6 * dur)
-
         # set sampling object as var -> allows to register k-space trajectories and sampling pattern
         self.sampling: Sampling = Sampling()
 
