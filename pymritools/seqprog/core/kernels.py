@@ -361,23 +361,27 @@ class Kernel:
         # i.e. the sampling point is hit in the middle of the dwell duration
 
         # to accommodate the above sample shifting pragmatically, we increase the readout gradient duration a little,
-        # i.e. as if 1 additional sample needs to be taken.
         # If we make sure the central sample is in the middle of the gradient,
         # this makes pre-phasing etc. gradient calculation straight forward later on.
-
+        # first we just calculate the needed amplitude to cover delta k for the oversampled readout
+        area = params.delta_k_read * params.resolution_n_read * np.power(-1, int(invert_grad_read_dir))
+        t_adc = params.resolution_n_read * params.oversampling * adc.t_dwell_s
+        amp = area / t_adc
         # We want to build in some readout grad spoiling (~500 us).
         # We can do so by just extending the readout gradient and start sampling later.
         # The prephasing readout is automatically adjusted since its calculated from the gradient area.
-        # we incorporate this by just using 100*dwell (might be 300 - 700 us depending on the used bandwidth / dwell)
-        # assuming oversampling of 2
+        # we incorporate this by just using nd*dwell (might be 300 - 700 us depending on the used bandwidth / dwell)
         t_adc_extended = int((params.resolution_n_read + params.read_grad_fid_spoil_samples) * params.oversampling) * adc.t_dwell_s
+        # we set this on the gradient raster (doubled to enable a delay set on the grad raster upon esp calculation i.e. halfing of readout gradient time)
+        t_adc_extended = set_on_grad_raster_time(system=system, time=t_adc_extended, double=True)
+
         # to get the same gradient amplitude during ADC readout we adjust the flat area to incorporate
         # this additional samples / extended flat time
-        flat_area = (
-            params.delta_k_read * (params.resolution_n_read + params.read_grad_fid_spoil_samples)
-        ) * np.power(-1, int(invert_grad_read_dir))
+        # flat_area = (
+        #     params.delta_k_read * (params.resolution_n_read + params.read_grad_fid_spoil_samples)
+        # ) * np.power(-1, int(invert_grad_read_dir))
         # calculate amplitude
-        amp = flat_area / t_adc_extended
+        # amp = flat_area / t_adc_extended
         # use this to calculate the ramp time and put it on the gradient raster
         ramp_time = np.abs(amp / system.max_slew)
         # prolong the ramp time to mitigate some eddy current effects (especially for bipolar readouts)
@@ -389,16 +393,21 @@ class Kernel:
         grad_read = events.GRAD.make_trapezoid(
             channel=params.read_dir,
             ramp_time=ramp_time,
-            flat_area=flat_area,
+            flat_area=amp * t_adc_extended,
             flat_time=t_adc_extended,
             system=system
         )
-
+        # sanity check
+        if not np.allclose(grad_read.amplitude[1], amp):
+            msg = f"Trapezoidal read gradient creation amplitude does not match calculated delta-k area per sample!"
+            log_module.warning(msg)
         # want to set adc symmetrically into grad read, and we want the middle adc sample to hit k space center.
         t_mid_grad = grad_read.t_mid
 
         # calculate number of points before midpoint is hit (dependent on readout polarity)
-        n_adc_mid = int((params.resolution_n_read / 2 - int(invert_grad_read_dir) / 2) * params.oversampling)
+        # we ensured ADC num samples is multiple of 4, regardless of oversampling we always have an even number of
+        # adc samples, but due to FFT we have the 0 frequency to be considered the first positive.
+        n_adc_mid = int(adc.num_samples / 2 - int(invert_grad_read_dir) / 2)
         # calculate the time to the midpoint
         t_adc_mid = n_adc_mid * adc.t_dwell_s
         if not check_raster(t_adc_mid, system.adc_raster_time):
@@ -418,6 +427,7 @@ class Kernel:
         # note that ADC samples must be on ADC raster time, but the ADC start time must be on RF raster time!
         # see https://github.com/pulseq/pulseq/blob/master/doc%2Fpulseq_shapes_and_times.pdf for details
         delay = t_mid_grad - t_adc_mid - t_adc_half_dwell
+        # delay = t_mid_grad - t_adc_mid
         if not check_raster(delay, system.rf_raster_time):
             # adc delay not fitting on adc raster
             warn = "adc delay set not multiple of rf raster. might lead to small timing deviations in actual .seq file"
