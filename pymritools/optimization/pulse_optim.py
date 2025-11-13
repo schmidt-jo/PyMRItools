@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def optimise_excitation_pulse(settings: PulseSimulationSettings):
-    path = plib.Path(get_test_result_output_dir("pulse_optim_sinc_exc", mode=ResultMode.OPTIMIZATION)).absolute()
+    path = plib.Path(get_test_result_output_dir("pulse_optim_slr_exc", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
     settings.pulse_name = "excitation"
@@ -127,7 +127,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="excitation",
-        duration_in_us=2000,
+        duration_in_us=2300,
         time_bandwidth=2.5,
         num_samples=pulse_y_init.shape[0],
         signal=pulse_y.detach().cpu().numpy()
@@ -139,7 +139,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
 
 
 def optimise_refocusing_pulse(settings: PulseSimulationSettings):
-    path = plib.Path(get_test_result_output_dir("pulse_optim_sinc_ref", mode=ResultMode.OPTIMIZATION)).absolute()
+    path = plib.Path(get_test_result_output_dir("pulse_optim_slr_ref", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
     settings.pulse_name = "refocusing"
@@ -201,7 +201,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         )
         # delay
         relax_matrix = functions.matrix_propagation_relaxation_multidim(
-            dt_s=0.00182, sim_data=pulse_sim.data
+            dt_s=0.0008, sim_data=pulse_sim.data
         )
         data = functions.propagate_matrix_mag_vector(relax_matrix, sim_data=data)
 
@@ -264,7 +264,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="refocusing",
-        duration_in_us=2500,
+        duration_in_us=2800,
         time_bandwidth=2.5,
         num_samples=pulse_x_init.shape[0],
         signal=pulse_x.detach().cpu().numpy()
@@ -606,13 +606,17 @@ if __name__ == '__main__':
     settings = PulseSimulationSettings.from_cli(args=args.settings)
     # set some additionals
     settings.visualize = False
-    settings.kernel_file = plib.Path("C:\\Daten_Jo\\Daten\\03_work\\04_code\\PyMRItools\\pymritools\\optimization\\mese_slr_bpr5m_kernels.pkl").as_posix()
+    settings.pulse_duration = 2300.0
+    settings.kernel_file = plib.Path(
+        "/data/pt_np-jschmidt/code/PyMRItools/optimization/"
+        "mese_relax-rf_cfa_rf-slr_rgs1_a3p5_sp3000_tr7_sl35_g65_kernels.pkl"
+    ).as_posix()
     settings.display()
 
     try:
+        optimise_excitation_pulse(settings)
+        optimise_refocusing_pulse(settings)
         plot_results(settings=settings)
-        # optimise_excitation_pulse(settings)
-        # optimise_refocusing_pulse(settings)
     except Exception as e:
         parser.print_usage()
         logger.exception(e)
