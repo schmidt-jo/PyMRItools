@@ -2,8 +2,11 @@ import numpy as np
 from pypulseq import Opts
 
 
-def set_on_grad_raster_time(system: Opts, time: float):
-    return np.ceil(time / system.grad_raster_time) * system.grad_raster_time
+def set_on_grad_raster_time(system: Opts, time: float, double: bool = False):
+    grad_raster = system.grad_raster_time
+    if double:
+        grad_raster *= 2
+    return np.ceil(time / grad_raster) * grad_raster
 
 def set_on_rf_raster_time(system: Opts, time: float):
     return np.ceil(time / system.rf_raster_time) * system.rf_raster_time
