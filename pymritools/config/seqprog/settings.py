@@ -301,7 +301,7 @@ class Parameters2D(Serializable):
         log_module.debug(
             f"\n\t\tBandwidth: {self.bandwidth:.3f} Hz/px;\n"
             f"\t\tReadout time: {self.acquisition_time * 1e3:.1f} ms;\n"
-            f"\t\tDwellTime: {self.readout_dwell_us:.1f} us;\n"
+            f"\t\tDwellTime (oversampled): {self.readout_dwell_us:.1f} us;\n"
             f"\t\tNumber of Freq Encodes: {self.resolution_n_read};¸\n"
             f"\t\tOversampling: {self.oversampling}")
         # make refocusing pulses list of length etl
