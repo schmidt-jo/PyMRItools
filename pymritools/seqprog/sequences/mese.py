@@ -233,18 +233,6 @@ class MESE(Sequence2D):
             re_spoil_moment=-self.params.grad_moment_slice_spoiling - re_area,
             t_minimum_re_grad=min_re_grad_time
         )
-
-        import pathlib as plib
-        import plotly.graph_objects as go
-        path = plib.Path("/data/pt_np-jschmidt/code/PyMRItools/scratches/calibration_data_mese").absolute()
-        fig = go.Figure()
-        for i, g in enumerate([self.block_refocus_1.grad_slice, grad_slice]):
-            fig.add_trace(
-                go.Scatter(
-                    x=g.t_array_s, y=g.amplitude,
-                    name=["orig.", "slice-sampling"][i])
-            )
-        fig.write_html(path.joinpath("pulse_grads.html"))
         
         # adopt slice gradients
         self.block_refocus_1.grad_slice = grad_slice
