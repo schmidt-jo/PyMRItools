@@ -225,13 +225,14 @@ class RF(Event):
     def _set_central_time(self):
         """
         calculate the central point of rf shape - we take this to be the midpoint of the duration,
-        as for asymetric, eg. slr pulses, the midpoint would not be considered the peak
+        as for asymetric, eg. slr pulses, the midpoint would not be considered the peak, no delay!
         """
         # # Detect the excitation peak; if i is a plateau take its center
         # rf_max = np.max(np.abs(self.signal))
         # i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
         # self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
-        self.t_mid = self.t_delay_s + self.t_duration_s / 2
+        # self.t_mid = self.t_delay_s + self.t_duration_s / 2
+        self.t_mid = self.t_duration_s / 2 + np.diff(self.t_array_s)[self.t_array_s.shape[0] // 2] / 2
 
     def plot(self):
         fig = plt.figure()
@@ -429,12 +430,21 @@ class GRAD(Event):
                 times.append(times[-1] + t_flat)
             times.append(times[-1] + t_rd)
             amps.append(amplitude)
+            # sanity check
+            set_area = np.trapezoid(x=times, y=amps)
+            if not np.allclose(set_area, pre_moment):
+                warning = (
+                    f"Pre-gradient amplitudes were set and moment calculated but does not match the desired value! "
+                    f"Check slice selective gradient creation process!")
+                log_module.warning(warning)
         else:
             # ramp up only, no pre moment, ensure at least rf dead time
             duration_pre_grad = max(
-                grad_instance.set_on_raster(np.abs(amplitude / system.max_slew)),
-                grad_instance.set_on_raster(system.rf_dead_time)
+                np.abs(amplitude / system.max_slew),
+                system.rf_dead_time
             )
+            # relax a bit to create slightly bigger ramp area
+            duration_pre_grad = grad_instance.set_on_raster(duration_pre_grad * 1.4)
             times.append(times[-1] + duration_pre_grad)
             amps.append(amplitude)
             areas.append(np.trapezoid(x=times, y=amps))
@@ -497,6 +507,7 @@ class GRAD(Event):
             # )
 
         # (5) build gradient shape for re/spoil grad
+        t_start = times[-1]
         times.append(times[-1] + t_rd)
         amps.append(re_grad_amplitude)
         if t_flat > 1e-7:
@@ -504,6 +515,17 @@ class GRAD(Event):
             times.append(times[-1] + t_flat)
         times.append(times[-1] + t_ru)
         amps.append(0.0)
+
+        amps = np.array(amps)
+        times = np.array(times)
+
+        # sanity check
+        set_area = np.trapezoid(x=times[times>=t_start], y=amps[times>=t_start])
+        if not np.allclose(set_area, re_spoil_moment):
+            warning = (
+                f"Re-gradient amplitudes were set and moment calculated but does not match the desired value! "
+                f"Check slice selective gradient creation process!")
+            log_module.warning(warning)
         # else:
         #     # ramp down only, no re moment
         #     duration_re_grad = grad_instance.set_on_raster(np.abs(amplitude / system.max_slew))
@@ -513,8 +535,6 @@ class GRAD(Event):
         # end of re gradient
         re_end_time = times[-1]
         duration_re_grad = float(re_end_time - re_start_time)
-        amps = np.array(amps)
-        times = np.array(times)
 
         grad_instance.channel = 'z'
         grad_instance.amplitude = amps
