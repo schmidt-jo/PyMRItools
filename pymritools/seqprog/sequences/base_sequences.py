@@ -621,7 +621,9 @@ class Sequence2D(abc.ABC):
         sbb.rf.freq_offset_hz = grad_slice_amplitude_hz * self.z[idx_slice]
         # we are setting the phase of a pulse here into its phase offset var.
         # To merge both: given phase parameter and any complex signal array data
-        sbb.rf.phase_offset_rad = sbb.rf.phase_rad - 2 * np.pi * sbb.rf.freq_offset_hz * sbb.rf.t_mid
+        phase_shift_time = sbb.rf.t_mid
+        phase_shift = 2 * np.pi * sbb.rf.freq_offset_hz * phase_shift_time
+        sbb.rf.phase_offset_rad = sbb.rf.phase_rad - phase_shift
 
     def _set_phase_grad(self, echo_idx: int, phase_idx: int,
                         no_ref_1: bool = False, excitation: bool = False,
@@ -645,6 +647,11 @@ class Sequence2D(abc.ABC):
                 # we need to rephase the previous phase encode
                 last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
             block = self.block_refocus
+            if block.grad_phase.amplitude.shape[0] not in [4, 8]:
+                warning = (f"Assumes trapezoidal phase encode gradients with ramp up, flat and ramp down, "
+                           f"but found different gradient shape ({block.grad_phase.amplitude.shape[0]})!"
+                           f" Check Phase encode Gradient shape!")
+                log_module.warning(warning)
             # we set the re-phase phase encode gradient - add additional area if set
             phase_enc_time_pre_pulse = np.sum(np.diff(block.grad_phase.t_array_s[:4]) * area_factors)
             block.grad_phase.amplitude[1:3] = (self.phase_areas[
