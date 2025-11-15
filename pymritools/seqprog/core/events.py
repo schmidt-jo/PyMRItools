@@ -486,7 +486,7 @@ class GRAD(Event):
         if duration_re_grad < t_minimum_re_grad:
             # stretch to minimum required time if we have such
             # if we have to stretch, we can take the ramp times to be equal,
-            # since the amplitude most likely has to be reduced, the ramps will get less steep.
+            # since the amplitude has to be reduced, the ramps will get less steep.
             t_flat = t_minimum_re_grad - t_ru - t_rd
             b_num = re_spoil_moment - 0.5 * amplitude * t_rd
             b_denom = t_ru / 2 + t_flat + t_rd / 2
@@ -688,8 +688,12 @@ class GRAD(Event):
         return t + self.t_array_s[-1]
 
     def to_simple_ns(self):
+        if self.amplitude[0] > 1e-9 or self.amplitude[-1] > 1e-9:
+            warning = (f"Extended trapezoid waveform does not begin or end at 0. "
+                       f"Might be acceptable if arbitrary grad is wanted (changes grad raster sampling)!")
+            log_module.warning(warning)
         return types.SimpleNamespace(
-            channel=self.channel, type='grad',
+            channel=self.channel, type='grad', area=np.sum(self.area),
             delay=self.t_delay_s, first=self.amplitude[0], last=self.amplitude[-1],
             shape_dur=self.t_duration_s, tt=self.t_array_s, waveform=self.amplitude
         )

@@ -151,7 +151,7 @@ class Kernel:
         else:
             log_module.info(f"rf -- build sinc pulse")
             time_bw_prod = params.excitation_rf_time_bw_prod
-            rf = events.RF.make_sinc_pulse(
+            rf = events.RF.make_gauss_pulse(
                 flip_angle_rad=params.excitation_rf_rad_fa,
                 phase_rad=params.excitation_rf_rad_phase,
                 pulse_type="excitation",
@@ -160,9 +160,16 @@ class Kernel:
                 time_bw_prod=time_bw_prod,
                 freq_offset_hz=0.0, phase_offset_rad=0.0,
                 system=system,
-                apodization=0.5
+                # apodization=0.5
             )
         # build slice selective gradient
+        # stretch re-spoil moment (usually there is time between the excitation and first refocus and
+        # esp is driven by refocusing / adc combination), we can relax gradient stress by increasing re time of excitation
+        t_re = 0.0
+        if spoiling_moment > 3300:
+            t_re = 1e-3
+        if spoiling_moment > 4000:
+            t_re = 1.2e-3
         grad_slice, grad_slice_delay, _ = events.GRAD.make_slice_selective(
             pulse_bandwidth_hz=-rf.bandwidth_hz,
             slice_thickness_m=params.resolution_slice_thickness * 1e-3,
@@ -171,7 +178,8 @@ class Kernel:
             pre_moment=-params.excitation_grad_moment_pre,
             re_spoil_moment=-spoiling_moment,
             rephase=params.excitation_grad_rephase_factor,
-            adjust_ramp_area=adjust_ramp_area
+            adjust_ramp_area=adjust_ramp_area,
+            t_minimum_re_grad=t_re
         )
         # adjust start of rf
         rf.t_delay_s = grad_slice_delay
@@ -236,7 +244,7 @@ class Kernel:
             # log_module.info(f"rf -- build gauss pulse")
             # rf = events.RF.make_gauss_pulse(log_module.info(f"rf -- build gauss pulse")
             log_module.info(f"rf -- build sinc pulse")
-            rf = events.RF.make_sinc_pulse(
+            rf = events.RF.make_gauss_pulse(
                 flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
                 phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
                 pulse_type="refocusing",
@@ -245,7 +253,7 @@ class Kernel:
                 time_bw_prod=params.excitation_rf_time_bw_prod,
                 freq_offset_hz=0.0, phase_offset_rad=0.0,
                 system=system,
-                apodization=0.5,
+                # apodization=0.5,
             )
         if pulse_num == 0:
             pre_moment = 0.0
