@@ -3,6 +3,7 @@ import logging
 import abc
 import pathlib as plib
 import pickle
+from enum import Enum, auto
 
 from scipy.constants import physical_constants
 import numpy as np
@@ -20,6 +21,12 @@ from pypulseq import Opts, Sequence
 from pymritools.seqprog.core.utils import check_raster
 
 log_module = logging.getLogger(__name__)
+
+
+class SequenceType(Enum):
+    SEQUENCE = auto()
+    CALIBRATION = auto
+    RELOAD = auto()
 
 
 class AdaptiveSampler:
@@ -160,6 +167,7 @@ class Sequence2D(abc.ABC):
         # set pypulseq sequence as var -> thats actually whats been build throughout the code and
         # later shipped to a .seq file
         self.sequence: Sequence = Sequence(system=self.system)
+        self.sequence_parsed: Sequence = Sequence(system=self.system)
         # we add a second sequence object, we can use this to do some slice profile checks
         self.sequence_calibration = Sequence(system=self.system)
         self.use_calibration_seq: bool = False
@@ -1177,11 +1185,23 @@ class Sequence2D(abc.ABC):
 
     def plot_sequence(self, t_start_s: float = 0.0, t_end_s: float = 10.0,
                       sim_grad_moments: bool = False, file_suffix: str = "html",
-                      plot_calibration_sequence: bool = False
+                      plot_seq: SequenceType = SequenceType.SEQUENCE
                       ):
-        if plot_calibration_sequence and not self.use_calibration_seq:
-            log_module.info("\t\t-no calibration sequence, exciting plotting")
-        seq = self.sequence if not plot_calibration_sequence else self.sequence_calibration
+        match plot_seq:
+            case SequenceType.CALIBRATION:
+                seq = self.sequence_calibration
+                log_module.info("\t\t-plotting calibration sequence")
+                name = "calib_"
+            case SequenceType.RELOAD:
+                log_module.info("\t\t-plotting sequence from .seq file")
+                seq = self.sequence_parsed
+                name = "parsed_"
+            case _:
+                log_module.info("\t\t-plotting sequence")
+                seq = self.sequence
+                name = ""
+
+        name = f"{name}sequence_t-{int(t_start_s):d}_to_t-{int(t_end_s):d}"
         gamma = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6
         logging.debug(f"plot_seq")
         # transform to us
@@ -1418,8 +1438,6 @@ class Sequence2D(abc.ABC):
             width=1000,
             height=800
         )
-        name = f"calib_" if plot_calibration_sequence else ""
-        name = f"{name}sequence_t-{int(t_start_s):d}_to_t-{int(t_end_s):d}"
         fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
         log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
         if file_suffix in ["png", "pdf"]:
@@ -1684,26 +1702,29 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
 
         # plot start
         sequence.plot_sequence(t_start_s=0, t_end_s=0.65 * sequence.params.tr * 1e-3, sim_grad_moments=True)
-        if sequence.params.resolution_slice_num < 15:
-            n = 2
-        elif sequence.params.resolution_slice_num < 30:
-            n = 1
-        else:
-            n = 0.5
-        # plot within ac region
-        n_start = int(sequence.params.number_outer_lines // 2) + 4
-        sequence.plot_sequence(
-            t_start_s=n_start * sequence.params.tr * 1e-3,
-            t_end_s=(n_start + n) * sequence.params.tr * 1e-3,
-            sim_grad_moments=True
-        )
-        # plot close to end
-        n_start = int(2 * sequence.params.number_outer_lines // 3) + sequence.params.number_central_lines + 4
-        sequence.plot_sequence(
-            t_start_s=n_start * sequence.params.tr * 1e-3,
-            t_end_s=(n_start + n) * sequence.params.tr * 1e-3,
-            sim_grad_moments=True
-        )
+
+        logging.info(f"Reload .seq file to simulate and plot actual shipped sequence")
+        sequence.plot_sequence(t_start_s=0, t_end_s=0.65 * sequence.params.tr * 1e-3, sim_grad_moments=True)
+        # if sequence.params.resolution_slice_num < 15:
+        #     n = 2
+        # elif sequence.params.resolution_slice_num < 30:
+        #     n = 1
+        # else:
+        #     n = 0.5
+        # # plot within ac region
+        # n_start = int(sequence.params.number_outer_lines // 2) + 4
+        # sequence.plot_sequence(
+        #     t_start_s=n_start * sequence.params.tr * 1e-3,
+        #     t_end_s=(n_start + n) * sequence.params.tr * 1e-3,
+        #     sim_grad_moments=True
+        # )
+        # # plot close to end
+        # n_start = int(2 * sequence.params.number_outer_lines // 3) + sequence.params.number_central_lines + 4
+        # sequence.plot_sequence(
+        #     t_start_s=n_start * sequence.params.tr * 1e-3,
+        #     t_end_s=(n_start + n) * sequence.params.tr * 1e-3,
+        #     sim_grad_moments=True
+        # )
         sequence.plot_sampling()
 
 
