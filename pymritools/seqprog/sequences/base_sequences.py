@@ -244,10 +244,12 @@ class Sequence2D(abc.ABC):
             # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
             # accounting for ramp area
             ramp_area = float(self.block_refocus_1.grad_slice.area[0])
+            spoiling_moment = -self.block_refocus.grad_slice.area[-1]
             # excitation pulse
             self.block_excitation = Kernel.excitation_slice_sel(
                 params=self.params, system=self.system,
                 adjust_ramp_area=ramp_area,
+                spoiling_moment=spoiling_moment,
                 pulse_file=self.config.pulse_file_excitation
             )
         else:
@@ -404,6 +406,8 @@ class Sequence2D(abc.ABC):
         # write sequence after setting some header definitions (i.e. for correct FOV display on scanner
         self.set_pulseq_definitions()
         _, err_report = self.sequence.write(save_file.as_posix())
+        log_module.info(f"reading parsed file: {save_file.as_posix()}")
+        self.sequence_parsed.read(file_path=save_file.as_posix(), detect_rf_use=True)
 
         # write calibration sequence if used
         if self.use_calibration_seq:
@@ -972,7 +976,7 @@ class Sequence2D(abc.ABC):
         k_ex = Kernel.excitation_slice_sel(
             params=self.params,
             system=self.system,
-            use_slice_spoiling=False
+            spoiling_moment=0.0
         )
         # set up prephasing gradient for fid readouts
         # get timings
@@ -1275,7 +1279,7 @@ class Sequence2D(abc.ABC):
                 angle[angle < -np.pi + 1e-7] = np.pi
                 signal = np.abs(rf.signal)
                 if sim_grad_moments:
-                    if rf.use == "excitation":
+                    if rf.use == "excitation" or np.abs(rf.shape_dur * 1e6 - self.params.excitation_duration) < 1e-3:
                         identifier = 1
                     elif rf.use == "refocusing":
                         identifier = 2
@@ -1697,14 +1701,18 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
         logging.info("Plotting")
 
         sequence.plot_sequence(
-            t_start_s=0, t_end_s=50, sim_grad_moments=True, plot_calibration_sequence=True
+            t_start_s=0, t_end_s=50, sim_grad_moments=True, plot_seq=SequenceType.CALIBRATION
         )
 
         # plot start
-        sequence.plot_sequence(t_start_s=0, t_end_s=0.65 * sequence.params.tr * 1e-3, sim_grad_moments=True)
-
-        logging.info(f"Reload .seq file to simulate and plot actual shipped sequence")
-        sequence.plot_sequence(t_start_s=0, t_end_s=0.65 * sequence.params.tr * 1e-3, sim_grad_moments=True)
+        sequence.plot_sequence(
+            t_start_s=0, t_end_s=0.3 * sequence.params.tr * 1e-3, sim_grad_moments=True,
+            plot_seq=SequenceType.SEQUENCE
+        )
+        sequence.plot_sequence(
+            t_start_s=0, t_end_s=0.3 * sequence.params.tr * 1e-3, sim_grad_moments=True,
+            plot_seq=SequenceType.RELOAD
+        )
         # if sequence.params.resolution_slice_num < 15:
         #     n = 2
         # elif sequence.params.resolution_slice_num < 30:

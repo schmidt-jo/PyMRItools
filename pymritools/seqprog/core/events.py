@@ -374,8 +374,14 @@ class GRAD(Event):
         grad_instance = cls()
         grad_instance.system = system
         duration_s, rf_raster_delay = grad_instance.set_on_raster(duration_s, return_delay=True)
-        # set slice select amplitude
-        amplitude = pulse_bandwidth_hz / slice_thickness_m
+        # set slice select amplitude - do some rounding,
+        # effectively slightly changes slice thickness but helps in balancing gradient moments
+        amplitude = np.floor((pulse_bandwidth_hz / slice_thickness_m) * 1e-4) * 1e4
+        eff_slice_thickness = pulse_bandwidth_hz / amplitude
+        log_module.info(f"\t\t-slight gradient amplitude adjustment, "
+                        f"effective slice thickness: {eff_slice_thickness*1e3:.5f} mm "
+                        f"(was : {slice_thickness_m*1e3:.5f} mm)")
+
         amps = [0.0]
         times = [0.0]
         areas = []
@@ -445,7 +451,7 @@ class GRAD(Event):
                 system.rf_dead_time
             )
             # relax a bit to create slightly bigger ramp area
-            duration_pre_grad = grad_instance.set_on_raster(duration_pre_grad * 1.4)
+            duration_pre_grad = grad_instance.set_on_raster(duration_pre_grad * 2)
             times.append(times[-1] + duration_pre_grad)
             amps.append(amplitude)
             areas.append(np.trapezoid(x=times, y=amps))

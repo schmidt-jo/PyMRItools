@@ -74,7 +74,7 @@ class MEGESSE(Sequence2D):
         # -> symmetric echoes means we want readouts on fid after excitation = full rephasing
         self.block_excitation = Kernel.excitation_slice_sel(
             params=self.params, system=self.system, pulse_file=self.config.pulse_file,
-            use_slice_spoiling=False, adjust_ramp_area=0.0
+            spoiling_moment=0.0, adjust_ramp_area=0.0
         )
         # we need to modify the excitation kernel -> add phase and read gradients to prep for readouts between
         # excitation and first refocus
