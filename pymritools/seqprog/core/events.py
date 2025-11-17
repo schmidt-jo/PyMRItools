@@ -355,7 +355,8 @@ class GRAD(Event):
     @classmethod
     def make_slice_selective(cls, pulse_bandwidth_hz: float, slice_thickness_m: float, duration_s: float,
                              system: pp.Opts, pre_moment: float = 0.0, re_spoil_moment: float = 0.0,
-                             rephase: float = 0.0, t_minimum_re_grad: float = 0.0, adjust_ramp_area: float = 0.0):
+                             rephase: float = 0.0, t_minimum_re_grad: float = 0.0, adjust_ramp_area: float = 0.0,
+                             excitation: bool = False):
         """
         create slice selective gradient with merged pre and re moments (optional)
         - one can set the minimum time for those symmetrical moments with t_minimum_re_grad to match other grad timings
@@ -407,7 +408,7 @@ class GRAD(Event):
 
             # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
             duration_pre_grad = t_ru + t_rd + t_flat
-            if duration_pre_grad < t_minimum_re_grad:
+            if duration_pre_grad < t_minimum_re_grad and not excitation:
                 # stretch to minimum required time if we have such
                 # update amplitude
                 b = - system.max_slew * t_minimum_re_grad + amplitude
