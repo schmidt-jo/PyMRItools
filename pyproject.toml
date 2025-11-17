@@ -1,74 +1,33 @@
-[build-system]
-requires = ["poetry-core>=1.1.12"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry]
-name = "PyMRItools"
-version = "2024.0.0"
-description = "Toolbox for all things MRI with python. Sequence Programming, Reconstruction, Simulation, Analysis."
-readme = "README.md"
-license = "GPL-3.0-or-later"
-#keywords = []
-authors = [
-  "Jochen Schmidt <jochen.schmidt@tuta.io>",
+[project]
+name = "pymritools"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "nibabel>=5.3.2",
+    "numpy>=2.3.4",
+    "plotly>=6.4.0",
+    "polars>=1.35.2",
+    "pypulseq",
+    "simple-parsing>=0.1.7",
+    "tqdm>=4.67.1",
+    "twixtools",
+    "wandb>=0.23.0",
+    "torch>=2.9.1",
+    "scipy-stubs==1.16.3.0",
 ]
-maintainers = [
-  "Jochen Schmidt <jochen.schmidt@tuta.io>",
-  "Patrick Scheibe <patrick@halirutan.de>"
+
+[tool.uv.sources]
+twixtools = { git = "https://github.com/pehses/twixtools.git", rev = "master" }
+pypulseq = { git = "https://github.com/imr-framework/pypulseq.git", rev = "dev" }
+torch = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
-#classifiers = [
-#  "Development Status :: 4 - Beta",
-#  "Programming Language :: Python"
-#]
+torchvision = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 
-[[tool.poetry.source]]
-name = "torch"
-url = "https://download.pytorch.org/whl/cu124"
-priority = "explicit"
-
-[tool.poetry.dependencies]
-python = "^3.10"
-torch = {version = "2.4.1", source = "torch"}
-polars = "1.8.2"
-kaleido = "0.1.0"
-scipy = "1.14.1"
-numpy = "2.0.0"
-plotly = "5.16.1"
-simple-parsing = "0.1.6"
-tqdm = "4.66.5"
-nibabel = "5.2.1"
-wandb = "0.18.2"
-autodmri = "0.2.7"
-
-# might want to give dev branch here!
-# pypulseq = "1.4.2"
-# twixtools = "1.0"
-
-[tool.poetry.urls]
-"Repository" = "https://github.com/schmidt-jo/PyMRItools"
-"Bug Tracker" = "https://github.com/schmidt-jo/PyMRItools"
-
-[tool.poetry.scripts]
-# simulations
-simulation_emc_megesse_asym = "pymritools.simulation.emc.sequence.megesse_asym:main"
-simulation_emc_megesse_sym = "pymritools.simulation.emc.sequence.megesse_sym:main"
-simulation_emc_mese = "pymritools.simulation.emc.sequence.mese:main"
-# processing scripts
-processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
-processing_denoise_lcpca = "pymritools.processing.denoising.lcpca.denoise:main"
-processing_noise_bias_correction = "pymritools.processing.denoising.lcpca.denoise:noise_bias_correct_util"
-# modeling scripts
-modeling_mono_exponential_fit = "pymritools.modeling.decay.mexp:main"
-#modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search:main"
-modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search_channels:main"
-modeling_b1_afi = "pymritools.modeling.b1_afi.modeling:main"
-# sequence programing
-seqprog_mese = "pymritools.seqprog.sequences.mese:main"
-seqprog_megesse_sym = "pymritools.seqprog.sequences.megesse_sym:main"
-seqprog_megesse_asym = "pymritools.seqprog.sequences.megesse_asym:main"
-seqprog_raw_data_pulseq = "pymritools.seqprog.rawdata.rd_read:pulseq"
-seqprog_raw_data_siemens = "pymritools.seqprog.rawdata.rd_read:siemens"
-utils_remove_oversampling = "pymritools.seqprog.rawdata.utils:rmos"
-utils_root_sum_of_squares = "pymritools.seqprog.rawdata.utils:recon_naive_rsos"
-# reconstruction
-recon_loraks = "pymritools.recon.loraks.recon:loraks_from_cli"
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
