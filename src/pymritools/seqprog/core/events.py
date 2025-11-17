@@ -231,8 +231,8 @@ class RF(Event):
         # rf_max = np.max(np.abs(self.signal))
         # i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
         # self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
-        # self.t_mid = self.t_delay_s + self.t_duration_s / 2
-        self.t_mid = self.t_duration_s / 2 + np.diff(self.t_array_s)[self.t_array_s.shape[0] // 2] / 2
+        self.t_mid = self.t_duration_s / 2
+        # self.t_mid = self.t_duration_s / 2 + np.diff(self.t_array_s)[self.t_array_s.shape[0] // 2] / 2
 
     def plot(self):
         fig = plt.figure()

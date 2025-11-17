@@ -1,7 +1,8 @@
 [project]
 name = "pymritools"
 version = "0.1.0"
-description = "Add your description here"
+description = "Python toolbox for processing MRI imaging data and creating MRI imageing sequences."
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "nibabel>=5.3.2",
@@ -15,7 +16,13 @@ dependencies = [
     "wandb>=0.23.0",
     "torch>=2.9.1",
     "scipy-stubs==1.16.3.0",
+    "torch-kmeans>=0.2.0",
+    "rich>=14.2.0",
 ]
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
 
 [tool.uv.sources]
 twixtools = { git = "https://github.com/pehses/twixtools.git", rev = "master" }
@@ -31,3 +38,27 @@ torchvision = [
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[project.scripts]
+# simulations
+#simulation_emc_megesse_asym = "pymritools.simulation.emc.sequence.megesse_asym:main"
+#simulation_emc_megesse_sym = "pymritools.simulation.emc.sequence.megesse_sym:main"
+simulation_emc_mese = "pymritools.simulation.emc.sequence.mese:main"
+# processing scripts
+processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
+processing_denoise_lcpca = "pymritools.processing.denoising.lcpca.denoise:main"
+processing_noise_bias_correction = "pymritools.processing.denoising.lcpca.denoise:noise_bias_correct_util"
+# modeling scripts
+modeling_mono_exponential_fit = "pymritools.modeling.decay.mexp:main"
+modeling_dictionary_grid_search = "pymritools.modeling.dictionary.grid_search_channels:main"
+modeling_b1_afi = "pymritools.modeling.b1_afi.modeling:main"
+# sequence programing
+seqprog_mese = "pymritools.seqprog.sequences.mese:main"
+#seqprog_megesse_sym = "pymritools.seqprog.sequences.megesse_sym:main"
+#seqprog_megesse_asym = "pymritools.seqprog.sequences.megesse_asym:main"
+seqprog_raw_data_pulseq = "pymritools.seqprog.rawdata.rd_read:pulseq"
+seqprog_raw_data_siemens = "pymritools.seqprog.rawdata.rd_read:siemens"
+utils_remove_oversampling = "pymritools.seqprog.rawdata.utils:rmos"
+utils_root_sum_of_squares = "pymritools.seqprog.rawdata.utils:recon_naive_rsos"
+# reconstruction
+recon_loraks = "pymritools.recon.loraks.recon:loraks_from_cli"

@@ -1,0 +1,52 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.05-py3
+
+%environment
+    export PATH=/opt/miniforge3/bin:$PATH
+    export ENV_NAME=mri_tools_env
+    source /opt/miniforge3/bin/activate $ENV_NAME
+
+%files
+    # We rename the input file to a simple `environment.yml` inside the container.
+    viper_environment.yml environment.yml
+
+%post
+    apt-get update && apt-get upgrade -y
+    apt-get install -y wget bzip2 git
+
+    # The usual install of miniforge. Download it and run the script with options to prevent it from asking
+    # any questions.
+    wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/Miniforge3.sh
+    bash /tmp/Miniforge3.sh -b -p /opt/miniforge3
+    rm /tmp/Miniforge3.sh
+
+    # We split the installation of the Conda environment into two parts.
+    # 1. Creating the conda env and installing conda dependencies
+    # 2. Installing pip dependencies within the conda environment
+    # Normally, we would do 2. also in the `environment.yml`, but that did not work and I did not understand why there
+    # was an error.
+    # Note that in this stage we don't have the source command and need to use sh's period.
+    . /opt/miniforge3/etc/profile.d/conda.sh
+    conda env create -f environment.yml
+    conda activate mri_tools_env
+    pip3 install triton
+    pip3 install autodmri
+    pip3 install git+https://github.com/pehses/twixtools.git@master#egg=twixtools
+    pip3 install git+https://github.com/imr-framework/pypulseq.git@dev#egg=pypulseq
+    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
+    # now we should have a functioning conda env with all necessary dependencies
+    # we now want to clone the dev branch of our repository and install the package without dependencies using pip
+    pip3 install --no-deps git+https://github.com/schmidt-jo/PyMRItools.git@dev#egg=PyMRItools
+    conda deactivate
+
+    # Clean up all tempory stuff
+    conda clean -afy
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%runscript
+    #!/bin/bash
+    # Activate the environment and execute the provided command
+    source /opt/miniforge3/etc/profile.d/conda.sh
+    conda activate $ENV_NAME
+    exec "$@"

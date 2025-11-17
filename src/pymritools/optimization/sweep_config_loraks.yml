@@ -1,0 +1,15 @@
+program: /data/pt_np-jschmidt/code/PyMRItools/pymritools/optimization/loraks_us.py
+name: loraks_us
+project: loraks_us_optimization
+method: grid
+metric:
+  goal: minimize
+  name: loss
+parameters:
+  acceleration:
+    values: [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0]
+  rank:
+    distribution: "q_uniform"
+    q: 10
+    min: 10
+    max: 200

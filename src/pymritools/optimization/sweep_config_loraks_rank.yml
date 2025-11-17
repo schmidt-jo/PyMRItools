@@ -1,0 +1,20 @@
+program: /data/pt_np-jschmidt/code/PyMRItools/pymritools/optimization/loraks_rank_param_optim_acc.py
+name: loraks_rank_acc_rank_nc_ne
+project: loraks_rank_optimization
+method: bayes
+metric:
+  goal: minimize
+  name: loss
+parameters:
+  rank:
+    values: [10, 20, 50, 75, 100, 125, 150, 175, 200, 225, 250]
+  lam:
+    values: [0.0, 0.001, 0.01, 0.025, 0.05, 0.1]
+  sub:
+    value: "random_lines"
+  nc:
+    values: [8, 16, 32]
+  ne:
+    values: [2, 3, 4, 5, 6]
+  acc:
+    values: [2, 3, 4, 5, 6]
