@@ -161,8 +161,10 @@ class Kernel:
         # esp is driven by refocusing / adc combination), we can relax gradient stress by increasing re time of excitation
         t_re = 0.0
         if np.abs(spoiling_moment) > 2799:
-            t_re = 1.1e-3
-        if np.abs(spoiling_moment) > 3199:
+            t_re = 0.7e-3
+        if np.abs(spoiling_moment) > 3001:
+            t_re = 0.86e-3
+        if np.abs(spoiling_moment) > 3201:
             t_re = 1.2e-3
         grad_slice, grad_slice_delay, _ = events.GRAD.make_slice_selective(
             pulse_bandwidth_hz=-rf.bandwidth_hz,
@@ -268,7 +270,7 @@ class Kernel:
         # pulseq does compress and round to 6 decimals upon .seq creation.
         # to create stable amplitudes we try to round here.
         # This effectively comes down to changing the slice thickness slightly, which is acceptable
-        grad_slice.amplitude = np.floor(grad_slice.amplitude * 0.1) * 10
+        grad_slice.amplitude = np.floor(grad_slice.amplitude * 1e-3) * 1e3
         # for refocusing pulses this does two things:
         #       slightly adjust spoiler - acceptable
         #       slightly change slice thickness - acceptable
