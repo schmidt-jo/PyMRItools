@@ -70,5 +70,6 @@ seqprog_raw_data_pulseq = "pymritools.seqprog.rawdata.rd_read:pulseq"
 seqprog_raw_data_siemens = "pymritools.seqprog.rawdata.rd_read:siemens"
 utils_remove_oversampling = "pymritools.seqprog.rawdata.utils:rmos"
 utils_root_sum_of_squares = "pymritools.seqprog.rawdata.utils:recon_naive_rsos"
+utils_plot_simulate_sequence = "pymritools.seqprog.sequences.base_sequences:plot_simulate_seq"
 # reconstruction
 recon_loraks = "pymritools.recon.loraks.recon:loraks_from_cli"

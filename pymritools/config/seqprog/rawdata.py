@@ -294,3 +294,37 @@ class RSOS(BaseClass):
         alias="-dc", default=-2,
         help="Dimension of channels to reduce via rsos. "
     )
+
+@dataclass
+class PlotSeq(BaseClass):
+    input_seq: str = field(
+        alias="-i", default="",
+        help="Input .seq file for simulation and plotting."
+    )
+    t_start_s: float = field(
+        alias="-t0", default=0.0,
+        help="Simulation / plot start time"
+    )
+    t_end_s: float = field(
+        alias="-t1", default=0.2,
+        help="Simulation / plot end time"
+    )
+    sim_grad_moments: bool = field(
+        alias="-sg", default=False,
+        help=f"toggle simulation of gradient moments"
+    )
+    file_suffix: str = field(
+        alias="-fs", default="html"
+    )
+    name: str = field(
+        alias="-n", default=None,
+        help="Name of output file"
+    )
+    path: str = field(
+        alias="-p", default=None,
+        help="Path to output file"
+    )
+    excitation_duration: float = field(
+        alias="-ed", default=0.0,
+        help=f"Excitation duration (for simulating grad moments of excitation and refocusing pulses) in us"
+    )

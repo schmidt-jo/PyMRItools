@@ -14,7 +14,7 @@ import plotly.colors as plc
 import tqdm
 
 from pymritools.seqprog.core import Kernel, GRAD, ADC, DELAY
-from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D, Sampling
+from pymritools.config.seqprog import PulseqConfig, PulseqSystemSpecs, PulseqParameters2D, Sampling, PlotSeq
 from pymritools.config import setup_program_logging, setup_parser
 from pypulseq import Opts, Sequence
 
@@ -1206,248 +1206,11 @@ class Sequence2D(abc.ABC):
                 name = ""
 
         name = f"{name}sequence_t-{int(t_start_s):d}_to_t-{int(t_end_s):d}"
-        gamma = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6
-        logging.debug(f"plot_seq")
-        # transform to us
-        t_start_us = int(t_start_s * 1e6)
-        t_end_us = int(t_end_s * 1e6)
-        t_total_us = t_end_us - t_start_us
-        if t_total_us < 1:
-            err = f"end time needs to be after start time"
-            log_module.error(err)
-            raise ValueError(err)
-        # find starting idx
-        start_idx = 0
-        t_cum_us = 0
-
-        # go through blocks - find start block
-        for block_idx, block_duration in seq.block_durations.items():
-            t_cum_us += 1e6 * block_duration
-            if t_cum_us > t_start_us:
-                start_idx = block_idx
-                break
-            if block_idx == len(seq.block_durations) - 1:
-                err = (f"looped through sequence blocks to get to {t_cum_us} us, "
-                       f"and didnt arrive at starting time given {t_start_us} us")
-                log_module.error(err)
-                raise AttributeError(err)
-        t_cum_us = 0
-        # set up lists to fill with values
-        times = []
-        values = []
-        labels = []
-        # for simulating grad moments, track rf timings
-        rf_flip_null = [[], []]
-
-        grad_channels = ['gx', 'gy', 'gz']
-
-        def append_to_lists(time: float | int | list, value: float | list, label: str):
-            if isinstance(time, int):
-                time = float(time)
-                value = float(value)
-            if isinstance(time, float):
-                times.append(time)
-                values.append(value)
-                labels.append(label)
-            else:
-                times.extend(np.array(time).astype(float).tolist())
-                values.extend(np.array(value).astype(float).tolist())
-                labels.extend([label] * len(time))
-
-        # start with first block after start time
-        for block_idx, block_duration in seq.block_durations.items():
-            if block_idx < start_idx:
-                continue
-            if block_idx >= len(seq.block_durations):
-                break
-            # set start block
-            t0 = t_cum_us
-            block = seq.get_block(block_idx + 1)
-            if t_cum_us + 1e6 * block_duration > t_total_us:
-                break
-            # add data to the lists
-            if getattr(block, 'rf') is not None:
-                rf = block.rf
-                start = t0 + int(1e6 * rf.delay)
-                # starting point at 0
-                append_to_lists(start - 1e-6, 0.0, label="RF amp")
-                append_to_lists(start - 1e-6, 0.0, label="RF phase")
-                t_rf = rf.t * 1e6
-                angle = np.angle(
-                    rf.signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
-                )
-                angle[angle < -np.pi + 1e-7] = np.pi
-                signal = np.abs(rf.signal)
-                if sim_grad_moments:
-                    if rf.use == "excitation" or np.abs(rf.shape_dur * 1e6 - self.params.excitation_duration) < 1e-3:
-                        identifier = 1
-                    elif rf.use == "refocusing":
-                        identifier = 2
-                    else:
-                        err = f"grad moment effect of rf ({rf.use}) not recognized or not implemented."
-                        log_module.error(err)
-                        raise ValueError(err)
-                    # assumes rf effect in the center
-                    append_to_lists(start + rf.shape_dur * 1e6 / 2, identifier,
-                                    label="RF grad moment effect")
-
-                append_to_lists(time=(t_rf + start).tolist(), value=signal.tolist(), label="RF amp")
-                append_to_lists(time=(t_rf + start).tolist(), value=angle.tolist(), label="RF phase")
-                # set back to 0
-                append_to_lists(t_rf[-1] + start + 1e-6, 0.0, label="RF amp")
-                append_to_lists(t_rf[-1] + start + 1e-6, 0.0, label="RF phase")
-
-            for x in range(len(grad_channels)):
-                if getattr(block, grad_channels[x]) is not None:
-                    grad = getattr(block, grad_channels[x])
-                    if grad.type == 'trap':
-                        amp_value = 1e3 * grad.amplitude / gamma
-                    elif grad.type == 'grad':
-                        amp_value = 1e3 * grad.waveform / gamma
-                    else:
-                        amp_value = 0
-                    start = int(t0 + 1e6 * grad.delay)
-                    t = grad.tt * 1e6
-                    append_to_lists(time=start + t, value=amp_value, label=f"GRAD {grad_channels[x]}")
-
-            if getattr(block, 'adc') is not None:
-                adc = block.adc
-                start = int(t0 + 1e6 * adc.delay)
-                # set starting point to 0
-                append_to_lists(time=start - 1e-6, value=0.0, label="ADC")
-                end = int(start + adc.dwell * adc.num_samples * 1e6)
-                dead_time = int(end + 1e6 * adc.dead_time)
-                append_to_lists(time=[start, end, end + 1e-6, dead_time], value=[1.0, 1.0, 0.2, 0.2], label="ADC")
-                # set end point to 0
-                append_to_lists(time=dead_time + 1e-6, value=0.0, label="ADC")
-            t_cum_us += int(1e6 * getattr(block, 'block_duration'))
-
-        # build a dataframe storing all data and times
-        df = pl.DataFrame({
-            "data": values, "time": times, "labels": labels
-        })
-
-        # set up figure
-        num_rows = 2
-        specs = [[{"secondary_y": True}], [{"secondary_y": True}]]
-
-        # simulate grad moments
-        if sim_grad_moments:
-            # can simulate the moments having a dataframe with corresponding gradient and rf data
-            df_grad_moments = simulate_grad_moments(
-                df_rf_grads=df.filter(
-                    pl.col("labels").is_in(
-                        [*[f"GRAD {grad_channels[k]}" for k in range(3)], "RF grad moment effect"]
-                    )
-                )
-            )
-            # self.plot_grad_moments(df_grad_moments=df_grad_moments)
-            num_rows += 1
-            specs.append([{"secondary_y": False}])
-        else:
-            df_grad_moments = None
-
-        fig = psub.make_subplots(
-            num_rows, 1,
-            specs=specs,
-            shared_xaxes=True
+        plot_sequence(
+            seq=seq, name=name, path=self.path_figs,
+            t_start_s=t_start_s, t_end_s=t_end_s, sim_grad_moments=sim_grad_moments,
+            file_suffix=file_suffix, excitation_duration=self.params.excitation_duration
         )
-
-        # top axis left
-        tmp_df = df.filter(pl.col("labels") == "RF amp")
-        tmp_df = tmp_df.with_columns(pl.col("data") / pl.col("data").max() * np.pi)
-
-        fig.add_trace(
-            go.Scattergl(
-                x=tmp_df["time"], y=tmp_df["data"], name="RF Amplitude"
-            ),
-            row=1, col=1, secondary_y=False
-        )
-
-        tmp_df = df.filter(pl.col("labels") == "RF phase")
-        fig.add_trace(
-            go.Scattergl(
-                x=tmp_df["time"], y=tmp_df["data"],
-                name="RF Phase [rad]", opacity=0.3
-            ),
-            row=1, col=1, secondary_y=False
-        )
-
-        # axes properties
-        fig.update_yaxes(title_text="RF Amplitude & Phase", range=[-3.5, 3.5], row=1, col=1, secondary_y=False)
-
-        # top axis right
-        tmp_df = df.filter(pl.col("labels") == "GRAD gz")
-        fig.add_trace(
-            go.Scattergl(
-                x=tmp_df["time"], y=tmp_df["data"], name="Gradient gz"
-            ),
-            row=1, col=1, secondary_y=True
-        )
-
-        fig.update_yaxes(
-            title_text="Gradient Slice [mT/m]",
-            range=[-1.2 * tmp_df["data"].abs().max(), 1.2 * tmp_df["data"].abs().max()],
-            row=1, col=1, secondary_y=True
-        )
-
-        # bottom axis left
-        tmp_df = df.filter(pl.col("labels") == "ADC")
-        fig.add_trace(
-            go.Scattergl(
-                x=tmp_df["time"], y=tmp_df["data"], name="ADC", fill="tozeroy", opacity=0.5
-            ),
-            row=2, col=1, secondary_y=False
-        )
-
-        fig.update_xaxes(title_text="Time [us]", row=2, col=1)
-        fig.update_yaxes(title_text="ADC", range=[-1.5, 1.5], row=2, col=1, secondary_y=False)
-
-        # bottom axis right
-        max_val = 40
-        for k in range(2):
-            tmp_df = df.filter(pl.col("labels") == f"GRAD {grad_channels[k]}")
-            fig.add_trace(
-                go.Scattergl(
-                    x=tmp_df["time"], y=tmp_df["data"], name=f"Gradient {grad_channels[k]} [mT/m]"
-                ),
-                row=2, col=1, secondary_y=True
-            )
-            if max_val < tmp_df["data"].abs().max():
-                max_val = tmp_df["data"].abs().max()
-        fig.update_yaxes(
-            title_text="Gradient [mT/m]", range=[-1.2 * max_val, 1.2 * max_val],
-            row=2, col=1, secondary_y=True
-        )
-
-        # add gradient moment simulation
-        if sim_grad_moments:
-            max_val = df_grad_moments.filter(
-                pl.col("labels").is_in(
-                    [*[f"GRAD {grad_channels[k]}" for k in range(3)]]
-                )
-            )["moment"].abs().max()
-
-            for k in range(3):
-                tmp_df = df_grad_moments.filter(pl.col("labels") == f"GRAD {grad_channels[k]}").sort(by="time")
-                fig.add_trace(
-                    go.Scattergl(
-                        x=tmp_df["time"], y=tmp_df["moment"], name=f"Gradient Moment {grad_channels[k]} [mTs/m]"
-                    ),
-                    3, 1
-                )
-            fig.update_yaxes(title_text="Gradient Moment [mT s/m]", range=[-1.2 * max_val, 1.2 * max_val], row=3, col=1,
-                             secondary_y=False)
-        fig.update_layout(
-            width=1000,
-            height=800
-        )
-        fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
-        log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
-        if file_suffix in ["png", "pdf"]:
-            fig.write_image(fig_path.as_posix())
-        else:
-            fig.write_html(fig_path.as_posix())
 
     def plot_sampling(self, file_suffix: str = "html"):
         # trajectories
@@ -1617,6 +1380,365 @@ def simulate_grad_moments(df_rf_grads: pl.DataFrame):
     })
 
 
+def plot_simulate_seq():
+    # setup logging
+    setup_program_logging(name="Plot .seq", level=logging.INFO)
+    # setup parser
+    parser, args = setup_parser(
+        prog_name="Plot .seq",
+        dict_config_dataclasses={"settings": PlotSeq}
+    )
+    # get config
+    settings = PlotSeq.from_cli(args=args.settings, parser=parser)
+    settings.display()
+
+    in_file = plib.Path(settings.input_file).absolute()
+    if not in_file.is_file():
+        err = f"File ({in_file}) does not exist"
+        log_module.error(err)
+        raise FileNotFoundError(err)
+
+    log_module.info(f"reading parsed file: {in_file.as_posix()}")
+    seq = Sequence()
+    seq.read(file_path=in_file.as_posix(), detect_rf_use=True)
+    plot_sequence(
+        seq=seq, name=settings.name, path=settings.path,
+        t_start_s=settings.t_start_s, t_end_s=settings.t_end_s,
+        sim_grad_moments=settings.sim_grad_moments, file_suffix=settings.file_suffix,
+        excitation_duration=settings.excitation_duration
+    )
+
+
+def plot_sequence(seq: Sequence, name: str, path: str,
+                  t_start_s: float = 0.0, t_end_s: float = 10.0,
+                  sim_grad_moments: bool = False, file_suffix: str = "html",
+                  excitation_duration: float = 0.0,
+                  ):
+    path_figs = plib.Path(path).absolute()
+    gamma = physical_constants["proton gyromag. ratio in MHz/T"][0] * 1e6
+    logging.debug(f"plot_seq")
+    # transform to us
+    t_start_us = int(t_start_s * 1e6)
+    t_end_us = int(t_end_s * 1e6)
+    t_total_us = t_end_us - t_start_us
+    if t_total_us < 1:
+        err = f"end time needs to be after start time"
+        log_module.error(err)
+        raise ValueError(err)
+    # find starting idx
+    start_idx = 0
+    t_cum_us = 0
+
+    # go through blocks - find start block
+    for block_idx, block_duration in seq.block_durations.items():
+        t_cum_us += 1e6 * block_duration
+        if t_cum_us > t_start_us:
+            start_idx = block_idx
+            break
+        if block_idx == len(seq.block_durations) - 1:
+            err = (f"looped through sequence blocks to get to {t_cum_us} us, "
+                   f"and didnt arrive at starting time given {t_start_us} us")
+            log_module.error(err)
+            raise AttributeError(err)
+    t_cum_us = 0
+    # set up lists to fill with values
+    times = []
+    values = []
+    labels = []
+    # for simulating grad moments, track rf timings
+    rf_flip_null = [[], []]
+
+    grad_channels = ['gx', 'gy', 'gz']
+
+    def append_to_lists(time: float | int | list, value: float | list, label: str):
+        if isinstance(time, int):
+            time = float(time)
+            value = float(value)
+        if isinstance(time, float):
+            times.append(time)
+            values.append(value)
+            labels.append(label)
+        else:
+            times.extend(np.array(time).astype(float).tolist())
+            values.extend(np.array(value).astype(float).tolist())
+            labels.extend([label] * len(time))
+
+    # start with first block after start time
+    for block_idx, block_duration in seq.block_durations.items():
+        if block_idx < start_idx:
+            continue
+        if block_idx >= len(seq.block_durations):
+            break
+        # set start block
+        t0 = t_cum_us
+        block = seq.get_block(block_idx + 1)
+        if t_cum_us + 1e6 * block_duration > t_total_us:
+            break
+        # add data to the lists
+        if getattr(block, 'rf') is not None:
+            rf = block.rf
+            start = t0 + int(1e6 * rf.delay)
+            # starting point at 0
+            append_to_lists(start - 1e-6, 0.0, label="RF amp")
+            append_to_lists(start - 1e-6, 0.0, label="RF phase")
+            t_rf = rf.t * 1e6
+            angle = np.angle(
+                rf.signal * np.exp(1j * rf.phase_offset) * np.exp(1j * 2 * np.pi * rf.t * rf.freq_offset)
+            )
+            angle[angle < -np.pi + 1e-7] = np.pi
+            signal = np.abs(rf.signal)
+            if sim_grad_moments:
+                if rf.use == "excitation" or np.abs(rf.shape_dur * 1e6 - excitation_duration) < 1e-3:
+                    identifier = 1
+                elif rf.use == "refocusing":
+                    identifier = 2
+                else:
+                    err = f"grad moment effect of rf ({rf.use}) not recognized or not implemented."
+                    log_module.error(err)
+                    raise ValueError(err)
+                # assumes rf effect in the center
+                append_to_lists(start + rf.shape_dur * 1e6 / 2, identifier,
+                                label="RF grad moment effect")
+
+            append_to_lists(time=(t_rf + start).tolist(), value=signal.tolist(), label="RF amp")
+            append_to_lists(time=(t_rf + start).tolist(), value=angle.tolist(), label="RF phase")
+            # set back to 0
+            append_to_lists(t_rf[-1] + start + 1e-6, 0.0, label="RF amp")
+            append_to_lists(t_rf[-1] + start + 1e-6, 0.0, label="RF phase")
+
+        for x in range(len(grad_channels)):
+            if getattr(block, grad_channels[x]) is not None:
+                grad = getattr(block, grad_channels[x])
+                if grad.type == 'trap':
+                    amp_value = 1e3 * grad.amplitude / gamma
+                elif grad.type == 'grad':
+                    amp_value = 1e3 * grad.waveform / gamma
+                else:
+                    amp_value = 0
+                start = int(t0 + 1e6 * grad.delay)
+                t = grad.tt * 1e6
+                append_to_lists(time=start + t, value=amp_value, label=f"GRAD {grad_channels[x]}")
+
+        if getattr(block, 'adc') is not None:
+            adc = block.adc
+            start = int(t0 + 1e6 * adc.delay)
+            # set starting point to 0
+            append_to_lists(time=start - 1e-6, value=0.0, label="ADC")
+            end = int(start + adc.dwell * adc.num_samples * 1e6)
+            dead_time = int(end + 1e6 * adc.dead_time)
+            append_to_lists(time=[start, end, end + 1e-6, dead_time], value=[1.0, 1.0, 0.2, 0.2], label="ADC")
+            # set end point to 0
+            append_to_lists(time=dead_time + 1e-6, value=0.0, label="ADC")
+        t_cum_us += int(1e6 * getattr(block, 'block_duration'))
+
+    # build a dataframe storing all data and times
+    df = pl.DataFrame({
+        "data": values, "time": times, "labels": labels
+    })
+
+    # set up figure
+    num_rows = 2
+    specs = [[{"secondary_y": True}], [{"secondary_y": True}]]
+
+    # simulate grad moments
+    if sim_grad_moments:
+        # can simulate the moments having a dataframe with corresponding gradient and rf data
+        df_grad_moments = simulate_grad_moments(
+            df_rf_grads=df.filter(
+                pl.col("labels").is_in(
+                    [*[f"GRAD {grad_channels[k]}" for k in range(3)], "RF grad moment effect"]
+                )
+            )
+        )
+        # self.plot_grad_moments(df_grad_moments=df_grad_moments)
+        num_rows += 1
+        specs.append([{"secondary_y": False}])
+    else:
+        df_grad_moments = None
+
+    fig = psub.make_subplots(
+        num_rows, 1,
+        specs=specs,
+        shared_xaxes=True
+    )
+
+    # top axis left
+    tmp_df = df.filter(pl.col("labels") == "RF amp")
+    tmp_df = tmp_df.with_columns(pl.col("data") / pl.col("data").max() * np.pi)
+
+    fig.add_trace(
+        go.Scattergl(
+            x=tmp_df["time"], y=tmp_df["data"], name="RF Amplitude"
+        ),
+        row=1, col=1, secondary_y=False
+    )
+
+    tmp_df = df.filter(pl.col("labels") == "RF phase")
+    fig.add_trace(
+        go.Scattergl(
+            x=tmp_df["time"], y=tmp_df["data"],
+            name="RF Phase [rad]", opacity=0.3
+        ),
+        row=1, col=1, secondary_y=False
+    )
+
+    # axes properties
+    fig.update_yaxes(title_text="RF Amplitude & Phase", range=[-3.5, 3.5], row=1, col=1, secondary_y=False)
+
+    # top axis right
+    tmp_df = df.filter(pl.col("labels") == "GRAD gz")
+    fig.add_trace(
+        go.Scattergl(
+            x=tmp_df["time"], y=tmp_df["data"], name="Gradient gz"
+        ),
+        row=1, col=1, secondary_y=True
+    )
+
+    fig.update_yaxes(
+        title_text="Gradient Slice [mT/m]",
+        range=[-1.2 * tmp_df["data"].abs().max(), 1.2 * tmp_df["data"].abs().max()],
+        row=1, col=1, secondary_y=True
+    )
+
+    # bottom axis left
+    tmp_df = df.filter(pl.col("labels") == "ADC")
+    fig.add_trace(
+        go.Scattergl(
+            x=tmp_df["time"], y=tmp_df["data"], name="ADC", fill="tozeroy", opacity=0.5
+        ),
+        row=2, col=1, secondary_y=False
+    )
+
+    fig.update_xaxes(title_text="Time [us]", row=2, col=1)
+    fig.update_yaxes(title_text="ADC", range=[-1.5, 1.5], row=2, col=1, secondary_y=False)
+
+    # bottom axis right
+    max_val = 40
+    for k in range(2):
+        tmp_df = df.filter(pl.col("labels") == f"GRAD {grad_channels[k]}")
+        fig.add_trace(
+            go.Scattergl(
+                x=tmp_df["time"], y=tmp_df["data"], name=f"Gradient {grad_channels[k]} [mT/m]"
+            ),
+            row=2, col=1, secondary_y=True
+        )
+        if max_val < tmp_df["data"].abs().max():
+            max_val = tmp_df["data"].abs().max()
+    fig.update_yaxes(
+        title_text="Gradient [mT/m]", range=[-1.2 * max_val, 1.2 * max_val],
+        row=2, col=1, secondary_y=True
+    )
+
+    # add gradient moment simulation
+    if sim_grad_moments:
+        max_val = df_grad_moments.filter(
+            pl.col("labels").is_in(
+                [*[f"GRAD {grad_channels[k]}" for k in range(3)]]
+            )
+        )["moment"].abs().max()
+
+        for k in range(3):
+            tmp_df = df_grad_moments.filter(pl.col("labels") == f"GRAD {grad_channels[k]}").sort(by="time")
+            fig.add_trace(
+                go.Scattergl(
+                    x=tmp_df["time"], y=tmp_df["moment"], name=f"Gradient Moment {grad_channels[k]} [mTs/m]"
+                ),
+                3, 1
+            )
+        fig.update_yaxes(title_text="Gradient Moment [mT s/m]", range=[-1.2 * max_val, 1.2 * max_val], row=3, col=1,
+                         secondary_y=False)
+    fig.update_layout(
+        width=1000,
+        height=800
+    )
+    fig_path = path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
+    log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
+    if file_suffix in ["png", "pdf"]:
+        fig.write_image(fig_path.as_posix())
+    else:
+        fig.write_html(fig_path.as_posix())
+
+    def plot_sampling(self, file_suffix: str = "html"):
+        # trajectories
+        df_kt = self.sampling.df_trajectories
+
+        fig = go.Figure()
+        for acq in df_kt["acquisition"].unique():
+            df_acq = df_kt.filter(pl.col("acquisition") == acq)
+            fig.add_trace(
+                go.Scatter(
+                    x=df_acq["adc_sampling_num"],
+                    y=df_acq["k_traj_position"],
+                    mode="markers+lines",
+                    name=acq
+                )
+            )
+        fig.update_yaxes(title="Sample Position [1/FOV]")
+        fig.update_xaxes(title="Sample Number")
+
+        name = f"sequence_trajectories"
+        fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
+        log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
+        if file_suffix in ["png", "pdf"]:
+            fig.write_image(fig_path.as_posix())
+        else:
+            fig.write_html(fig_path.as_posix())
+
+        # sampling mask
+        len_x = 15
+        num_echoes = max([s.echo_number for s in self.sampling.samples if "noise" not in s.acquisition_type]) + 1
+        n_pe = self.params.resolution_n_phase
+        sampling_mask = np.zeros((len_x * num_echoes, n_pe))
+
+        for i, s in enumerate(self.sampling.samples):
+            if "noise" in s.acquisition_type:
+                continue
+            ne = s.echo_number
+            if "bd" in s.acquisition_type:
+                m_val = 2
+            else:
+                m_val = 1
+            sampling_mask[ne * len_x:(ne + 1) * len_x, s.phase_encode_number] = m_val
+            sampling_mask[(ne + 1) * len_x - 1, :] = 3
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Heatmap(
+                z=sampling_mask, transpose=True, zmin=0, zmax=4,
+                colorscale="Viridis",
+                showscale=False, showlegend=False
+            )
+        )
+        m_vals = np.unique(sampling_mask.astype(int))
+        names = ["non sampled", "positive read grad", "negative read grad", ""]
+        cmap = plc.sample_colorscale("viridis", 4, 0, 1)
+        for i, m in enumerate(m_vals):
+            if names[i]:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[None],
+                        y=[None],
+                        mode="markers",
+                        name=names[i],
+                        marker=dict(size=7, color=cmap[i], symbol='square'),
+                    ),
+                )
+        tickvals = np.linspace(
+            0, sampling_mask.shape[0], num_echoes + 1
+        ) + sampling_mask.shape[0] / (num_echoes + 1) / 2
+        fig.update_xaxes(title="echo number", tickmode="array", tickvals=tickvals,
+                         ticktext=np.arange(1, num_echoes + 1))
+        fig.update_yaxes(title="phase encode number")
+
+        name = f"sampling_mask"
+        fig_path = self.path_figs.joinpath(f"plot_{name}").with_suffix(f".{file_suffix}")
+        log_module.info(f"\t\t - writing file: {fig_path.as_posix()}")
+        if file_suffix in ["png", "pdf"]:
+            fig.write_image(fig_path.as_posix())
+        else:
+            fig.write_html(fig_path.as_posix())
+
+
 def setup_sequence_cli(name: str):
     # setup logging
     setup_program_logging(name=f"Pulseq sequence build - {name}")
@@ -1734,6 +1856,3 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
         #     sim_grad_moments=True
         # )
         sequence.plot_sampling()
-
-
-
