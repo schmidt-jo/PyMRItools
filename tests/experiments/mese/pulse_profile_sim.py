@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def simulate_pulse_profiles(settings: EmcSimSettings, params: EmcParameters, force_sim: bool = False):
-    path = plib.Path(get_test_result_output_dir("simulate_pulse_profiles_slr_sp3900", mode=ResultMode.EXPERIMENT)).absolute()
+    path = plib.Path(get_test_result_output_dir("simulate_pulse_profiles_gauss_varsli_sp3600", mode=ResultMode.EXPERIMENT)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = True#
 
@@ -54,10 +54,10 @@ def simulate_pulse_profiles(settings: EmcSimSettings, params: EmcParameters, for
     for i, profile in enumerate(profiles):
         if profile["name"] in ["initial", "excitation"]:
             tprofs.append(profile["profile"])
-            names.append(profile["name"])
+            names.append(profile["name"][:4])
         elif "post_acquisition" in profile["name"]:
             n = profile["name"].split("post")[0][:-1]
-            names.append(n)
+            names.append(n[-1])
             tprofs.append(profile["profile"])
     ax = profiles[-1]["profile"]
     tprofs = torch.stack(tprofs)

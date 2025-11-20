@@ -213,6 +213,38 @@ class RF(Event):
         else:
             return 1e-6 * us_value
 
+    def resample_to_new_duration(self, duration_s):
+        # make sure not to round down
+        duration_s = int(np.round(1e6*duration_s))*1e-6
+        # get signal envelope
+        signal = self.signal
+        # get time points
+        t = self.t_array_s
+        # get duration
+        dur = self.t_duration_s
+        # interpolate signal to new time
+        # we do so by stretching the new duration time points to the old duration first
+        dur_tmp_us = int(np.round(duration_s * 1e6))
+        t_tmp = np.linspace(0, dur, dur_tmp_us)
+        # interpolate to this stretched raster
+        signal_interp_tmp = np.interp(t_tmp, xp=t, fp=signal)
+        # calculate raster with assigned duration, we set the signal to be rastered on rf raster of 1 us
+        delta_t = self.system.rf_raster_time
+        # calculate mid - time points of rf
+        t_array_s = self.set_on_raster(np.arange(0, int(duration_s * 1e6)) * 1e-6) + 5e-7
+        # interpolate signal to new time
+        signal_interp = np.interp(
+            t_array_s,
+            xp=t_tmp,
+            fp=signal_interp_tmp
+        )
+        #assign
+        self.signal = signal_interp
+        self.t_array_s = t_array_s
+        self.t_duration_s = duration_s
+        self.bandwidth_hz = self.time_bandwidth / duration_s
+        self._set_central_time()
+
     def to_simple_ns(self):
         return types.SimpleNamespace(
             use=self.pulse_type, dead_time=self.t_dead_time_s, delay=self.t_delay_s,

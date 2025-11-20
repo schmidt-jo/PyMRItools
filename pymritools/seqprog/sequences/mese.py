@@ -26,15 +26,43 @@ class MESE(Sequence2D):
         if self.visualize:
             self.block_excitation.plot(path=self.path_figs, name="excitation")
             self.block_refocus_1.plot(path=self.path_figs, name="refocus_1")
-            self.block_refocus.plot(path=self.path_figs, name="refocus")
+            self.block_refocus.plot(path=self.path_figs, name="refocus_2")
             self.block_acquisition.plot(path=self.path_figs, name="fs_acquisition")
 
         # register slice select pulse grad kernels
         self.kernels_to_save = {
             "excitation": self.block_excitation, "refocus_1": self.block_refocus_1,
-            "refocus": self.block_refocus,
+            "refocus_2": self.block_refocus,
             "acq": self.block_acquisition,
         }
+
+        # experimental feature - variable slice thickness upon slice selection of rf refocusing pulses
+        varsli = False
+        # if we slightly vary the duration of the pulses up to +- 200 us,
+        # we create a variable slice thickness upon refocusing pulses, without changing bandwidth, tbw
+        # or gradient amplitude / balancing
+        # the thickness varies ~ 0.05 mm this way
+        self.block_list_refocusing = [
+            self.block_refocus_1, self.block_refocus,
+        ]
+        for i in range(self.params.etl - 2):
+            block_refocus = self.block_refocus.copy()
+
+            if varsli:
+                # adopt timing
+                dur_reduce_us = self.prng.random_integers(low=20, high=100) * 2     # between 20 and 200 us,
+                # want this to be divisible by 2
+                # need to introduce half the time as delay to center the rf
+                delay_us = dur_reduce_us // 2
+                # assign to new kernel
+                new_dur = block_refocus.rf.t_duration_s - dur_reduce_us * 1e-6
+                block_refocus.rf.resample_to_new_duration(new_dur)
+                block_refocus.rf.t_delay_s += delay_us * 1e-6
+            self.block_list_refocusing.append(block_refocus)
+
+            self.kernels_to_save[f"refocus_{i+3}"] = block_refocus
+            if self.visualize:
+                block_refocus.plot(path=self.path_figs, name=f"refocus_{i+3}")
 
     # __ pypsi __
     # sampling + k traj
@@ -136,7 +164,7 @@ class MESE(Sequence2D):
             # first refocus
             self._set_fa_and_update_slice_offset(rf_idx=0, slice_idx=idx_slice)
             # add block
-            self.sequence.add_block(*self.block_refocus_1.list_events_to_ns())
+            self.sequence.add_block(*self.block_list_refocusing[0].list_events_to_ns())
 
             # delay if necessary
             if self.delay_ref_adc.get_duration() > 1e-7:
@@ -163,7 +191,7 @@ class MESE(Sequence2D):
                 # set phase
                 self._set_phase_grad(echo_idx=echo_idx, phase_idx=idx_pe_n)
                 # add block
-                self.sequence.add_block(*self.block_refocus.list_events_to_ns())
+                self.sequence.add_block(*self.block_list_refocusing[echo_idx].list_events_to_ns())
                 # delay if necessary
                 if self.delay_ref_adc.get_duration() > 1e-7:
                     self.sequence.add_block(self.delay_ref_adc.to_simple_ns())

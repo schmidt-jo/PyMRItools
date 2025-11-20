@@ -52,20 +52,20 @@ class MESE(Simulation):
         self.params.duration_excitation_rephase = (k.grad_slice.get_duration() - k.rf.t_delay_s - k.rf.t_duration_s) * 1e6
 
         # refocus
-        k = kernels["refocus_1"]
-        self.gps_refocus = [
-            GradPulse.prep_from_pulseq_kernel(
-                kernel=k, name="refocus", pulse_number=0, device=self.device, b1s=self.data.b1_vals,
-                flip_angle_rad=self.params.refocus_angle[0] / 180.0 * torch.pi
+        self.gps_refocus = []
+        for i in range(self.params.etl):
+            name = f"refocus_{1+i}"
+            if name in kernels.keys():
+                k = kernels[name]
+            else:
+                # fallback if no different kernels are saved
+                k = kernels["refocus"]
+            self.gps_refocus.append(
+                GradPulse.prep_from_pulseq_kernel(
+                    kernel=k, name=f"refocus_{1+i}", pulse_number=i, device=self.device, b1s=self.data.b1_vals,
+                    flip_angle_rad=self.params.refocus_angle[i] / 180.0 * torch.pi
+                )
             )
-        ]
-        k = kernels["refocus"]
-        self.gps_refocus.extend([
-            GradPulse.prep_from_pulseq_kernel(
-                kernel=k, name="refocus", pulse_number=rfi+1, device=self.device, b1s=self.data.b1_vals,
-                flip_angle_rad=self.params.refocus_angle[rfi+1] / 180.0 * torch.pi
-            ) for rfi in range(self.params.etl-1)
-        ])
         # fill params info
         self.params.duration_refocus = k.rf.t_duration_s * 1e6
         self.params.duration_crush = (k.grad_slice.get_duration() - k.rf.t_duration_s) * 1e6 / 2

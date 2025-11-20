@@ -173,7 +173,7 @@ class Sequence2D(abc.ABC):
         self.use_calibration_seq: bool = False
 
         if mese_sequence:
-            log_module.info(f"multi-echo sequence flag set - ensuring grad raster delays!")
+            log_module.info(f"\t\tmulti-echo sequence flag set - ensuring grad raster delays!")
             adopt_raster_time = 2  * self.system.grad_raster_time
             exc_dur = self.params.excitation_duration * 1e-6
             if not check_raster(exc_dur, adopt_raster_time):
@@ -183,6 +183,7 @@ class Sequence2D(abc.ABC):
             if not check_raster(ref_dur, adopt_raster_time):
                 dur = int(np.ceil(ref_dur / adopt_raster_time)) * adopt_raster_time
                 self.params.refocusing_duration = int(1e6 * dur)
+        self.block_list_refocusing = []
         # set sampling object as var -> allows to register k-space trajectories and sampling pattern
         self.sampling: Sampling = Sampling()
 
@@ -610,10 +611,11 @@ class Sequence2D(abc.ABC):
             fa_rad = self.params.excitation_rf_rad_fa
             phase_rad = self.params.excitation_rf_rad_phase
         else:
-            if rf_idx == 0 and not no_ref_1:
-                sbb = self.block_refocus_1
-            else:
-                sbb = self.block_refocus
+            # if rf_idx == 0 and not no_ref_1:
+            #     sbb = self.block_refocus_1
+            # else:
+            #     sbb = self.block_refocus
+            sbb = self.block_list_refocusing[rf_idx]
             # take flip angle in radiant from options
             fa_rad = self.params.refocusing_rf_rad_fa[rf_idx]
             # take phase as given in options
@@ -646,7 +648,7 @@ class Sequence2D(abc.ABC):
         idx_phase = self.k_pe_indexes[echo_idx, phase_idx]
         # additionally we need the last blocks phase encode for rephasing
         if echo_idx == 0 and not no_ref_1:
-            block = self.block_refocus_1
+            block = self.block_list_refocusing[0]
         elif echo_idx == 0 and excitation:
             block = self.block_excitation
         else:
@@ -658,7 +660,7 @@ class Sequence2D(abc.ABC):
             else:
                 # we need to rephase the previous phase encode
                 last_idx_phase = self.k_pe_indexes[echo_idx - 1, phase_idx]
-            block = self.block_refocus
+            block = self.block_list_refocusing[echo_idx]
             if block.grad_phase.amplitude.shape[0] not in [4, 8]:
                 warning = (f"Assumes trapezoidal phase encode gradients with ramp up, flat and ramp down, "
                            f"but found different gradient shape ({block.grad_phase.amplitude.shape[0]})!"
