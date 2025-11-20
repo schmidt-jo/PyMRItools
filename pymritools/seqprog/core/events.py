@@ -227,12 +227,12 @@ class RF(Event):
         calculate the central point of rf shape - we take this to be the midpoint of the duration,
         as for asymetric, eg. slr pulses, the midpoint would not be considered the peak, no delay!
         """
-        # # Detect the excitation peak; if i is a plateau take its center
-        # rf_max = np.max(np.abs(self.signal))
-        # i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
-        # self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
+        # Detect the excitation peak; if i is a plateau take its center
+        rf_max = np.max(np.abs(self.signal))
+        i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
+        self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
         # self.t_mid = self.t_delay_s + self.t_duration_s / 2
-        self.t_mid = self.t_duration_s / 2 + np.diff(self.t_array_s)[self.t_array_s.shape[0] // 2] / 2
+        # self.t_mid = self.t_duration_s / 2 + np.diff(self.t_array_s)[self.t_array_s.shape[0] // 2] / 2
 
     def plot(self):
         fig = plt.figure()
@@ -356,7 +356,7 @@ class GRAD(Event):
     def make_slice_selective(cls, pulse_bandwidth_hz: float, slice_thickness_m: float, duration_s: float,
                              system: pp.Opts, pre_moment: float = 0.0, re_spoil_moment: float = 0.0,
                              rephase: float = 0.0, t_minimum_re_grad: float = 0.0, adjust_ramp_area: float = 0.0,
-                             excitation: bool = False):
+                             excitation: bool = False, round_grad_amp: bool = False,):
         """
         create slice selective gradient with merged pre and re moments (optional)
         - one can set the minimum time for those symmetrical moments with t_minimum_re_grad to match other grad timings
@@ -374,14 +374,17 @@ class GRAD(Event):
         grad_instance = cls()
         grad_instance.system = system
         duration_s, rf_raster_delay = grad_instance.set_on_raster(duration_s, return_delay=True)
-        # set slice select amplitude - do some rounding,
-        # effectively slightly changes slice thickness but helps in balancing gradient moments
-        amplitude = np.floor((pulse_bandwidth_hz / slice_thickness_m) * 1e-5) * 1e5
-        eff_slice_thickness = pulse_bandwidth_hz / amplitude
-        log_module.info(f"\t\t-slight gradient amplitude adjustment, "
-                        f"effective slice thickness: {eff_slice_thickness*1e3:.5f} mm "
-                        f"(was : {slice_thickness_m*1e3:.5f} mm)")
 
+        # set slice select amplitude - do some rounding,
+        if round_grad_amp:
+            # effectively slightly changes slice thickness but helps in balancing gradient moments
+            amplitude = np.floor((pulse_bandwidth_hz / slice_thickness_m) * 1e-4) * 1e4
+            eff_slice_thickness = pulse_bandwidth_hz / amplitude
+            log_module.info(f"\t\t-slight gradient amplitude adjustment, "
+                            f"effective slice thickness: {eff_slice_thickness*1e3:.5f} mm "
+                            f"(was : {slice_thickness_m*1e3:.5f} mm)")
+        else:
+            amplitude = pulse_bandwidth_hz / slice_thickness_m
         amps = [0.0]
         times = [0.0]
         areas = []
