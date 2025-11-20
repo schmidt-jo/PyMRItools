@@ -84,14 +84,15 @@ class MESE(Sequence2D):
             log_module.error(f"refocus to adc timing different from adc to refocus. Systematic error in seq. creation")
         t_half_esp = np.round(self.params.esp * 1e-3 / 2 * 1e12) / 1e12
         # add delays
-        if t_exci_ref < t_half_esp:
+        if t_exci_ref < t_half_esp - 1e-8:
             delay = t_half_esp - t_exci_ref
             self.delay_exci_ref1 = DELAY.make_delay(delay, system=self.system)
             if not self.delay_exci_ref1.check_on_block_raster():
                 err = f"exci ref delay not on block raster"
                 log_module.error(err)
-        else:
-            self.delay_ref_adc = DELAY.make_delay(t_half_esp - t_ref_1_adc, system=self.system)
+        if t_ref_1_adc < t_half_esp - 1e-8:
+            delay = t_half_esp - t_ref_1_adc
+            self.delay_ref_adc = DELAY.make_delay(delay, system=self.system)
             if not self.delay_ref_adc.check_on_block_raster():
                 err = f"adc ref delay not on block raster"
                 log_module.error(err)
@@ -143,6 +144,8 @@ class MESE(Sequence2D):
                 self.sequence.add_block(self.delay_ref_adc.to_simple_ns())
 
             # adc
+            # make adc follow rf phase
+            self.block_acquisition.adc.phase_offset_rad = self.block_refocus_1.rf.phase_rad
             self.sequence.add_block(*aq_block.list_events_to_ns())
             if not no_adc:
                 # write sampling pattern
@@ -169,6 +172,7 @@ class MESE(Sequence2D):
                     self.sequence.add_block(self.delay_ref_adc.to_simple_ns())
 
                 # adc
+                self.block_acquisition.adc.phase_offset_rad = self.block_refocus.rf.phase_rad
                 self.sequence.add_block(*aq_block.list_events_to_ns())
                 if not no_adc:
                     # write sampling pattern
@@ -183,6 +187,7 @@ class MESE(Sequence2D):
                     self.sequence.add_block(self.delay_ref_adc.to_simple_ns())
             # spoil end
             self._set_end_spoil_phase_grad()
+            self.block_acquisition.adc.phase_offset_rad = 0.0
             self.sequence.add_block(*self.block_spoil_end.list_events_to_ns())
             # insert slice delay
             self.sequence.add_block(self.delay_slice.to_simple_ns())
