@@ -267,6 +267,8 @@ class Sequence2D(abc.ABC):
         # use random state for reproducibility of eg sampling patterns
         # (for that matter any random or semi random sampling used)
         self.prng = np.random.RandomState(0)
+        # inject random RF phase
+        # self.params.refocusing_rf_phase = (self.prng.random(size=self.params.refocusing_rf_rad_phase.shape[0]) * 360.0).tolist()
 
         # to check interface set
         self.sampling_pattern_set: bool = False

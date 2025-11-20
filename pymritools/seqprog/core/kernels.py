@@ -133,29 +133,16 @@ class Kernel:
                              spoiling_moment: float = 0.0, adjust_ramp_area: float = 0.0):
         # Excitation
         log_module.info("setup excitation")
-        if pulse_file:
-            log_module.info(f"rf -- loading rf from file: {pulse_file}")
-            rf = events.RF.load_from_pypsi_pulse(
-                fname=pulse_file,
-                flip_angle_rad=params.excitation_rf_rad_fa,
-                phase_rad=params.excitation_rf_rad_phase,
-                delay_s=0, duration_s=params.excitation_duration * 1e-6,
-                system=system, pulse_type='excitation'
-            )
-        else:
-            log_module.info(f"rf -- build gauss pulse")
-            time_bw_prod = params.excitation_rf_time_bw_prod
-            rf = events.RF.make_gauss_pulse(
-                flip_angle_rad=params.excitation_rf_rad_fa,
-                phase_rad=params.excitation_rf_rad_phase,
-                pulse_type="excitation",
-                delay_s=0.0,
-                duration_s=params.excitation_duration * 1e-6,
-                time_bw_prod=time_bw_prod,
-                freq_offset_hz=0.0, phase_offset_rad=0.0,
-                system=system,
-                # apodization=0.5
-            )
+
+        rf = cls._get_pulse(
+            pulse_file=pulse_file, system=system,
+            duration_s=params.excitation_duration * 1e-6,
+            flip_angle_rad=params.excitation_rf_rad_fa,
+            phase_rad=params.excitation_rf_rad_phase,
+            time_bw_prod=params.excitation_rf_time_bw_prod,
+            rf_type='excitation', apodization=0.5
+        )
+
         # build slice selective gradient
         # stretch re-spoil moment (usually there is time between the excitation and first refocus and
         # esp is driven by refocusing / adc combination), we can relax gradient stress by increasing re time of excitation
@@ -165,7 +152,7 @@ class Kernel:
         if np.abs(spoiling_moment) > 3001:
             t_re = 0.86e-3
         if np.abs(spoiling_moment) > 3201:
-            t_re = 1.2e-3
+            t_re = 1.06e-3
         grad_slice, grad_slice_delay, _ = events.GRAD.make_slice_selective(
             pulse_bandwidth_hz=-rf.bandwidth_hz,
             slice_thickness_m=params.resolution_slice_thickness * 1e-3,
@@ -176,7 +163,8 @@ class Kernel:
             rephase=params.excitation_grad_rephase_factor,
             adjust_ramp_area=adjust_ramp_area,
             t_minimum_re_grad=t_re,
-            excitation=True
+            excitation=True,
+            round_grad_amp=True
         )
         # adjust start of rf
         rf.t_delay_s = grad_slice_delay
@@ -192,7 +180,7 @@ class Kernel:
     def refocus_slice_sel_spoil(cls, params: PulseqParameters2D, system: Opts,
                                 pulse_file: str = "",
                                 pulse_num: int = 0, duration_spoiler: float = 0.0, return_pe_time: bool = False,
-                                read_gradient_to_prephase: float = None):
+                                read_gradient_to_prephase: float = None, round_grad_amps: bool = True):
         if read_gradient_to_prephase is None:
             # calculate read gradient in order to use correct area (corrected for ramps)
             t_adc_grad_flat = int(
@@ -228,30 +216,15 @@ class Kernel:
 
         duration_min = np.max([duration_phase_grad, duration_pre_read, duration_spoiler])
 
-        if pulse_file:
-            log_module.info(f"rf -- loading pulse from file {pulse_file}")
-            rf = events.RF.load_from_pypsi_pulse(
-                fname=pulse_file, system=system,
-                duration_s=params.refocusing_duration * 1e-6,
-                flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
-                phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
-                pulse_type='refocusing'
-            )
-        else:
-            # log_module.info(f"rf -- build gauss pulse")
-            # rf = events.RF.make_gauss_pulse(log_module.info(f"rf -- build gauss pulse")
-            log_module.info(f"rf -- build gauss pulse")
-            rf = events.RF.make_gauss_pulse(
-                flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
-                phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
-                pulse_type="refocusing",
-                delay_s=0.0,
-                duration_s=params.refocusing_duration * 1e-6,
-                time_bw_prod=params.excitation_rf_time_bw_prod,
-                freq_offset_hz=0.0, phase_offset_rad=0.0,
-                system=system,
-                # apodization=0.5,
-            )
+        rf = cls._get_pulse(
+            pulse_file=pulse_file, system=system,
+            duration_s=params.refocusing_duration * 1e-6,
+            flip_angle_rad=float(params.refocusing_rf_rad_fa[pulse_num]),
+            phase_rad=float(params.refocusing_rf_rad_phase[pulse_num]),
+            time_bw_prod=params.excitation_rf_time_bw_prod,
+            rf_type='refocusing', apodization=0.5
+        )
+
         if pulse_num == 0:
             pre_moment = 0.0
         else:
@@ -263,32 +236,34 @@ class Kernel:
             system=system,
             pre_moment=-pre_moment,
             re_spoil_moment=-params.grad_moment_slice_spoiling,
-            t_minimum_re_grad=duration_min
+            t_minimum_re_grad=duration_min,
+            round_grad_amp=True
         )
         # for all slice select grad amplitudes we do some rounding
         # we want to set reproducible amplitudes and want to make gradient balancing easier,
         # pulseq does compress and round to 6 decimals upon .seq creation.
         # to create stable amplitudes we try to round here.
         # This effectively comes down to changing the slice thickness slightly, which is acceptable
-        grad_slice.amplitude = np.floor(grad_slice.amplitude * 1e-3) * 1e3
-        # for refocusing pulses this does two things:
-        #       slightly adjust spoiler - acceptable
-        #       slightly change slice thickness - acceptable
-        # for the excitation pulse we are using the areas of the spoiling and ramp ups to exactly balance the gradients
+        if round_grad_amps:
+            grad_slice.amplitude = np.floor(grad_slice.amplitude * 1e-3) * 1e3
+            # for refocusing pulses this does two things:
+            #       slightly adjust spoiler - acceptable
+            #       slightly change slice thickness - acceptable
+            # for the excitation pulse we are using the areas of the spoiling and ramp ups to exactly balance the gradients
 
-        # need to recalculate the areas
-        if grad_slice.amplitude.shape[0] == 8:
-            grad_slice.area[0] = np.trapezoid(x=grad_slice.t_array_s[:4], y=grad_slice.amplitude[:4])
-            grad_slice.area[1] = np.trapezoid(x=grad_slice.t_array_s[3:5], y=grad_slice.amplitude[3:5])
-            grad_slice.area[2] = np.trapezoid(x=grad_slice.t_array_s[-4:], y=grad_slice.amplitude[-4:])
-        elif grad_slice.amplitude.shape[0] == 6:
-            grad_slice.area[0] = np.trapezoid(x=grad_slice.t_array_s[:2], y=grad_slice.amplitude[:2])
-            grad_slice.area[1] = np.trapezoid(x=grad_slice.t_array_s[1:3], y=grad_slice.amplitude[1:3])
-            grad_slice.area[2] = np.trapezoid(x=grad_slice.t_array_s[-4:], y=grad_slice.amplitude[-4:])
-        else:
-            warning = (f"Could make out the shape of slice select gradient event. "
-                       f"Check slice select area calculations!")
-            log_module.warning(warning)
+            # need to recalculate the areas
+            if grad_slice.amplitude.shape[0] == 8:
+                grad_slice.area[0] = np.trapezoid(x=grad_slice.t_array_s[:4], y=grad_slice.amplitude[:4])
+                grad_slice.area[1] = np.trapezoid(x=grad_slice.t_array_s[3:5], y=grad_slice.amplitude[3:5])
+                grad_slice.area[2] = np.trapezoid(x=grad_slice.t_array_s[-4:], y=grad_slice.amplitude[-4:])
+            elif grad_slice.amplitude.shape[0] == 6:
+                grad_slice.area[0] = np.trapezoid(x=grad_slice.t_array_s[:2], y=grad_slice.amplitude[:2])
+                grad_slice.area[1] = np.trapezoid(x=grad_slice.t_array_s[1:3], y=grad_slice.amplitude[1:3])
+                grad_slice.area[2] = np.trapezoid(x=grad_slice.t_array_s[-4:], y=grad_slice.amplitude[-4:])
+            else:
+                warning = (f"Couldn't make out the shape of slice select gradient event. "
+                           f"Check slice select area calculations!")
+                log_module.warning(warning)
 
         if duration_min < grad_slice_spoil_re_time:
             log_module.info(f"adjusting phase encode gradient durations (got time to spare)")
@@ -339,6 +314,48 @@ class Kernel:
             return _instance, grad_phase.set_on_raster(duration_phase_grad)
         else:
             return _instance
+
+    @staticmethod
+    def _get_pulse(
+            pulse_file: str, duration_s: float, flip_angle_rad, phase_rad: float, rf_type: str, time_bw_prod: float,
+            system: Opts, apodization: float = 0.5):
+        pulse_file = plib.Path(pulse_file)
+        if pulse_file.is_file():
+            log_module.info(f"rf -- loading pulse from file {pulse_file}")
+            rf = events.RF.load_from_pypsi_pulse(
+                fname=pulse_file.as_posix(), system=system,
+                duration_s=duration_s,
+                flip_angle_rad=flip_angle_rad,
+                phase_rad=phase_rad,
+                pulse_type=rf_type
+            )
+        else:
+            if "sinc" in pulse_file.stem:
+                log_module.info(f"rf -- build sinc pulse")
+                rf = events.RF.make_sinc_pulse(
+                    flip_angle_rad=flip_angle_rad,
+                    phase_rad=phase_rad,
+                    pulse_type=rf_type,
+                    delay_s=0.0,
+                    duration_s=duration_s,
+                    time_bw_prod=time_bw_prod,
+                    freq_offset_hz=0.0, phase_offset_rad=0.0,
+                    system=system,
+                    apodization=apodization,
+                )
+            else:
+                log_module.info(f"rf -- build gauss pulse")
+                rf = events.RF.make_gauss_pulse(
+                    flip_angle_rad=flip_angle_rad,
+                    phase_rad=phase_rad,
+                    pulse_type=rf_type,
+                    delay_s=0.0,
+                    duration_s=duration_s,
+                    time_bw_prod=time_bw_prod,
+                    freq_offset_hz=0.0, phase_offset_rad=0.0,
+                    system=system,
+                )
+        return rf
 
     @classmethod
     def acquisition_fs(cls, params: PulseqParameters2D, system: Opts,
