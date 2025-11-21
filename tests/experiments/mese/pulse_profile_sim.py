@@ -17,10 +17,18 @@ from tests.utils import get_test_result_output_dir, ResultMode
 logger = logging.getLogger(__name__)
 
 
-def simulate_pulse_profiles(settings: EmcSimSettings, params: EmcParameters, force_sim: bool = False):
-    path = plib.Path(get_test_result_output_dir("simulate_pulse_profiles_gauss_varsli_sp3600", mode=ResultMode.EXPERIMENT)).absolute()
+def simulate_pulse_profiles(settings: EmcSimSettings, params: EmcParameters, force_sim: bool = False,
+                            path: plib.Path = None):
+    if path is None:
+        path = plib.Path(
+            get_test_result_output_dir(
+                "simulate_pulse_profiles_slr_sp3300_msl_tb2p8", mode=ResultMode.EXPERIMENT
+            )
+        ).absolute()
+    else:
+        path = plib.Path(path)
     settings.out_path = path.as_posix()
-    settings.visualize = True#
+    settings.visualize = True
 
     fn = path.joinpath("pulse_profiles").with_suffix(".pkl")
     if not fn.is_file() or force_sim:
