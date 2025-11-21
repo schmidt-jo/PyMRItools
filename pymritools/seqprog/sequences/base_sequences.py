@@ -19,8 +19,8 @@ from pymritools.config import setup_program_logging, setup_parser
 from pypulseq import Opts, Sequence
 
 from pymritools.seqprog.core.utils import check_raster
-from tests.experiments.mese.pulse_profile_sim import simulate_pulse_profiles
 from pymritools.config.emc import EmcSimSettings, EmcParameters
+from pymritools.simulation.emc.sequence.mese import simulate_pulse_profiles
 
 log_module = logging.getLogger(__name__)
 
@@ -397,14 +397,14 @@ class Sequence2D(abc.ABC):
         path = plib.Path(self.config.out_path).absolute()
         if not name:
             name = f"seq"
-        voxel_size = ""
-        for k in range(3):
-            voxel_size += f"-{self.params.get_voxel_size()[k]:.2f}"
-        name = (f"{name}_v{self.config.version}_"
-                f"acc-{self.params.acceleration_factor:.1f}_"
-                f"res{voxel_size}").replace(".", "p")
-        if self.params.rf_adapt_z:
-            name = f"{name}_rf-ad-z"
+        # voxel_size = ""
+        # for k in range(3):
+        #     voxel_size += f"-{self.params.get_voxel_size()[k]:.2f}"
+        # name = (f"{name}_v{self.config.version}_"
+        #         f"acc-{self.params.acceleration_factor:.1f}_"
+        #         f"res{voxel_size}").replace(".", "p")
+        # if self.params.rf_adapt_z:
+        #     name = f"{name}_rf-ad-z"
         # write sequence file
         save_file = path.joinpath(f"{name}_sequence").with_suffix(".seq")
         log_module.info(f"writing file: {save_file.as_posix()}")
@@ -1801,6 +1801,8 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     """
     Function to build the sequence and perform all necessary writing steps
     """
+    # setup name
+
     # build sequence
     sequence.build()
     # get sequence object
@@ -1873,7 +1875,7 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
             use_gpu=config.use_gpu, gpu_device=config.gpu_device,
             visualize=config.visualize, debug=config.debug, slurm=config.slurm,
             emc_params_file="dummystring", kernel_file=kernel_file.as_posix(),
-            te_file=te_file.as_posix()
+            te_file=te_file.as_posix(), pulse_file=""
         )
         emc_params = EmcParameters(
             etl = sequence.params.etl, esp=sequence.params.esp, bw=sequence.params.bandwidth,

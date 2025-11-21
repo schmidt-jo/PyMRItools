@@ -150,9 +150,9 @@ class Kernel:
         if np.abs(spoiling_moment) > 2799:
             t_re = 0.7e-3
         if np.abs(spoiling_moment) > 3001:
-            t_re = 0.84e-3
+            t_re = 0.8e-3
         if np.abs(spoiling_moment) > 3201:
-            t_re = 0.96e-3
+            t_re = 0.9e-3
         grad_slice, grad_slice_delay, _ = events.GRAD.make_slice_selective(
             pulse_bandwidth_hz=-rf.bandwidth_hz,
             slice_thickness_m=params.resolution_slice_thickness * 1e-3,
