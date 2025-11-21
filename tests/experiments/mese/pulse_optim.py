@@ -62,9 +62,9 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
     apo_window = apodisation_window(
         n_samples=torch.count_nonzero(pulse_sim.grad_pulse.data_pulse_y.squeeze()).to(torch.int).item(),
         duration_s=settings.pulse_duration*1e-6, apodisation=0.2
-    )
+    ).to(pulse_sim.grad_pulse.data_pulse_y.device)
 
-    pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.squeeze()[pulse_mask].clone() * apo_window.to(pulse_sim.grad_pulse.data_pulse_y.device)
+    pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.squeeze()[pulse_mask].clone()
 
     # pulse_x = pulse_x_init.clone().requires_grad_(True)
     pulse_y = pulse_y_init.clone().requires_grad_(True)
@@ -90,7 +90,8 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         # px = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_x)
         # px[0, pulse_mask] = pulse_x
         py = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_y)
-        py[0, pulse_mask] = pulse_y
+        py[0, pulse_mask] = pulse_y * apo_window
+        # py[0, pulse_mask] = pulse_y
         data = functions.propagate_gradient_pulse_relax(
             pulse_x=pulse_x_init, pulse_y=py,
             grad=pulse_sim.grad_pulse.data_grad, sim_data=pulse_sim.data,
@@ -110,7 +111,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         loss_sar = torch.sum(torch.abs(pulse_y**2)) * 1e7
         losses_sar.append(loss_sar.item())
 
-        loss = loss_profile + 0.67 * loss_sar
+        loss = loss_profile + 1.0 * loss_sar
         losses.append(loss.item())
 
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
@@ -120,7 +121,9 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
             pulse_y -= lr[idx] * pulse_y.grad
             # grad -= lr[idx] * grad.grad
 
-            pulse_iter.append([pulse_x_init.clone().detach(), py.clone().detach()])
+            ppy = py.clone().detach()
+            ppy[0, pulse_mask] *= apo_window
+            pulse_iter.append([pulse_x_init.clone().detach(), ppy])
             # grad_iter.append(grad)
 
         # pulse_x.grad.zero_()
@@ -139,8 +142,8 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="excitation",
-        duration_in_us=2300,
-        time_bandwidth=2.5,
+        duration_in_us=2800,
+        time_bandwidth=2.8,
         num_samples=pulse_y_init.shape[0],
         signal=pulse_y.detach().cpu().numpy()
     )
@@ -159,7 +162,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
     # we set up the pulse simulation object
     pulse_sim = Pulse(settings=settings)
 
-    slice_thickness = 0.00056        # [m]
+    slice_thickness = 0.0007        # [m]
 
     target_mag_xy = torch.zeros((pulse_sim.data.sample_axis.shape[0]), device=pulse_sim.device)
     target_ph_xy = torch.zeros((pulse_sim.data.sample_axis.shape[0]), device=pulse_sim.device)
@@ -182,10 +185,10 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
     # use some apodiasaion
     apo_window = apodisation_window(
         n_samples=torch.count_nonzero(pulse_mask).to(torch.int).item(),
-        duration_s=3200 * 1e-6, apodisation=0.4
-    )
+        duration_s=3200 * 1e-6, apodisation=0.2
+    ).to(pulse_sim.grad_pulse.data_pulse_x.device)
     # pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.clone()
-    pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.squeeze()[pulse_mask].clone()* apo_window.to(pulse_sim.grad_pulse_ref.data_pulse_x.device)
+    pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.squeeze()[pulse_mask].clone()
     pulse_y_init = pulse_sim.grad_pulse_ref.data_pulse_y.clone()
     # pulse_y_init = pulse_sim.grad_pulse_ref.data_pulse_y.squeeze()[pulse_mask].clone()
 
@@ -218,13 +221,14 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         )
         # delay
         relax_matrix = functions.matrix_propagation_relaxation_multidim(
-            dt_s=0.0008, sim_data=pulse_sim.data
+            dt_s=0.00006, sim_data=pulse_sim.data
         )
         data = functions.propagate_matrix_mag_vector(relax_matrix, sim_data=data)
 
         # refocusing pulse
         px = torch.zeros_like(pulse_sim.grad_pulse_ref.data_pulse_x)
-        px[0, pulse_mask] = pulse_x
+        px[0, pulse_mask] = pulse_x * apo_window
+        # px[0, pulse_mask] = pulse_x
         # py = torch.zeros_like(pulse_sim.grad_pulse_ref.data_pulse_y)
         # py[0, pulse_mask] = pulse_y
         data = functions.propagate_gradient_pulse_relax(
@@ -234,7 +238,11 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         )
 
         # delay
-        data = functions.propagate_matrix_mag_vector(relax_matrix, sim_data=data)
+        # delay
+        relax_matrix_acq = functions.matrix_propagation_relaxation_multidim(
+            dt_s=0.00112, sim_data=pulse_sim.data
+        )
+        data = functions.propagate_matrix_mag_vector(relax_matrix_acq, sim_data=data)
         mag_refocus = torch.squeeze(data.magnetization_propagation)[:, :3]
         m_cplx = mag_refocus[:, 0] + 1j * mag_refocus[:, 1]
         m_xy = torch.abs(m_cplx)
@@ -259,6 +267,9 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
             # pulse_y -= lr[idx] * pulse_y.grad
             # grad -= lr[idx] * grad.grad
 
+            px = torch.zeros_like(pulse_sim.grad_pulse_ref.data_pulse_x)
+            px[0, pulse_mask] = pulse_x * apo_window
+            # px[0, pulse_mask] = pulse_x
             pulse_iter.append([px.clone().detach(), pulse_y_init.clone().detach()])
             # grad_iter.append(grad)
 
@@ -281,8 +292,8 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="refocusing",
-        duration_in_us=2800,
-        time_bandwidth=2.5,
+        duration_in_us=3500,
+        time_bandwidth=2.8,
         num_samples=pulse_x_init.shape[0],
         signal=pulse_x.detach().cpu().numpy()
     )
@@ -623,10 +634,12 @@ if __name__ == '__main__':
     settings = PulseSimulationSettings.from_cli(args=args.settings)
     # set some additionals
     settings.visualize = False
-    settings.pulse_duration = 2500.0
-    settings.sample_length = 0.010
+    settings.pulse_duration = 2800.0
+    settings.sample_length = 0.005
     settings.kernel_file = plib.Path(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/00_seq/debug/20251118_mese_rel25-32-cfa-rf-slr-tb2p5_rgs0p8_a3p5_sp3000_tr6p2_sl50_g65/mese_v1p0_acc-3p5_res-0p90-0p90-0p70_kernels.pkl"
+        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/00_seq/debug/"
+        "20251120_mese_rel28-35-cfa-rf-slr-optim-tb2p8_rgs0p8_a3p5_sp3300_pre1000_tr6p5_var-msl50_g65/"
+        "mese_v1p0_acc-3p5_res-0p90-0p90-0p65_kernels.pkl"
     ).as_posix()
     settings.display()
 
