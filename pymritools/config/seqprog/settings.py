@@ -35,6 +35,10 @@ class Settings(BaseClass):
         alias="-r", default=False,
         help="Set to True to generate a report of the sequence. Usually slows down .seq generation significantly."
     )
+    simulate_pulse_profiles: bool = field(
+        alias="-spp", default=True,
+        help="Use event kernels to simulate the pulse profiles for one pulse train."
+    )
 
 
 @dataclass
