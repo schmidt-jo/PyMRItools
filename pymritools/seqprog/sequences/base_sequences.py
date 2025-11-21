@@ -19,6 +19,8 @@ from pymritools.config import setup_program_logging, setup_parser
 from pypulseq import Opts, Sequence
 
 from pymritools.seqprog.core.utils import check_raster
+from tests.experiments.mese.pulse_profile_sim import simulate_pulse_profiles
+from pymritools.config.emc import EmcSimSettings, EmcParameters
 
 log_module = logging.getLogger(__name__)
 
@@ -1860,3 +1862,24 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
         #     sim_grad_moments=True
         # )
         sequence.plot_sampling()
+
+    if config.simulate_pulse_profiles:
+        log_module.info(f"__Simulate pulse profiles__")
+        path = plib.Path(config.out_path).absolute()
+        kernel_file = path.joinpath(f"{name}_kernels").with_suffix(".pkl")
+        te_file = path.joinpath(f"{name}_te").with_suffix(".json")
+        emc_settings = EmcSimSettings(
+            out_path=path.as_posix(),
+            use_gpu=config.use_gpu, gpu_device=config.gpu_device,
+            visualize=config.visualize, debug=config.debug, slurm=config.slurm,
+            emc_params_file="dummystring", kernel_file=kernel_file.as_posix(),
+            te_file=te_file.as_posix()
+        )
+        emc_params = EmcParameters(
+            etl = sequence.params.etl, esp=sequence.params.esp, bw=sequence.params.bandwidth,
+            excitation_angle=sequence.params.excitation_rf_fa, excitation_phase=sequence.params.excitation_rf_phase,
+            duration_excitation=sequence.params.excitation_duration,
+            refocus_angle=sequence.params.refocusing_rf_fa, refocus_phase=sequence.params.refocusing_rf_phase,
+            duration_refocus=sequence.params.refocusing_duration
+        )
+        simulate_pulse_profiles(settings=emc_settings, params=emc_params, path=path)
