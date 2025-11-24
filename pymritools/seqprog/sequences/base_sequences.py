@@ -1870,9 +1870,10 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
         path = plib.Path(config.out_path).absolute()
         kernel_file = path.joinpath(f"{name}_kernels").with_suffix(".pkl")
         te_file = path.joinpath(f"{name}_te").with_suffix(".json")
+        # try using GPU (not done for pulseq)
         emc_settings = EmcSimSettings(
             out_path=path.as_posix(),
-            use_gpu=config.use_gpu, gpu_device=config.gpu_device,
+            use_gpu=True, gpu_device=config.gpu_device,
             visualize=config.visualize, debug=config.debug, slurm=config.slurm,
             emc_params_file="dummystring", kernel_file=kernel_file.as_posix(),
             te_file=te_file.as_posix(), pulse_file=""
