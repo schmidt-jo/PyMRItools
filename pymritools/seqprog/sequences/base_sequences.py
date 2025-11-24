@@ -1882,6 +1882,6 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
             excitation_angle=sequence.params.excitation_rf_fa, excitation_phase=sequence.params.excitation_rf_phase,
             duration_excitation=sequence.params.excitation_duration,
             refocus_angle=sequence.params.refocusing_rf_fa, refocus_phase=sequence.params.refocusing_rf_phase,
-            duration_refocus=sequence.params.refocusing_duration
+            duration_refocus=sequence.params.refocusing_duration, length_z=0.002
         )
         simulate_pulse_profiles(settings=emc_settings, params=emc_params, path=path)
