@@ -147,8 +147,6 @@ class Kernel:
         # stretch re-spoil moment (usually there is time between the excitation and first refocus and
         # esp is driven by refocusing / adc combination), we can relax gradient stress by increasing re time of excitation
         t_re = 0.0
-        if np.abs(spoiling_moment) > 2799:
-            t_re = 0.7e-3
         if np.abs(spoiling_moment) > 3001:
             t_re = 0.8e-3
         if np.abs(spoiling_moment) > 3201:
