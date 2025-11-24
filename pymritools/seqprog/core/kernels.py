@@ -255,6 +255,16 @@ class Kernel:
                 grad_slice.area[1] = np.trapezoid(x=grad_slice.t_array_s[3:5], y=grad_slice.amplitude[3:5])
                 grad_slice.area[2] = np.trapezoid(x=grad_slice.t_array_s[-4:], y=grad_slice.amplitude[-4:])
             elif grad_slice.amplitude.shape[0] == 6:
+                if pre_moment > 0:
+                    # This means we have a slice selective gradient with shape of 6 but spoiling moment before and after.
+                    # Thus spoiling is done with two areas, ramp up and down.
+                    # The rest of the sequence creation relies on spoiling to need 3 areas, up - flat - down,
+                    # and the shape to be 8. Eg. for setting of readout and phase encode gradients.
+                    # can be achieved by lowering max system amplitude!
+                    msg = (f"Sequence creation assumes slice spoiling to be achieved with a flat plateau in the spoiling gradient."
+                               f" Possibly violated! Check creation scheme as this affects a number of settings!")
+                    log_module.error(msg)
+                    raise ValueError(msg)
                 grad_slice.area[0] = np.trapezoid(x=grad_slice.t_array_s[:2], y=grad_slice.amplitude[:2])
                 grad_slice.area[1] = np.trapezoid(x=grad_slice.t_array_s[1:3], y=grad_slice.amplitude[1:3])
                 grad_slice.area[2] = np.trapezoid(x=grad_slice.t_array_s[-4:], y=grad_slice.amplitude[-4:])
