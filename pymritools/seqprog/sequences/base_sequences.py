@@ -1333,7 +1333,7 @@ def simulate_grad_moments(df_rf_grads: pl.DataFrame):
             else:
                 # cummulate gradient
                 grad_moments[label]["moment"].append(
-                    grad_moments[label]["moment"][-1] + np.trapz(
+                    grad_moments[label]["moment"][-1] + np.trapezoid(
                         x=[grad_moments[label]["last_time"], time],
                         y=[grad_moments[label]["last_amp"], data]
                     ) * 1e-6
