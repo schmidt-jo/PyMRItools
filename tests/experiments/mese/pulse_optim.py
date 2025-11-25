@@ -11,7 +11,6 @@ import plotly.colors as plc
 import plotly.subplots as psub
 
 from pymritools.config.rf import RFPulse
-from pymritools.seqprog.core.events import RF
 from pymritools.simulation.emc.sequence.pulse import PulseSimulationSettings, Pulse
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.simulation.emc.core import functions
@@ -21,10 +20,21 @@ from tests.utils import get_test_result_output_dir, ResultMode
 logger = logging.getLogger(__name__)
 
 
-def apodisation_window(n_samples: int, duration_s: float, apodisation: float = 0.2):
+def apodisation_window_pulseq(n_samples: int, duration_s: float, apodisation: float = 0.2):
     t = (torch.arange(1, n_samples + 1) - 0.5) * duration_s / n_samples
     tt = t - (duration_s * 0.5)
     window = 1 - apodisation + apodisation * torch.cos(2 * np.pi * tt / duration_s)
+    return window
+
+def apodisation_window_hann_like(n_samples: int, duration_s: float, apodisation: float = 0.2):
+    t = (torch.arange(1, n_samples + 1) - 0.5) * duration_s / n_samples
+    tt = t - (duration_s * 0.5)
+    # Normalize tt to [-1, 1] range
+    tt_norm = 2 * tt / duration_s
+    # Raised cosine window: (1 + cos(pi * tt_norm)) / 2 when apodisation is applied
+    # At apodisation=0: window = 1 (flat)
+    # At apodisation=1: window = (1 + cos(pi * tt_norm)) / 2 (full raised cosine)
+    window = 1 - apodisation + apodisation * (1 + torch.cos(np.pi * tt_norm)) / 2
     return window
 
 def optimise_excitation_pulse(settings: PulseSimulationSettings):
@@ -59,9 +69,9 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
     # pulse_x_init = pulse_sim.grad_pulse.data_pulse_x.squeeze()[pulse_mask].clone()
     # pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.clone()
     # use some apodisation
-    apo_window = apodisation_window(
+    apo_window = apodisation_window_hann_like(
         n_samples=torch.count_nonzero(pulse_sim.grad_pulse.data_pulse_y.squeeze()).to(torch.int).item(),
-        duration_s=settings.pulse_duration*1e-6, apodisation=0.2
+        duration_s=settings.pulse_duration*1e-6, apodisation=0.3
     ).to(pulse_sim.grad_pulse.data_pulse_y.device)
 
     pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.squeeze()[pulse_mask].clone()
@@ -183,9 +193,9 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
     # grad = grad_init.clone().requires_grad_(True)
     # we need to adjust the simulation itself to optimise
     # use some apodiasaion
-    apo_window = apodisation_window(
+    apo_window = apodisation_window_hann_like(
         n_samples=torch.count_nonzero(pulse_mask).to(torch.int).item(),
-        duration_s=3200 * 1e-6, apodisation=0.2
+        duration_s=3200 * 1e-6, apodisation=0.3
     ).to(pulse_sim.grad_pulse.data_pulse_x.device)
     # pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.clone()
     pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.squeeze()[pulse_mask].clone()
