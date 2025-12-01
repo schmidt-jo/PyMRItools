@@ -147,10 +147,10 @@ class Kernel:
         # stretch re-spoil moment (usually there is time between the excitation and first refocus and
         # esp is driven by refocusing / adc combination), we can relax gradient stress by increasing re time of excitation
         t_re = 0.0
-        if np.abs(spoiling_moment) > 3001:
-            t_re = 0.8e-3
-        if np.abs(spoiling_moment) > 3201:
-            t_re = 0.9e-3
+        # if np.abs(spoiling_moment) > 3001:
+        #    t_re = 0.8e-3
+        # if np.abs(spoiling_moment) > 3201:
+        #     t_re = 0.9e-3
         grad_slice, grad_slice_delay, _ = events.GRAD.make_slice_selective(
             pulse_bandwidth_hz=-rf.bandwidth_hz,
             slice_thickness_m=params.resolution_slice_thickness * 1e-3,
