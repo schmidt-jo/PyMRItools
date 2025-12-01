@@ -56,7 +56,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
     # additionally introduce some target weighting towards the center
     target_m_weighting = torch.exp(-pulse_sim.data.sample_axis**2 / 0.005**2)
     # we want to emphasise rippling reduction
-    target_m_weighting *= 2 / target_m_weighting.max()
+    target_m_weighting *= 3 / target_m_weighting.max()
     target_m_weighting[target_mag_xy > 0.5] = 1
 
     # assume we have a constant given gradient function
@@ -121,7 +121,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         loss_sar = torch.sum(torch.abs(pulse_y**2)) * 1e7
         losses_sar.append(loss_sar.item())
 
-        loss = loss_profile + 1.0 * loss_sar
+        loss = loss_profile + 1.5 * loss_sar
         losses.append(loss.item())
 
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
@@ -152,8 +152,8 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="excitation",
-        duration_in_us=2800,
-        time_bandwidth=2.8,
+        duration_in_us=2600,
+        time_bandwidth=2.6,
         num_samples=pulse_y_init.shape[0],
         signal=pulse_y.detach().cpu().numpy()
     )
@@ -183,7 +183,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
     # additionally introduce some target weighting towards the center
     target_m_weighting = torch.exp(-pulse_sim.data.sample_axis**2 / 0.005**2)
     # we want to emphasise rippling reduction
-    target_m_weighting *= 1.3 / target_m_weighting.max()
+    target_m_weighting *= 3 / target_m_weighting.max()
     target_m_weighting[target_mag_xy > 0.5] = 1
 
     # assume we have a constant given gradient function
@@ -250,7 +250,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         # delay
         # delay
         relax_matrix_acq = functions.matrix_propagation_relaxation_multidim(
-            dt_s=0.00112, sim_data=pulse_sim.data
+            dt_s=0.000001, sim_data=pulse_sim.data
         )
         data = functions.propagate_matrix_mag_vector(relax_matrix_acq, sim_data=data)
         mag_refocus = torch.squeeze(data.magnetization_propagation)[:, :3]
@@ -302,8 +302,8 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="refocusing",
-        duration_in_us=3500,
-        time_bandwidth=2.8,
+        duration_in_us=3600,
+        time_bandwidth=3.6,
         num_samples=pulse_x_init.shape[0],
         signal=pulse_x.detach().cpu().numpy()
     )
@@ -644,12 +644,11 @@ if __name__ == '__main__':
     settings = PulseSimulationSettings.from_cli(args=args.settings)
     # set some additionals
     settings.visualize = False
-    settings.pulse_duration = 2800.0
-    settings.sample_length = 0.005
+    settings.pulse_duration = 2600.0
+    settings.sample_length = 0.002
     settings.kernel_file = plib.Path(
         "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/00_seq/debug/"
-        "20251120_mese_rel28-35-cfa-rf-slr-optim-tb2p8_rgs0p8_a3p5_sp3300_pre1000_tr6p5_var-msl50_g65/"
-        "mese_v1p0_acc-3p5_res-0p90-0p90-0p65_kernels.pkl"
+        "20251128_mese_cfa130-rf26-36-slr_rgs0p9_a3p5_sp3200_tr8_m06sl50_g65/mese_kernels.pkl"
     ).as_posix()
     settings.display()
 
