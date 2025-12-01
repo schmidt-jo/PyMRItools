@@ -214,6 +214,10 @@ class Sequence2D(abc.ABC):
             system=self.system,
             relax_grad_stress=relax_read_grad_stress
         )
+
+        # just set a long one if not set
+        spm = 6000 if self.params.grad_moment_slice_spoiling < 1e-3 else self.params.grad_moment_slice_spoiling
+        self.params.grad_moment_slice_spoiling = spm
         # refocusing - after first
         if create_refocus_kernel:
             self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
@@ -257,6 +261,72 @@ class Sequence2D(abc.ABC):
             )
         else:
             self.block_excitation: Kernel = NotImplemented
+
+        if create_excitation_kernel and create_refocus_1_kernel:
+            # mese sequence with first refocusing combining excitation rephase and refocusing spoiling
+            # we can optimise the spoiling area and redo creation
+            # for this we calculate the minimum ramp area for excitation pulse
+            if self.params.excitation_grad_moment_pre > 1e-6:
+                amp = self.block_excitation.grad_slice.amplitude[3]
+            else:
+                amp = self.block_excitation.grad_slice.amplitude[1]
+            min_ramp_exc_t = np.abs(amp) / self.system.max_slew
+            min_ramp_exc_t = np.ceil(min_ramp_exc_t * 1e5) * 1e-5
+            # get ramp areas
+            ramp_area_exc = np.abs(min_ramp_exc_t * amp / 2)
+            ramp_area_ref1 = np.abs(self.block_refocus_1.grad_slice.area[0])
+            # get excitation rephase area
+            area_exc_re = np.abs(self.block_excitation.rf.t_duration_s * amp / 2)
+
+            # now spoiling area and rephasing area must be equal to the ramps (some leeway)
+            spoiling_area = ramp_area_exc + ramp_area_ref1 + area_exc_re + 100
+            spoiling_area = min(spoiling_area, self.params.grad_moment_slice_spoiling)
+            if not np.allclose(spoiling_area, self.params.grad_moment_slice_spoiling):
+                log_module.info(f"\t\tRedo Kernel creation - optimise spoiling moment")
+                log_module.info(f"\t\tOptimal Spoiling area: {spoiling_area:.2f} 1/m")
+                # redo kernel creation
+                self.params.grad_moment_slice_spoiling = spoiling_area
+                # refocusing - after first
+                if create_refocus_kernel:
+                    self.block_refocus, self.t_spoiling_pe = Kernel.refocus_slice_sel_spoil(
+                        params=self.params,
+                        system=self.system,
+                        pulse_num=1,
+                        return_pe_time=True,
+                        read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                        pulse_file=self.config.pulse_file_refocusing
+                    )
+                else:
+                    self.block_refocus: Kernel = NotImplemented
+                if create_refocus_1_kernel:
+                    # refocusing first
+                    self.block_refocus_1 = Kernel.refocus_slice_sel_spoil(
+                        params=self.params,
+                        system=self.system,
+                        pulse_num=0,
+                        return_pe_time=False,
+                        read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                        pulse_file=self.config.pulse_file_refocusing
+                    )
+                else:
+                    self.block_refocus_1: Kernel = NotImplemented
+                if create_excitation_kernel:
+                    # excitation
+                    # via kernels we can build slice selective blocks of excitation and refocusing
+                    # if we leave the spoiling gradient of the first refocus (above) we can merge this into the excitation
+                    # gradient slice refocus gradient. For this we need to now the ramp area of the
+                    # slice selective refocus 1 gradient in order to account for it. S.th. the slice refocus gradient is
+                    # equal to the other refocus spoiling gradients used and is composed of: spoiling, refocusing and
+                    # accounting for ramp area
+                    ramp_area = float(self.block_refocus_1.grad_slice.area[0])
+                    spoiling_moment = -self.block_refocus.grad_slice.area[-1]
+                    # excitation pulse
+                    self.block_excitation = Kernel.excitation_slice_sel(
+                        params=self.params, system=self.system,
+                        adjust_ramp_area=ramp_area,
+                        spoiling_moment=spoiling_moment,
+                        pulse_file=self.config.pulse_file_excitation
+                    )
 
         # set up spoling at end of echo train
         self.block_spoil_end: Kernel = Kernel.spoil_all_grads(
