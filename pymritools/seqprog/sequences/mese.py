@@ -51,7 +51,7 @@ class MESE(Sequence2D):
             if varsli:
                 # adopt timing
                 # dur_reduce_us = self.prng.random_integers(low=50, high=200) * 2     # between 100 and 400 us,
-                dur_reduce_us = 400 - 2 * np.linspace(200, 50, self.params.etl-2).astype(int)     # between 100 and 400 us,
+                dur_reduce_us = 400 - 2 * np.linspace(200, 0, self.params.etl-2).astype(int)     # between 100 and 400 us,
                 # want this to be divisible by 2
                 # need to introduce half the time as delay to center the rf
                 delay_us = dur_reduce_us[i] // 2
