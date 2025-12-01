@@ -57,7 +57,9 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
     target_m_weighting = torch.exp(-pulse_sim.data.sample_axis**2 / 0.005**2)
     # we want to emphasise rippling reduction
     target_m_weighting *= 3 / target_m_weighting.max()
+    # focus solely on ripple removal
     target_m_weighting[target_mag_xy > 0.5] = 1
+    # target_mag_xy = torch.zeros_like(target_mag_xy)
 
     # assume we have a constant given gradient function
     # grad_init = torch.full_like(pulse_sim.grad_pulse.data_grad, -30.0) + torch.randn_like(pulse_sim.grad_pulse.data_grad) * 0.1
@@ -74,7 +76,9 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         duration_s=settings.pulse_duration*1e-6, apodisation=0.3
     ).to(pulse_sim.grad_pulse.data_pulse_y.device)
 
+    dt = pulse_sim.grad_pulse.dt_sampling_steps_us * 1e-6
     pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.squeeze()[pulse_mask].clone()
+    target_flip = torch.sum(pulse_y_init)
 
     # pulse_x = pulse_x_init.clone().requires_grad_(True)
     pulse_y = pulse_y_init.clone().requires_grad_(True)
@@ -82,7 +86,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
     # set some optimisation parameters
     max_num_iter = 50
     # lr = torch.full((max_num_iter,), 2e-8)
-    lr = torch.linspace(2e-9, 8e-10, max_num_iter)
+    lr = torch.linspace(1e-9, 8e-10, max_num_iter)
 
     losses = []
     losses_profile = []
@@ -101,11 +105,13 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         # px[0, pulse_mask] = pulse_x
         py = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_y)
         py[0, pulse_mask] = pulse_y * apo_window
+        flip = torch.sum(py)
+        py *= target_flip / flip
         # py[0, pulse_mask] = pulse_y
         data = functions.propagate_gradient_pulse_relax(
             pulse_x=pulse_x_init, pulse_y=py,
             grad=pulse_sim.grad_pulse.data_grad, sim_data=pulse_sim.data,
-            dt_s=pulse_sim.grad_pulse.dt_sampling_steps_us * 1e-6
+            dt_s=dt
         )
         mag_exc = torch.squeeze(data.magnetization_propagation)[:, :3]
         m_cplx = mag_exc[:, 0] + 1j * mag_exc[:, 1]
@@ -115,7 +121,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
         mag_iter.append([m_xy, p_xy, m_z])
 
         # compute losses
-        loss_profile = torch.nn.MSELoss()(m_xy * target_m_weighting, target_mag_xy) + torch.nn.MSELoss()(m_z, target_mag_z)
+        loss_profile = torch.nn.MSELoss()(m_xy * target_m_weighting, target_mag_xy)
         losses_profile.append(loss_profile.item())
 
         loss_sar = torch.sum(torch.abs(pulse_y**2)) * 1e7
@@ -133,6 +139,8 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
 
             ppy = py.clone().detach()
             ppy[0, pulse_mask] *= apo_window
+            flip = torch.sum(ppy) * 2 * np.pi * dt
+            ppy *= np.pi / 2 / flip
             pulse_iter.append([pulse_x_init.clone().detach(), ppy])
             # grad_iter.append(grad)
 
@@ -182,9 +190,12 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
 
     # additionally introduce some target weighting towards the center
     target_m_weighting = torch.exp(-pulse_sim.data.sample_axis**2 / 0.005**2)
-    # we want to emphasise rippling reduction
+    # we want to emphasise rippling reduction towards centre
     target_m_weighting *= 3 / target_m_weighting.max()
+    # we want to completely focus on ripple removal
+    # target_m_weighting[target_mag_xy > 0.5] = 0
     target_m_weighting[target_mag_xy > 0.5] = 1
+    # target_mag_xy = torch.zeros_like(target_mag_xy)
 
     # assume we have a constant given gradient function
     # grad_init = torch.full_like(pulse_sim.grad_pulse.data_grad, -30.0) + torch.randn_like(pulse_sim.grad_pulse.data_grad) * 0.1
@@ -202,13 +213,15 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
     pulse_y_init = pulse_sim.grad_pulse_ref.data_pulse_y.clone()
     # pulse_y_init = pulse_sim.grad_pulse_ref.data_pulse_y.squeeze()[pulse_mask].clone()
 
+    dt = pulse_sim.grad_pulse_ref.dt_sampling_steps_us * 1e-6
+    target_flip = torch.sum(pulse_x_init)
     pulse_x = pulse_x_init.clone().requires_grad_(True)
     # pulse_y = pulse_y_init.clone().requires_grad_(True)
 
     # set some optimisation parameters
     max_num_iter = 50
     # lr = torch.full((max_num_iter,), 2e-8)
-    lr = torch.linspace(2e-9, 8e-10, max_num_iter)
+    lr = torch.linspace(1e-9, 8e-10, max_num_iter)
 
     losses = []
     losses_profile = []
@@ -238,13 +251,15 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         # refocusing pulse
         px = torch.zeros_like(pulse_sim.grad_pulse_ref.data_pulse_x)
         px[0, pulse_mask] = pulse_x * apo_window
+        flip = torch.sum(px)
+        px *= target_flip / flip
         # px[0, pulse_mask] = pulse_x
         # py = torch.zeros_like(pulse_sim.grad_pulse_ref.data_pulse_y)
         # py[0, pulse_mask] = pulse_y
         data = functions.propagate_gradient_pulse_relax(
             pulse_x=px, pulse_y=pulse_y_init,
             grad=pulse_sim.grad_pulse_ref.data_grad, sim_data=data,
-            dt_s=pulse_sim.grad_pulse_ref.dt_sampling_steps_us * 1e-6
+            dt_s=dt
         )
 
         # delay
@@ -261,7 +276,8 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         mag_iter.append([m_xy, p_xy, m_z])
 
         # compute losses
-        loss_profile = torch.nn.MSELoss()(m_xy * target_m_weighting, target_mag_xy) + torch.nn.MSELoss()(m_z, target_mag_z)
+        loss_profile = torch.nn.MSELoss()(m_xy * target_m_weighting, target_mag_xy)
+                        # + torch.nn.MSELoss()(m_z, target_mag_z)
         losses_profile.append(loss_profile.item())
 
         loss_sar = (torch.sum(torch.abs(pulse_x**2))) * 1e7
@@ -279,8 +295,11 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
 
             px = torch.zeros_like(pulse_sim.grad_pulse_ref.data_pulse_x)
             px[0, pulse_mask] = pulse_x * apo_window
+            ppx = px.clone().detach()
+            flip = torch.sum(ppx) * 2 * np.pi * dt
+            ppx *= np.pi / flip
             # px[0, pulse_mask] = pulse_x
-            pulse_iter.append([px.clone().detach(), pulse_y_init.clone().detach()])
+            pulse_iter.append([ppx, pulse_y_init.clone().detach()])
             # grad_iter.append(grad)
 
         pulse_x.grad.zero_()
@@ -514,7 +533,7 @@ def plot_results(settings: PulseSimulationSettings):
             ppp = pp[1-i%2]
             fig.add_trace(
                 go.Scatter(
-                    x=np.arange(ppp.shape[0])*5e-3, y=ppp.cpu()*1e6,
+                    x=np.arange(ppp.shape[0])*5e-3, y=ppp.cpu(),
                     showlegend=False,
                     mode="lines",
                     line=dict(color=cmap[j])
@@ -525,14 +544,15 @@ def plot_results(settings: PulseSimulationSettings):
     # style time axis
     fig.update_xaxes(row=3, col=1, title="Time [ms]")
     # adjust midlines, RF
+    rfmax = max(torch.max(pulse_iter_exc).item(), torch.max(pulse_iter_ref).item())
     fig.update_yaxes(
-        row=1, col=1, secondary_y=True, range=(-6, 6),
-        tickmode="array", tickvals=np.linspace(-5, 5, 5),
+        row=1, col=1, secondary_y=True, range=(-1.1*rfmax, 1.1*rfmax),
+        tickmode="array", tickvals=np.linspace(-rfmax, rfmax, 5),
         title="RF amplitude [a.u.]"
     )
     fig.update_yaxes(
-        row=3, col=1, secondary_y=True, range=(-7.5, 7.5),
-        tickmode="array", tickvals=np.linspace(-6, 6, 5),
+        row=3, col=1, secondary_y=True, range=(-1.1*rfmax, 1.1*rfmax),
+        tickmode="array", tickvals=np.linspace(-rfmax, rfmax, 5),
         title="RF amplitude [a.u.]"
     )
     # Grad
@@ -648,7 +668,7 @@ if __name__ == '__main__':
     settings.sample_length = 0.002
     settings.kernel_file = plib.Path(
         "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/00_seq/debug/"
-        "20251128_mese_cfa130-rf26-36-slr_rgs0p9_a3p5_sp3200_tr8_m06sl50_g65/mese_kernels.pkl"
+        "20251201_mese_cfa130-rf28-36-slr_rgs0p65_a3p5_sp3200_tr7_var-m065-sl50-g65/mese_kernels.pkl"
     ).as_posix()
     settings.display()
 
