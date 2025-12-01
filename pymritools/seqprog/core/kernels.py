@@ -129,8 +129,38 @@ class Kernel:
 
     @classmethod
     def excitation_slice_sel(cls, params: PulseqParameters2D, system: Opts,
-                             pulse_file: str = "",
+                             pulse_file: str = "", read_grad_pre_area: float = None,
                              spoiling_moment: float = 0.0, adjust_ramp_area: float = 0.0):
+        if read_grad_pre_area is None:
+            t_re_min = 0.0
+        else:
+            if np.abs(read_grad_pre_area) < 1e-3:
+                # we are setting the read gradient prephaser between exciation and first refocus and
+                # rely on refocusing for k-space travel
+                # calculate read gradient in order to use correct area (corrected for ramps)
+                t_adc_grad_flat = int(
+                    (params.resolution_n_read + params.read_grad_fid_spoil_samples) * params.oversampling
+                ) * params.dwell
+                grad_read = events.GRAD.make_trapezoid(
+                    channel=params.read_dir, system=system,
+                    flat_area=params.delta_k_read * (params.resolution_n_read + params.read_grad_fid_spoil_samples),
+                    flat_time=t_adc_grad_flat
+                )
+                read_grad_pre_area = grad_read.area / 2
+
+            grad_read_pre = events.GRAD.make_trapezoid(
+                channel=params.read_dir, system=system,
+                area=read_grad_pre_area
+            )
+            t_re_min = grad_read_pre.get_duration()
+            # relax for stimulation
+            t_re_min = np.max([t_re_min, 0.001])
+            grad_read_pre = events.GRAD.make_trapezoid(
+                channel=params.read_dir, system=system,
+                area=read_grad_pre_area,
+                duration_s=t_re_min
+            )
+
         # Excitation
         log_module.info("setup excitation")
 
@@ -146,7 +176,7 @@ class Kernel:
         # build slice selective gradient
         # stretch re-spoil moment (usually there is time between the excitation and first refocus and
         # esp is driven by refocusing / adc combination), we can relax gradient stress by increasing re time of excitation
-        t_re = 0.0
+
         # if np.abs(spoiling_moment) > 3001:
         #    t_re = 0.8e-3
         # if np.abs(spoiling_moment) > 3201:
@@ -160,19 +190,28 @@ class Kernel:
             re_spoil_moment=-spoiling_moment,
             rephase=params.excitation_grad_rephase_factor,
             adjust_ramp_area=adjust_ramp_area,
-            t_minimum_re_grad=t_re,
+            t_minimum_re_grad=t_re_min,
             excitation=True,
             round_grad_amp=True
         )
         # adjust start of rf
         rf.t_delay_s = grad_slice_delay
 
+        # adjust read grad start if applicable
+        if read_grad_pre_area is not None:
+            grad_read_pre.t_delay_s = rf.t_delay_s + rf.t_duration_s
+            # sanity checks
+            if np.max(np.abs(grad_read_pre.amplitude)) > system.max_grad:
+                err = f"gradient amplitude exceeds maximum allowed"
+                log_module.error(err)
+                raise ValueError(err)
+
         # sanity checks
         if np.max(np.abs(grad_slice.amplitude)) > system.max_grad:
             err = f"gradient amplitude exceeds maximum allowed"
             log_module.error(err)
             raise ValueError(err)
-        return cls(rf=rf, grad_slice=grad_slice)
+        return cls(rf=rf, grad_slice=grad_slice, grad_read=grad_read_pre)
 
     @classmethod
     def refocus_slice_sel_spoil(cls, params: PulseqParameters2D, system: Opts,
@@ -190,10 +229,13 @@ class Kernel:
                 flat_time=t_adc_grad_flat
             )
             read_gradient_to_prephase = grad_read.area / 2
-        grad_read_pre = events.GRAD.make_trapezoid(
-            channel=params.read_dir, system=system,
-            area=-read_gradient_to_prephase
-        )
+        if np.abs(read_gradient_to_prephase) < 1e-3:
+            grad_read_pre = events.GRAD()
+        else:
+            grad_read_pre = events.GRAD.make_trapezoid(
+                channel=params.read_dir, system=system,
+                area=-read_gradient_to_prephase
+            )
 
         # block is first refocusing + spoiling + phase encode
         log_module.info(f"setup refocus {pulse_num + 1}")
