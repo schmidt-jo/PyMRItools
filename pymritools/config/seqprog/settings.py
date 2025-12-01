@@ -348,10 +348,10 @@ class Parameters2D(Serializable):
             raise AttributeError(err)
 
         # error catches
-        if np.any(np.array(self.grad_moment_slice_spoiling) < 1e-7):
-            err = f"this implementation needs a spoiling moment supplied: provide spoiling Moment > 0"
-            log_module.error(err)
-            raise ValueError(err)
+        # if np.any(np.array(self.grad_moment_slice_spoiling) < 1e-7):
+        #     err = f"this implementation needs a spoiling moment supplied: provide spoiling Moment > 0"
+        #     log_module.error(err)
+        #     raise ValueError(err)
 
     def get_voxel_size(self, write_log: bool = False):
         msg = (
