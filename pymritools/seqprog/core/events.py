@@ -526,7 +526,7 @@ class GRAD(Event):
 
         # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
         duration_re_grad = t_ru + t_rd + t_flat
-        if duration_re_grad < t_minimum_re_grad:
+        if duration_re_grad < t_minimum_re_grad and not excitation:
             # stretch to minimum required time if we have such
             # if we have to stretch, we can take the ramp times to be equal,
             # since the amplitude has to be reduced, the ramps will get less steep.

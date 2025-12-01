@@ -225,7 +225,8 @@ class Sequence2D(abc.ABC):
                 system=self.system,
                 pulse_num=1,
                 return_pe_time=True,
-                read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                # read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                read_gradient_to_prephase=0,
                 pulse_file=self.config.pulse_file_refocusing
             )
         else:
@@ -237,7 +238,8 @@ class Sequence2D(abc.ABC):
                 system=self.system,
                 pulse_num=0,
                 return_pe_time=False,
-                read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                # read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                read_gradient_to_prephase=0,
                 pulse_file=self.config.pulse_file_refocusing
             )
         else:
@@ -257,6 +259,7 @@ class Sequence2D(abc.ABC):
                 params=self.params, system=self.system,
                 adjust_ramp_area=ramp_area,
                 spoiling_moment=spoiling_moment,
+                read_grad_pre_area=self.block_acquisition.grad_read.area / 2,
                 pulse_file=self.config.pulse_file_excitation
             )
         else:
@@ -293,7 +296,8 @@ class Sequence2D(abc.ABC):
                         system=self.system,
                         pulse_num=1,
                         return_pe_time=True,
-                        read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                        read_gradient_to_prephase=0,
+                        # read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
                         pulse_file=self.config.pulse_file_refocusing
                     )
                 else:
@@ -305,7 +309,8 @@ class Sequence2D(abc.ABC):
                         system=self.system,
                         pulse_num=0,
                         return_pe_time=False,
-                        read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                        # read_gradient_to_prephase=self.block_acquisition.grad_read.area / 2,
+                        read_gradient_to_prephase=0,
                         pulse_file=self.config.pulse_file_refocusing
                     )
                 else:
@@ -325,6 +330,7 @@ class Sequence2D(abc.ABC):
                         params=self.params, system=self.system,
                         adjust_ramp_area=ramp_area,
                         spoiling_moment=spoiling_moment,
+                        read_grad_pre_area=self.block_acquisition.grad_read.area / 2,
                         pulse_file=self.config.pulse_file_excitation
                     )
 
@@ -634,8 +640,8 @@ class Sequence2D(abc.ABC):
         # prescan for noise correlation
         self._noise_pre_scan()
         self._loop_lines()
-        log_module.info(f"build -- profiler sequence")
-        self._loop_calibration_sequence()
+        # log_module.info(f"build -- profiler sequence")
+        # self._loop_calibration_sequence()
         log_module.info(f"set recon info data")
         # sampling + k traj
         self._set_k_trajectories()  # raises error if not implemented
@@ -1904,9 +1910,10 @@ def build(config: PulseqConfig, sequence: Sequence2D, name: str = ""):
     if config.visualize:
         logging.info("Plotting")
 
-        sequence.plot_sequence(
-            t_start_s=0, t_end_s=50, sim_grad_moments=True, plot_seq=SequenceType.CALIBRATION
-        )
+        if sequence.use_calibration_seq:
+            sequence.plot_sequence(
+                t_start_s=0, t_end_s=50, sim_grad_moments=True, plot_seq=SequenceType.CALIBRATION
+            )
 
         # plot start
         sequence.plot_sequence(
