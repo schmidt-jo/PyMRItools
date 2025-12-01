@@ -221,26 +221,23 @@ class RF(Event):
         duration_s = int(np.round(1e6*duration_s))*1e-6
         # get signal envelope
         signal = self.signal
-        # get time points
-        t = self.t_array_s
         # get duration
         dur = self.t_duration_s
+        # make integer time points
+        t_num_pts = int(dur*1e6)
         # interpolate signal to new time
-        # we do so by stretching the new duration time points to the old duration first
-        dur_tmp_us = int(np.round(duration_s * 1e6))
-        t_tmp = np.linspace(0, dur, dur_tmp_us)
+        # we do so by stretching the old duration time points to the new duration first
+        dur_new_us = int(np.round(duration_s * 1e6))
+        t_pts_tmp = np.linspace(0, dur_new_us - 1, t_num_pts)
+        # set up the new raster
+        t_pts_new = np.arange(dur_new_us)
         # interpolate to this stretched raster
-        signal_interp_tmp = np.interp(t_tmp, xp=t, fp=signal)
+        signal_interp = np.interp(t_pts_new, xp=t_pts_tmp, fp=signal)
         # calculate raster with assigned duration, we set the signal to be rastered on rf raster of 1 us
-        delta_t = self.system.rf_raster_time
+        # delta_t = self.system.rf_raster_time
         # calculate mid - time points of rf
-        t_array_s = self.set_on_raster(np.arange(0, int(duration_s * 1e6)) * 1e-6) + 5e-7
+        t_array_s = self.set_on_raster(np.arange(0, int(duration_s * 1e6) + 1) * 1e-6) + 5e-7
         # interpolate signal to new time
-        signal_interp = np.interp(
-            t_array_s,
-            xp=t_tmp,
-            fp=signal_interp_tmp
-        )
         #assign
         self.signal = signal_interp
         self.t_array_s = t_array_s
@@ -304,7 +301,7 @@ class GRAD(Event):
         self.slice_select_amplitude: float = NotImplemented
         self.slice_select_duration: float = NotImplemented
 
-    def set_on_raster(self, value: float, return_delay: bool = False, double: bool = True):
+    def set_on_raster(self, value: float, return_delay: bool = False, double: bool = False):
         raster_time = float(self.system.grad_raster_time)
         if double:
             # helps with maintaining raster when calculating esp
@@ -448,7 +445,7 @@ class GRAD(Event):
 
             # (3) if we set times on gradient raster we might need to adopt gradient values
             pre_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
-                area=pre_moment, amplitude_to_set=pre_grad_amplitude, amplitude_fixed=amplitude, t_flat=t_flat
+                area=pre_moment, amplitude_to_set=np.sign(amplitude) * np.abs(pre_grad_amplitude), amplitude_fixed=amplitude, t_flat=t_flat
             )
 
             # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
@@ -524,7 +521,7 @@ class GRAD(Event):
 
         # (3) if we set times on gradient raster we might need to adopt gradient values
         re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
-            area=re_spoil_moment, amplitude_to_set=re_grad_amplitude, amplitude_fixed=amplitude, t_flat=t_flat
+            area=re_spoil_moment, amplitude_to_set=np.sign(amplitude) * np.abs(re_grad_amplitude), amplitude_fixed=amplitude, t_flat=t_flat
         )
 
         # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
@@ -603,15 +600,15 @@ class GRAD(Event):
         grad_instance.max_grad = system.max_grad
         grad_instance.t_duration_s = grad_instance.get_duration()
         # last sanity check max grad / slew times
-        # if np.max(np.abs(amps)) > system.max_grad:
-        #     err = f"amplitude violation, maximum gradient exceeded"
-        #     log_module.error(err)
-        #     raise ValueError(err)
-        # grad_slew = np.abs(np.diff(amps) / np.diff(times))
-        # if np.max(grad_slew) > system.max_slew:
-        #     err = f"slew rate violation, maximum slew rate exceeded"
-        #     log_module.error(err)
-        #     raise ValueError(err)
+        if np.max(np.abs(amps)) > system.max_grad:
+            err = f"amplitude violation, maximum gradient exceeded"
+            log_module.error(err)
+            raise ValueError(err)
+        grad_slew = np.abs(np.diff(amps) / np.diff(times))
+        if np.max(grad_slew) > system.max_slew:
+            err = f"slew rate violation, maximum slew rate exceeded"
+            log_module.error(err)
+            raise ValueError(err)
 
         return grad_instance, delay, duration_re_grad
 
@@ -635,6 +632,9 @@ class GRAD(Event):
         # check if this area is bigger than set area
         if np.abs(a) > np.abs(area) + 1e-5:
             # ramp parts of gradient already suffice to cover area, dont need flat gradient.
+            # but we need to find the value to which to ramp to.
+            # this gives two separate solutions depending on the gradient value to set to be bigger or
+            # smaller than the starting amplitude
             # need to update grad value to get correct area
             grad_amplitude = np.sign(area) * np.sqrt(
                 np.abs(area) * self.system.max_slew + np.abs(amplitude) ** 2 / 2
@@ -646,14 +646,14 @@ class GRAD(Event):
             t_flat = 0.0
         else:
             # fix gradient at max value and calculate flat time
-            grad_amplitude = self.system.max_grad
+            grad_amplitude = np.sign(amplitude) * self.system.max_grad
             t_flat = self.set_on_raster((np.abs(area) - np.abs(a)) / np.abs(grad_amplitude))
         return grad_amplitude, t_flat
 
     def _reset_amplitude_calc_ramps(
             self, area: float, amplitude_to_set: float, amplitude_fixed: float, t_flat: float = 0):
         t_ru = self.set_on_raster(np.abs(amplitude_to_set) / self.system.max_slew)
-        t_rd = self.set_on_raster(np.abs(amplitude_to_set - amplitude_fixed) / self.system.max_slew)
+        t_rd = self.set_on_raster((np.abs(amplitude_to_set) - np.abs(amplitude_fixed)) / self.system.max_slew)
         t_flat = self.set_on_raster(t_flat)
         a = area - 0.5 * t_rd * amplitude_fixed
         b = 0.5 * t_ru + t_flat + 0.5 * t_rd
