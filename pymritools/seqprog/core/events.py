@@ -72,10 +72,13 @@ class RF(Event):
         delta_t = system.rf_raster_time
         # calculate mid - time points of rf
         t_array_s = rf_instance.set_on_raster(np.arange(0, int(duration_s * 1e6)) * 1e-6) + 5e-7
+        # calculate sample delta time
+        t_delta_sample = duration_s / rf.num_samples
+        # assume first sample at half of this step
         # interpolate signal to new time
         signal_interp = np.interp(
             t_array_s,
-            xp=np.linspace(0, duration_s, rf.num_samples),
+            xp=(np.arange(rf.num_samples) + 0.5) * t_delta_sample,
             fp=signal
         )
         # make sure to start and end with 0
@@ -83,7 +86,7 @@ class RF(Event):
         # signal_interp[-1] = 0
 
         # normalise flip angle
-        flip = np.sum(np.abs(signal_interp)) * delta_t * 2 * np.pi
+        flip = np.sum(signal_interp) * delta_t * 2 * np.pi
 
         # assign values
         rf_instance.signal = signal_interp * flip_angle_rad / flip
@@ -263,6 +266,7 @@ class RF(Event):
         rf_max = np.max(np.abs(self.signal))
         i_peak = np.where(np.abs(self.signal) >= rf_max - 1e-9)[0]
         self.t_mid = (self.t_array_s[i_peak[0]] + self.t_array_s[i_peak[-1]]) / 2
+        self.t_mid = self.t_duration_s / 2
         # self.t_mid = self.t_delay_s + self.t_duration_s / 2
         # self.t_mid = self.t_duration_s / 2 + np.diff(self.t_array_s)[self.t_array_s.shape[0] // 2] / 2
 
