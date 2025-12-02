@@ -837,7 +837,7 @@ class Kernel:
         # set spoiling gradient area
         grad_read_spoil = events.GRAD.make_trapezoid(
             channel=params.read_dir,
-            area=-params.read_grad_spoiling_factor * grad_read.area,
+            area=params.read_grad_spoiling_factor * grad_read.area,
             system=system
         )
         # set phase spoil grad
