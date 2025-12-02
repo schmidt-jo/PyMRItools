@@ -29,14 +29,22 @@ class RFPulse(Serializable):
             self.signal = np.zeros(self.num_samples)
 
     def display(self):
-        columns = {
-            "Bandwidth": ["Hz", self.bandwidth_in_Hz],
-            "Duration": ["us", self.duration_in_us],
-            "Time-Bandwidth": ["1", self.time_bandwidth],
-            "Number of Samples": ["1", self.num_samples]
-        }
-        display = pl.DataFrame(columns)
-        print(display)
+        # display via logging
+        s = "___ Pulse ___\n"
+        for k, v in self.to_dict().items():
+            s += f"\t\t\t{k}:".ljust(30) + f"{v}\n".rjust(55, ".")
+        print(s)
+
+    #
+    # def display(self):
+    #     columns = {
+    #         "Bandwidth": ["Hz", self.bandwidth_in_Hz],
+    #         "Duration": ["us", self.duration_in_us],
+    #         "Time-Bandwidth": ["1", self.time_bandwidth],
+    #         "Number of Samples": ["1", self.num_samples]
+    #     }
+    #     display = pl.DataFrame(columns)
+    #     print(display)
 
     def set_shape_on_raster(self, raster_time_s):
         # interpolate shape to duration raster
@@ -176,18 +184,18 @@ class RFPulse(Serializable):
         fig = go.Figure()
         fig.add_trace(
             go.Scattergl(
-                x=np.arange(self.num_samples) * dt, y=self.signal / np.max(self.signal),
+                x=np.arange(1, 1 + self.num_samples) * dt, y=self.signal / np.max(np.abs(self.signal)),
                 name="Amplitude",
                 mode="lines",
             )
         )
-        fig.add_trace(
-            go.Scattergl(
-                x=np.arange(self.num_samples) * dt, y=self.phase / np.pi,
-                name="Phase",
-                mode="lines",
-            )
-        )
+        # fig.add_trace(
+        #     go.Scattergl(
+        #         x=np.arange(self.num_samples) * dt, y=self.phase / np.pi,
+        #         name="Phase",
+        #         mode="lines",
+        #     )
+        # )
         fig.update_layout(
             title="RF Pulse",
             xaxis_title=f"Sampling point - " + '\u0394t' + f"[{int(dt)} ms]",
