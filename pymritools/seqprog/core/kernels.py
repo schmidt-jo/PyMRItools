@@ -154,7 +154,7 @@ class Kernel:
             )
             t_re_min = grad_read_pre.get_duration()
             # relax for stimulation - 660us min
-            t_re_min = np.max([t_re_min, 0.00066])
+            t_re_min = np.max([t_re_min, 0.0007])
             grad_read_pre = events.GRAD.make_trapezoid(
                 channel=params.read_dir, system=system,
                 area=read_grad_pre_area,
