@@ -282,7 +282,7 @@ class Sequence2D(abc.ABC):
             area_exc_re = np.abs(self.block_excitation.rf.t_duration_s * amp / 2)
 
             # now spoiling area and rephasing area must be equal to the ramps (some leeway)
-            spoiling_area = ramp_area_exc + ramp_area_ref1 + area_exc_re - 600
+            spoiling_area = ramp_area_exc + ramp_area_ref1 + area_exc_re + self.params.grad_moment_slice_spoiling_optimise_extra
             spoiling_area = min(spoiling_area, self.params.grad_moment_slice_spoiling)
             if not np.allclose(spoiling_area, self.params.grad_moment_slice_spoiling):
                 log_module.info(f"\t\tRedo Kernel creation - optimise spoiling moment")

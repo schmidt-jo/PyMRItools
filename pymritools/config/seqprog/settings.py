@@ -122,8 +122,16 @@ class Parameters2D(Serializable):
                           " scales the calculated readout gradient moment determined by readout bandwidth."
     )
     grad_moment_slice_spoiling: float = field(
-        default=1600.0, help="Spoiling gradient strength for slice selective gradient "
+        default=0.0, help="Spoiling gradient strength for slice selective gradient "
                              "lobes around sl.sel. rf pulses [Hz]."
+    )
+    grad_moment_slice_spoiling_optimise_extra: float = field(
+        default=100.0,
+        help="Upon excitation rephasing, the excitation rephase gradients and spoiling gradients are merged. "
+             "We can thus optimise the spoiling gradient (set above 0) by calculating the optimal gradients with respect to minimal time. "
+             "This little extra factor gives some leeway in setting the excitation rephasing. "
+             "As perfect matching the two is hard due to the time rastering and gradient dependencies. "
+             "If this factor is small but positive minimal time is attained, if its negative, a lower spoiling gradient can be reached."
     )
     grad_moment_slice_spoiling_end: float = field(
         default=2500.0, help="Spoiling gradient strength for slice selective gradient spoiling at "
