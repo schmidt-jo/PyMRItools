@@ -437,7 +437,7 @@ class GRAD(Event):
             single_ramp_check = grad_instance._calc_check_single_ramp_area_vs_set_area(
                 area=pre_moment, amplitude=amplitude
             )
-            if not excitation and not single_ramp_check:
+            if not single_ramp_check:
                 grad_instance._single_ramp_error(identifier="pre-phasing / pre-spoil")
 
             # (2) check if max grad and max slew already suffice in setting area
@@ -638,7 +638,7 @@ class GRAD(Event):
         return grad_instance, delay, duration_re_grad
 
     def _calc_check_single_ramp_area_vs_set_area(self, area: float, amplitude: float):
-        a = amplitude ** 2 / 2 / self.system.max_slew
+        a = np.sign(amplitude) * amplitude ** 2 / 2 / self.system.max_slew
         if np.abs(a) > np.abs(area) + 1e-5 or np.sign(area) != np.sign(a):
             return False
         else:
