@@ -70,7 +70,7 @@ class MESE(Sequence2D):
     def _set_k_trajectories(self):
         # read direction is always fully (over)sampled, no special trajectories to register
         # prephasing is done in refocusing blocks
-        grad_pre_area = float(np.sum(self.block_refocus.grad_read.area) / 2)
+        grad_pre_area = -float(np.sum(self.block_excitation.grad_read.area))
         # calculate trajectory for se readout
         self._register_k_trajectory(
             self.block_acquisition.get_k_space_trajectory(
