@@ -164,6 +164,10 @@ class Parameters2D(Serializable):
     tr: float = field(
         default=4500.0, help="Repetition time [ms]."
     )
+    tr_et_delay: float = field(
+        default=0.0, help="Echo-train delay per TR [ms]. "
+                          "Instead of TR we can set the delay time between echo trains here and TR is calculated accordingly."
+    )
 
     # define a bunch of properties (we dont want to serialize those)
     @property
