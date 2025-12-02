@@ -174,7 +174,7 @@ class MESE(Sequence2D):
 
             # adc
             # make adc follow rf phase
-            self.block_acquisition.adc.phase_offset_rad = self.block_refocus_1.rf.phase_rad
+            self.block_acquisition.adc.phase_offset_rad = self.block_list_refocusing[0].rf.phase_rad
             self.sequence.add_block(*aq_block.list_events_to_ns())
             if not no_adc:
                 # write sampling pattern
@@ -201,7 +201,7 @@ class MESE(Sequence2D):
                     self.sequence.add_block(self.delay_ref_adc.to_simple_ns())
 
                 # adc
-                self.block_acquisition.adc.phase_offset_rad = self.block_refocus.rf.phase_rad
+                self.block_acquisition.adc.phase_offset_rad = self.block_list_refocusing[echo_idx].rf.phase_rad
                 self.sequence.add_block(*aq_block.list_events_to_ns())
                 if not no_adc:
                     # write sampling pattern
