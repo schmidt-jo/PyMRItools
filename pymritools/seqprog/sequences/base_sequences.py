@@ -1175,18 +1175,21 @@ class Sequence2D(abc.ABC):
         """
         log_module.info(f"\t\t-total echo train length: {t_total_etl * 1e3:.2f} ms")
         log_module.info(f"\t\t-desired number of slices: {self.params.resolution_slice_num}")
-
+        # we use the TR setting as minimal TR
+        tr_set = self.params.tr
         if self.params.tr_et_delay > 1:
             # if we have set an echo train delay above 1 ms
             # TR is calculated by inserting this delay between echo trains after every echo train
             # in ms
             t_total_etl_ms = t_total_etl * 1e3
             tr_eff = (t_total_etl_ms + self.params.tr_et_delay) * self.params.resolution_slice_num
-            self.params.tr = tr_eff
+            self.params.tr = max(tr_eff, tr_set)
             log_module.info(f"\t\t-set echo train spacing: {self.params.tr_et_delay:.2f} ms")
             log_module.info(f"\t\t-effective TR: {tr_eff:.2f} ms")
             delay_time = self.params.tr_et_delay * 1e-3 # cast to seconds
-        else:
+        # if we dont have tr_et_delay set, or the effective TR calculated is smaller than the TR set,
+        # we calculate even spacing
+        if np.allclose(tr_set, self.params.tr):
             # we have TR set and calculate the delay
             # deminish TR by nav - blocks
             tr_eff = self.params.tr * 1e-3 - self.nav_t_total
@@ -1204,7 +1207,7 @@ class Sequence2D(abc.ABC):
             delay_time = (tr_eff - self.params.resolution_slice_num * t_total_etl) / num_delays
 
         self.delay_slice = DELAY.make_delay(delay_time, system=self.system)
-        log_module.info(f"\t\t-time between slices: {self.delay_slice.get_duration() * 1e3:.2f} ms")
+        log_module.info(f"\t\t-updated time between slices: {self.delay_slice.get_duration() * 1e3:.2f} ms")
         if not self.delay_slice.check_on_block_raster():
             self.delay_slice.set_on_block_raster()
             log_module.info(f"\t\t-adjusting TR delay to raster time: {self.delay_slice.get_duration() * 1e3:.2f} ms")
