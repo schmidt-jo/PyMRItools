@@ -1173,25 +1173,37 @@ class Sequence2D(abc.ABC):
         if we use navigators, the effective TR is the TR diminished by the time navigators take,
         and an additional delay is inserted after the navigator block. the delay between navs is fixed.
         """
-        # deminish TR by nav - blocks
-        tr_eff = self.params.tr * 1e-3 - self.nav_t_total
-        max_num_slices = int(np.floor(tr_eff / t_total_etl))
         log_module.info(f"\t\t-total echo train length: {t_total_etl * 1e3:.2f} ms")
         log_module.info(f"\t\t-desired number of slices: {self.params.resolution_slice_num}")
-        log_module.info(f"\t\t-possible number of slices within TR: {max_num_slices}")
-        if self.params.resolution_slice_num > max_num_slices:
-            msg = f"increase TR or Concatenation needed"
-            log_module.error(msg)
-            raise ValueError(msg)
-        num_delays = self.params.resolution_slice_num
-        if self.params.use_navs:
-            # we want to add a delay additionally after nav block
-            num_delays += 1
 
-        self.delay_slice = DELAY.make_delay(
-            (tr_eff - self.params.resolution_slice_num * t_total_etl) / num_delays,
-            system=self.system
-        )
+        if self.params.tr_et_delay > 1:
+            # if we have set an echo train delay above 1 ms
+            # TR is calculated by inserting this delay between echo trains after every echo train
+            # in ms
+            t_total_etl_ms = t_total_etl * 1e3
+            tr_eff = (t_total_etl_ms + self.params.tr_et_delay) * self.params.resolution_slice_num
+            self.params.tr = tr_eff
+            log_module.info(f"\t\t-set echo train spacing: {self.params.tr_et_delay:.2f} ms")
+            log_module.info(f"\t\t-effective TR: {tr_eff:.2f} ms")
+            delay_time = self.params.tr_et_delay * 1e-3 # cast to seconds
+        else:
+            # we have TR set and calculate the delay
+            # deminish TR by nav - blocks
+            tr_eff = self.params.tr * 1e-3 - self.nav_t_total
+            max_num_slices = int(np.floor(tr_eff / t_total_etl))
+
+            log_module.info(f"\t\t-possible number of slices within TR: {max_num_slices}")
+            if self.params.resolution_slice_num > max_num_slices:
+                msg = f"increase TR or Concatenation needed"
+                log_module.error(msg)
+                raise ValueError(msg)
+            num_delays = self.params.resolution_slice_num
+            if self.params.use_navs:
+                # we want to add a delay additionally after nav block
+                num_delays += 1
+            delay_time = (tr_eff - self.params.resolution_slice_num * t_total_etl) / num_delays
+
+        self.delay_slice = DELAY.make_delay(delay_time, system=self.system)
         log_module.info(f"\t\t-time between slices: {self.delay_slice.get_duration() * 1e3:.2f} ms")
         if not self.delay_slice.check_on_block_raster():
             self.delay_slice.set_on_block_raster()
