@@ -434,9 +434,11 @@ class GRAD(Event):
                 # we can adopt here also with doubling the ramp times in case we have opposite signs
 
             # (1) check if ramp to amplitude exceeds set area if using maximum slew, i.e. smallest possible area
-            grad_instance._calc_check_single_ramp_area_vs_set_area(
-                area=pre_moment, amplitude=amplitude, identifier="pre-phasing / pre-spoil"
+            single_ramp_check = grad_instance._calc_check_single_ramp_area_vs_set_area(
+                area=pre_moment, amplitude=amplitude
             )
+            if not excitation and not single_ramp_check:
+                grad_instance._single_ramp_error(identifier="pre-phasing / pre-spoil")
 
             # (2) check if max grad and max slew already suffice in setting area
             pre_grad_amplitude, t_flat = grad_instance._calc_check_double_ramp_area_vs_set_area(
@@ -510,54 +512,77 @@ class GRAD(Event):
         re_spoil_moment -= adjust_ramp_area
         areas.append(re_spoil_moment)
         # (1) check if ramp to amplitude exceeds set area if using maximum slew, i.e. smallest possible area
-        grad_instance._calc_check_single_ramp_area_vs_set_area(
-            area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
+        single_ramp_check = grad_instance._calc_check_single_ramp_area_vs_set_area(
+            area=re_spoil_moment, amplitude=amplitude
         )
+        if not single_ramp_check:
+            if not excitation:
+                grad_instance._single_ramp_error(identifier="re-phasing / spoil")
+            else:
+                # we need some rephasing gradient in opposite direction
+                # set single ramp
+                t_rd = grad_instance.set_on_raster(np.abs(amplitude) / system.max_slew)
+                # get area
+                rd_area = amplitude * t_rd / 2
+                # calculate missing area
+                area_left = re_spoil_moment - rd_area
+                # make grad
+                re_grad = GRAD.make_trapezoid(
+                    channel="z", system=system, area=area_left
+                )
+                # build shape
+                t_start = times[-1]
+                times.append(times[-1] + t_rd)
+                amps.append(0)
 
-        # (2) check if max grad and max slew already suffice in setting area
-        re_grad_amplitude, t_flat = grad_instance._calc_check_double_ramp_area_vs_set_area(
-            area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
-        )
+                times.extend((times[-1] + re_grad.t_array_s[1:]).tolist())
+                amps.extend(re_grad.amplitude[1:].tolist())
 
-        # (3) if we set times on gradient raster we might need to adopt gradient values
-        re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
-            area=re_spoil_moment, amplitude_to_set=np.sign(amplitude) * np.abs(re_grad_amplitude), amplitude_fixed=amplitude, t_flat=t_flat
-        )
+        else:
+            # (2) check if max grad and max slew already suffice in setting area
+            re_grad_amplitude, t_flat = grad_instance._calc_check_double_ramp_area_vs_set_area(
+                area=re_spoil_moment, amplitude=amplitude, identifier="re-phasing / spoil"
+            )
 
-        # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
-        duration_re_grad = t_ru + t_rd + t_flat
-        if duration_re_grad < t_minimum_re_grad and not excitation:
-            # stretch to minimum required time if we have such
-            # if we have to stretch, we can take the ramp times to be equal,
-            # since the amplitude has to be reduced, the ramps will get less steep.
-            t_flat = t_minimum_re_grad - t_ru - t_rd
-            b_num = re_spoil_moment - 0.5 * amplitude * t_rd
-            b_denom = t_ru / 2 + t_flat + t_rd / 2
-            re_grad_amplitude = b_num / b_denom
+            # (3) if we set times on gradient raster we might need to adopt gradient values
+            re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
+                area=re_spoil_moment, amplitude_to_set=np.sign(amplitude) * np.abs(re_grad_amplitude), amplitude_fixed=amplitude, t_flat=t_flat
+            )
 
-            # update amplitude
-            # b = - system.max_slew * t_minimum_re_grad + amplitude
-            # c = amplitude ** 2 + system.max_slew * re_spoil_moment
-            # re_grad_amplitude = -b / 2 + max(
-            #     np.sqrt(b ** 2 - 4 * c), - np.sqrt(b ** 2 - 4 * c)
-            # ) / 2
-            # t_ru = grad_instance.set_on_raster(np.abs(re_grad_amplitude) / system.max_slew)
-            # t_rd = grad_instance.set_on_raster(np.abs(re_grad_amplitude - amplitude) / system.max_grad)
-            # t_flat = t_minimum_re_grad - t_ru - t_rd
-            # re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
-            #     area=re_spoil_moment, amplitude_to_set=re_grad_amplitude,
-            #     amplitude_fixed=amplitude, t_flat=t_flat
-            # )
+            # (4) check if we have a requirement for the minimal time, if so we can possibly relax gradient stress
+            duration_re_grad = t_ru + t_rd + t_flat
+            if duration_re_grad < t_minimum_re_grad and not excitation:
+                # stretch to minimum required time if we have such
+                # if we have to stretch, we can take the ramp times to be equal,
+                # since the amplitude has to be reduced, the ramps will get less steep.
+                t_flat = t_minimum_re_grad - t_ru - t_rd
+                b_num = re_spoil_moment - 0.5 * amplitude * t_rd
+                b_denom = t_ru / 2 + t_flat + t_rd / 2
+                re_grad_amplitude = b_num / b_denom
 
-        # (5) build gradient shape for re/spoil grad
-        t_start = times[-1]
-        times.append(times[-1] + t_rd)
-        amps.append(re_grad_amplitude)
-        if t_flat > 1e-7:
+                # update amplitude
+                # b = - system.max_slew * t_minimum_re_grad + amplitude
+                # c = amplitude ** 2 + system.max_slew * re_spoil_moment
+                # re_grad_amplitude = -b / 2 + max(
+                #     np.sqrt(b ** 2 - 4 * c), - np.sqrt(b ** 2 - 4 * c)
+                # ) / 2
+                # t_ru = grad_instance.set_on_raster(np.abs(re_grad_amplitude) / system.max_slew)
+                # t_rd = grad_instance.set_on_raster(np.abs(re_grad_amplitude - amplitude) / system.max_grad)
+                # t_flat = t_minimum_re_grad - t_ru - t_rd
+                # re_grad_amplitude, t_ru, t_rd, t_flat = grad_instance._reset_amplitude_calc_ramps(
+                #     area=re_spoil_moment, amplitude_to_set=re_grad_amplitude,
+                #     amplitude_fixed=amplitude, t_flat=t_flat
+                # )
+
+            # (5) build gradient shape for re/spoil grad
+            t_start = times[-1]
+            times.append(times[-1] + t_rd)
             amps.append(re_grad_amplitude)
-            times.append(times[-1] + t_flat)
-        times.append(times[-1] + t_ru)
-        amps.append(0.0)
+            if t_flat > 1e-7:
+                amps.append(re_grad_amplitude)
+                times.append(times[-1] + t_flat)
+            times.append(times[-1] + t_ru)
+            amps.append(0.0)
 
         amps = np.array(amps)
         times = np.array(times)
@@ -612,16 +637,21 @@ class GRAD(Event):
 
         return grad_instance, delay, duration_re_grad
 
-    def _calc_check_single_ramp_area_vs_set_area(self, area: float, amplitude: float, identifier: str = ""):
+    def _calc_check_single_ramp_area_vs_set_area(self, area: float, amplitude: float):
         a = amplitude ** 2 / 2 / self.system.max_slew
-        if np.abs(a) > np.abs(area) + 1e-5:
-            msg = (
-                "area cannot accommodated with maximum slew. "
-                "Area through ramps already exceeds set value. "
-                f"choose higher {identifier} moment"
-            )
-            log_module.error(msg)
-            raise ValueError(msg)
+        if np.abs(a) > np.abs(area) + 1e-5 or np.sign(area) != np.sign(a):
+            return False
+        else:
+            return True
+
+    def _single_ramp_error(self, identifier: str = ""):
+        msg = (
+            "area cannot accommodated with maximum slew. "
+            "Area through ramps already exceeds set value. "
+            f"choose higher {identifier} moment"
+        )
+        log_module.error(msg)
+        raise ValueError(msg)
 
     def _calc_check_double_ramp_area_vs_set_area(self, area: float, amplitude: float, identifier: str = ""):
         """
