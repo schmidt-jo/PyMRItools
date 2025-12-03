@@ -628,14 +628,14 @@ class Sequence2D(abc.ABC):
 
     def build(self):
         log_module.info(f"__Build Sequence__")
-        log_module.info(f"build -- calculate total scan time")
-        self._calculate_scan_time()
         log_module.info(f"build -- set up k-space sampling")
         self._set_k_space_sampling()
         log_module.info(f"build -- set up slices")
         self._set_delta_slices()
         log_module.info(f"build variant specifics")
         self._build_variant()
+        log_module.info(f"build -- calculate total scan time")
+        self._calculate_scan_time()
         log_module.info(f"build -- loop lines")
         # prescan for noise correlation
         self._noise_pre_scan()
