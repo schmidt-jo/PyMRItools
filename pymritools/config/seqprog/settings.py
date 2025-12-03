@@ -173,11 +173,11 @@ class Parameters2D(Serializable):
         default=4500.0, help="Repetition time [ms]."
     )
     tr_et_delay: float = field(
-        default=0.0, help="Echo-train delay per TR [ms]. "
+        default=20.0, help="Echo-train delay per TR [ms]. "
                           "Instead of TR we can set the delay time between echo trains here and TR is calculated accordingly."
     )
     t_exc_pre_read_grad_us: float = field(
-        default=700.0, help="Duration for excitation read gradient prephaser. Setting this longer can help preventing Stimulation and relax gradients."
+        default=720.0, help="Duration for excitation read gradient prephaser. Setting this longer can help preventing Stimulation and relax gradients."
                             "But prolongs ESP."
     )
 
