@@ -176,6 +176,10 @@ class Parameters2D(Serializable):
         default=0.0, help="Echo-train delay per TR [ms]. "
                           "Instead of TR we can set the delay time between echo trains here and TR is calculated accordingly."
     )
+    t_exc_pre_read_grad_us: float = field(
+        default=700.0, help="Duration for excitation read gradient prephaser. Setting this longer can help preventing Stimulation and relax gradients."
+                            "But prolongs ESP."
+    )
 
     # define a bunch of properties (we dont want to serialize those)
     @property

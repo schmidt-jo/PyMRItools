@@ -154,7 +154,7 @@ class Kernel:
             )
             t_re_min = grad_read_pre.get_duration()
             # relax for stimulation - 660us min
-            t_re_min = np.max([t_re_min, 0.0007])
+            t_re_min = np.max([t_re_min, params.t_exc_pre_read_grad_us * 1e-6])
             grad_read_pre = events.GRAD.make_trapezoid(
                 channel=params.read_dir, system=system,
                 area=read_grad_pre_area,
@@ -859,7 +859,7 @@ class Kernel:
         # set longest for all
         grad_read_spoil = events.GRAD.make_trapezoid(
             channel=params.read_dir,
-            area=-params.read_grad_spoiling_factor * grad_read.area,
+            area=params.read_grad_spoiling_factor * grad_read.area,
             system=system,
             duration_s=duration
         )
