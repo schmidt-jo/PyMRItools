@@ -38,7 +38,7 @@ def apodisation_window_hann_like(n_samples: int, duration_s: float, apodisation:
     return window
 
 def optimise_excitation_pulse(settings: PulseSimulationSettings):
-    path = plib.Path(get_test_result_output_dir("pulse_optim_slr_exc", mode=ResultMode.OPTIMIZATION)).absolute()
+    path = plib.Path(get_test_result_output_dir("pulse_optim_gauss_exc", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
     settings.pulse_name = "excitation"
@@ -160,8 +160,8 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="excitation",
-        duration_in_us=2600,
-        time_bandwidth=2.6,
+        duration_in_us=2800,
+        time_bandwidth=2.8,
         num_samples=pulse_y_init.shape[0],
         signal=pulse_y.detach().cpu().numpy()
     )
@@ -172,7 +172,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings):
 
 
 def optimise_refocusing_pulse(settings: PulseSimulationSettings):
-    path = plib.Path(get_test_result_output_dir("pulse_optim_slr_ref", mode=ResultMode.OPTIMIZATION)).absolute()
+    path = plib.Path(get_test_result_output_dir("pulse_optim_gauss_ref", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
     settings.pulse_name = "refocusing"
@@ -206,7 +206,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
     # use some apodiasaion
     apo_window = apodisation_window_hann_like(
         n_samples=torch.count_nonzero(pulse_mask).to(torch.int).item(),
-        duration_s=3200 * 1e-6, apodisation=0.3
+        duration_s=3800 * 1e-6, apodisation=0.3
     ).to(pulse_sim.grad_pulse.data_pulse_x.device)
     # pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.clone()
     pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.squeeze()[pulse_mask].clone()
@@ -244,7 +244,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
         )
         # delay
         relax_matrix = functions.matrix_propagation_relaxation_multidim(
-            dt_s=0.00006, sim_data=pulse_sim.data
+            dt_s=0.0002, sim_data=pulse_sim.data
         )
         data = functions.propagate_matrix_mag_vector(relax_matrix, sim_data=data)
 
@@ -321,8 +321,8 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings):
 
     rf_optim = RFPulse(
         name="refocusing",
-        duration_in_us=3600,
-        time_bandwidth=3.6,
+        duration_in_us=3800,
+        time_bandwidth=3.8,
         num_samples=pulse_x_init.shape[0],
         signal=pulse_x.detach().cpu().numpy()
     )
@@ -480,8 +480,8 @@ def plot_mag_iter(mag_iter: list, path: plib.Path, sample_axis: torch.Tensor, ta
 
 
 def plot_results(settings: PulseSimulationSettings):
-    path_ref = plib.Path(get_test_result_output_dir("pulse_optim_slr_ref", mode=ResultMode.OPTIMIZATION)).absolute()
-    path_exc = plib.Path(get_test_result_output_dir("pulse_optim_slr_exc", mode=ResultMode.OPTIMIZATION)).absolute()
+    path_ref = plib.Path(get_test_result_output_dir("pulse_optim_gauss_ref", mode=ResultMode.OPTIMIZATION)).absolute()
+    path_exc = plib.Path(get_test_result_output_dir("pulse_optim_gauss_exc", mode=ResultMode.OPTIMIZATION)).absolute()
 
     settings.out_path = path_ref.as_posix()
     settings.visualize = False
@@ -664,11 +664,11 @@ if __name__ == '__main__':
     settings = PulseSimulationSettings.from_cli(args=args.settings)
     # set some additionals
     settings.visualize = False
-    settings.pulse_duration = 2600.0
-    settings.sample_length = 0.002
+    settings.pulse_duration = 2800.0
+    settings.sample_length = 0.004
     settings.kernel_file = plib.Path(
-        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/00_seq/debug/"
-        "20251201_mese_cfa130-rf28-36-slr_rgs0p65_a3p5_sp3200_tr7_var-m065-sl50-g65/mese_kernels.pkl"
+        "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/00_seq/invivo/"
+        "20251203_mese_cfa130-rf28-38-gauss_rgs0p8_a3p65_trd20_m065-sl82-g67_read-t720-ge-m100/mese_kernels.pkl"
     ).as_posix()
     settings.display()
 

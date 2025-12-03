@@ -26,12 +26,12 @@ def main():
     )
     # hardcode some of the path and parameters
     path_out = plib.Path(
-        "/data/pt_np-jschmidt/data/03_sequence_dev/mese_pulse_train_optimization/optimization"
+        "/data/pt_np-jschmidt/code/PyMRItools/test_output/OPTIMIZATION/vfa_mese_wandb"
     ).absolute()
     path_out.mkdir(exist_ok=True, parents=True)
 
     path_in = plib.Path(
-        "/data/pt_np-jschmidt/data/03_sequence_dev/build_sequences/2025-03-20_mese_phantom/emc_settings.json"
+        "/data/pt_np-jschmidt/code/PyMRItools/optimization/optim_emc_settings.json"
     ).absolute()
     # set some params
     sim_settings = EmcSimSettings.load(path_in)

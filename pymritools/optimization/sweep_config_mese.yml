@@ -31,6 +31,6 @@ parameters:
     min: 50.0
     max: 140.0
   lam_snr:
-    value: 0.7
+    value: 0.9
   gpud:
     value: 0
