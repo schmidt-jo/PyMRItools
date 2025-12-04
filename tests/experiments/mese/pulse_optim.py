@@ -37,6 +37,59 @@ def apodisation_window_hann_like(n_samples: int, duration_s: float, apodisation:
     window = 1 - apodisation + apodisation * (1 + torch.cos(np.pi * tt_norm)) / 2
     return window
 
+
+def apodisation_window_step_smooth(n_samples: int, duration_s: float, apodisation: float = 0.2):
+    """
+    Create an apodisation window with a flat band at 1 in the center and configurable edge transitions.
+
+    Args:
+        n_samples: Number of samples
+        duration_s: Duration in seconds
+        apodisation: Controls the center flatness and edge sharpness (0 to 1)
+            - apodisation=0: Window = 1 (completely flat, no tapering)
+            - apodisation=1: Sharp transitions, minimal flat region at center
+            - Values in between: Interpolate between these extremes
+
+    Returns:
+        Window tensor with values between 0 and 1
+    """
+    t = (torch.arange(1, n_samples + 1) - 0.5) * duration_s / n_samples
+    tt = t - (duration_s * 0.5)
+    # Normalize tt to [-1, 1] range
+    tt_norm = 2 * tt / duration_s
+
+    # Use absolute value to make symmetric window
+    tt_abs = torch.abs(tt_norm)
+
+    if apodisation < 1e-6:
+        # At apodisation=0: completely flat window
+        window = torch.ones_like(tt_norm)
+    else:
+        # Transition region width decreases as apodisation increases
+        # At apodisation=0: transition_edge = 1.0 (entire half spans the transition)
+        # At apodisation=1: transition_edge ≈ 0 (sharp step at edges)
+        transition_edge = 1.0 - apodisation
+
+        if transition_edge < 1e-6:
+            # Very sharp transition - essentially a rectangular window
+            window = torch.where(tt_abs <= transition_edge, torch.ones_like(tt_norm), torch.zeros_like(tt_norm))
+        else:
+            # Smooth cosine transition in the region [transition_edge, 1.0]
+            # Outside [transition_edge, 1.0]: window = 0
+            # Inside [-transition_edge, transition_edge]: window = 1
+            # In between: smooth cosine transition
+            window = torch.ones_like(tt_norm)
+
+            # Transition region: smooth cosine from 1 to 0
+            transition_mask = (tt_abs > transition_edge) & (tt_abs <= 1.0)
+            normalized_transition = (tt_abs[transition_mask] - transition_edge) / (1.0 - transition_edge)
+            window[transition_mask] = (1 + torch.cos(np.pi * normalized_transition)) / 2
+
+            # Beyond the window: set to 0
+            window[tt_abs > 1.0] = 0.0
+
+    return window
+
 def optimise_excitation_pulse(settings: PulseSimulationSettings, name: str):
     path = plib.Path(get_test_result_output_dir(f"pulse_optim_{name}_exc", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
