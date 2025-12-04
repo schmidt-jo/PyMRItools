@@ -54,8 +54,9 @@ def main():
     mese.simulate()
 
     # compute losses
-    sar = torch.sqrt(torch.sum((torch.tensor(fas) / 180 * torch.pi)**2))
-    snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean()
+    # sar = torch.sqrt(torch.sum((torch.tensor(fas) / 180 * torch.pi)**2))
+    sar = torch.sum(torch.abs(torch.tensor(fas) / 180))
+    snr = torch.linalg.norm(mese.data.signal_mag, dim=-1).flatten().mean() * 10
     # minimize sar, maximize snr, with a minimizing total loss
     loss = (1.0 - wandb.config.lam_snr) * sar - wandb.config.lam_snr * snr
     wandb.log({"loss": loss, "sar": sar, "snr": snr, "fas": fas})

@@ -90,7 +90,7 @@ def apodisation_window_step_smooth(n_samples: int, duration_s: float, apodisatio
 
     return window
 
-def optimise_excitation_pulse(settings: PulseSimulationSettings, name: str):
+def optimise_excitation_pulse(settings: PulseSimulationSettings, name: str, apo: float = 0.2):
     path = plib.Path(get_test_result_output_dir(f"pulse_optim_{name}_exc", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
@@ -120,13 +120,13 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings, name: str):
     pulse_mask = torch.abs(pulse_sim.grad_pulse.data_pulse_x + 1j * pulse_sim.grad_pulse.data_pulse_y).squeeze() > 1e-12
     # grad = grad_init.clone().requires_grad_(True)
     # we need to adjust the simulation itself to optimise
-    pulse_x_init = pulse_sim.grad_pulse.data_pulse_x.clone()
+    pulse_x_init = torch.zeros_like(pulse_sim.grad_pulse.data_pulse_x.clone())
     # pulse_x_init = pulse_sim.grad_pulse.data_pulse_x.squeeze()[pulse_mask].clone()
     # pulse_y_init = pulse_sim.grad_pulse.data_pulse_y.clone()
     # use some apodisation
-    apo_window = apodisation_window_hann_like(
+    apo_window = apodisation_window_step_smooth(
         n_samples=torch.count_nonzero(pulse_sim.grad_pulse.data_pulse_y.squeeze()).to(torch.int).item(),
-        duration_s=settings.pulse_duration*1e-6, apodisation=0.3
+        duration_s=settings.pulse_duration*1e-6, apodisation=apo
     ).to(pulse_sim.grad_pulse.data_pulse_y.device)
 
     dt = pulse_sim.grad_pulse.dt_sampling_steps_us * 1e-6
@@ -180,7 +180,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings, name: str):
         loss_sar = torch.sum(torch.abs(pulse_y**2)) * 1e7
         losses_sar.append(loss_sar.item())
 
-        loss = loss_profile + 1.5 * loss_sar
+        loss = loss_profile + 1.1 * loss_sar
         losses.append(loss.item())
 
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
@@ -213,8 +213,8 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings, name: str):
 
     rf_optim = RFPulse(
         name="excitation",
-        duration_in_us=2600,
-        time_bandwidth=2.6,
+        duration_in_us=2800,
+        time_bandwidth=2.8,
         num_samples=pulse_y_init.shape[0],
         signal=pulse_y.detach().cpu().numpy()
     )
@@ -224,7 +224,7 @@ def optimise_excitation_pulse(settings: PulseSimulationSettings, name: str):
     )
 
 
-def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str):
+def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str, apo: float = 0.2):
     path = plib.Path(get_test_result_output_dir(f"pulse_optim_{name}_ref", mode=ResultMode.OPTIMIZATION)).absolute()
     settings.out_path = path.as_posix()
     settings.visualize = False
@@ -257,13 +257,13 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str):
     # grad = grad_init.clone().requires_grad_(True)
     # we need to adjust the simulation itself to optimise
     # use some apodiasaion
-    apo_window = apodisation_window_hann_like(
+    apo_window = apodisation_window_step_smooth(
         n_samples=torch.count_nonzero(pulse_mask).to(torch.int).item(),
-        duration_s=3200 * 1e-6, apodisation=0.3
+        duration_s=3800 * 1e-6, apodisation=apo
     ).to(pulse_sim.grad_pulse.data_pulse_x.device)
     # pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.clone()
     pulse_x_init = pulse_sim.grad_pulse_ref.data_pulse_x.squeeze()[pulse_mask].clone()
-    pulse_y_init = pulse_sim.grad_pulse_ref.data_pulse_y.clone()
+    pulse_y_init = torch.zeros_like(pulse_sim.grad_pulse_ref.data_pulse_y.clone())
     # pulse_y_init = pulse_sim.grad_pulse_ref.data_pulse_y.squeeze()[pulse_mask].clone()
 
     dt = pulse_sim.grad_pulse_ref.dt_sampling_steps_us * 1e-6
@@ -274,7 +274,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str):
     # set some optimisation parameters
     max_num_iter = 50
     # lr = torch.full((max_num_iter,), 2e-8)
-    lr = torch.linspace(1e-9, 8e-10, max_num_iter)
+    lr = torch.linspace(8e-10, 2e-10, max_num_iter)
 
     losses = []
     losses_profile = []
@@ -297,7 +297,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str):
         )
         # delay
         relax_matrix = functions.matrix_propagation_relaxation_multidim(
-            dt_s=0.00006, sim_data=pulse_sim.data
+            dt_s=0.0002, sim_data=pulse_sim.data
         )
         data = functions.propagate_matrix_mag_vector(relax_matrix, sim_data=data)
 
@@ -318,7 +318,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str):
         # delay
         # delay
         relax_matrix_acq = functions.matrix_propagation_relaxation_multidim(
-            dt_s=0.000001, sim_data=pulse_sim.data
+            dt_s=0.004, sim_data=pulse_sim.data
         )
         data = functions.propagate_matrix_mag_vector(relax_matrix_acq, sim_data=data)
         mag_refocus = torch.squeeze(data.magnetization_propagation)[:, :3]
@@ -336,7 +336,7 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str):
         loss_sar = (torch.sum(torch.abs(pulse_x**2))) * 1e7
         losses_sar.append(loss_sar.item())
 
-        loss = loss_profile + 0.15 * loss_sar
+        loss = loss_profile + 0.12 * loss_sar
         losses.append(loss.item())
 
         bar.set_description(f"Loss: {loss.item():.3f}, SAR: {loss_sar.item():.3f}, Profile: {loss_profile.item():.3f}")
@@ -374,8 +374,8 @@ def optimise_refocusing_pulse(settings: PulseSimulationSettings, name: str):
 
     rf_optim = RFPulse(
         name="refocusing",
-        duration_in_us=3600,
-        time_bandwidth=3.6,
+        duration_in_us=3800,
+        time_bandwidth=3.8,
         num_samples=pulse_x_init.shape[0],
         signal=pulse_x.detach().cpu().numpy()
     )
@@ -717,18 +717,18 @@ if __name__ == '__main__':
     settings = PulseSimulationSettings.from_cli(args=args.settings)
     # set some additionals
     settings.visualize = False
-    settings.pulse_duration = 2600.0
-    settings.sample_length = 0.002
+    settings.pulse_duration = 2800.0
+    settings.sample_length = 0.004
     settings.kernel_file = plib.Path(
         "/data/pt_np-jschmidt/data/30_projects/01_pulseq_mese_r2/00_seq/debug/"
-        "20251201_mese_cfa130-rf28-36-slr_rgs0p65_a3p5_sp3200_tr7_var-m065-sl50-g65/mese_kernels.pkl"
+        "20251203_mese_cfa130-rf28-38-slr_rgs0p8_a3p5_trd20_m065-sl50-g67_read-t720-ge-m100/mese_kernels.pkl"
     ).as_posix()
     settings.display()
     name = "slr"
 
     try:
-        optimise_excitation_pulse(settings, name=name)
-        optimise_refocusing_pulse(settings, name=name)
+        optimise_excitation_pulse(settings, name=name, apo=0.1)
+        optimise_refocusing_pulse(settings, name=name, apo=0.1)
         plot_results(settings=settings, name=name)
     except Exception as e:
         parser.print_usage()

@@ -64,7 +64,7 @@ def main():
     pulse_x = [mese.gps_refocus[i].data_pulse_x for i in range(len(mese.gps_refocus))]
     pulse_y = [mese.gps_refocus[i].data_pulse_y for i in range(len(mese.gps_refocus))]
     # setup fas
-    lam_snr = 0.95
+    lam_snr = 0.98
     lam_corr = 1e-4
 
     fa_ref = torch.full((params.etl,), fill_value=0.8, device="cpu", requires_grad=True)
