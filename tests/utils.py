@@ -9,7 +9,6 @@ import pickle
 
 from pymritools.utils import Phantom
 
-
 test_dir = os.path.dirname(__file__)
 test_output_dir = os.path.join(os.path.dirname(test_dir), "test_output")
 
@@ -262,3 +261,104 @@ def create_phantom(shape_xyct: Tuple, acc: float = 3.0, ac_lines: int = 24):
     k_us = phantom.sub_sample_ac_random_lines(acceleration=acc, ac_lines=ac_lines)
     k = phantom.get_2d_k_space()
     return k, k_us
+
+
+@torch.no_grad()
+def create_random_matrix(
+        m: int,
+        n: int,
+        cond=1e3,
+        dtype: torch.dtype = torch.float64,
+        device="cuda",
+        noise="rician",
+        noise_level=1e-3,
+        seed=None) -> torch.Tensor:
+    """
+    Generate a large (m × n) random test matrix with controlled spectral properties and optional non-Gaussian noise.
+
+    This function constructs a matrix A of shape (m, n) with the following features:
+      - Thin-QR based orthonormal factors: Generates tall-skinny Gaussian matrices of shape
+        (m, k) and (n, k), where k = min(m, n), and applies reduced QR decomposition to obtain
+        orthonormal bases QL (m × k) and QR (n × k). This avoids memory-intensive operations
+        like QR on large square matrices.
+      - Prescribed singular-value spectrum: Creates a singular-value vector `s` of length k
+        that decays geometrically from 1 down to 1/cond. The final matrix A = QL @ diag(s) @ QRᵀ
+        ensures a controlled condition number and known spectral properties critical for stable
+        SVD benchmarking.
+      - Optional non-Gaussian noise: Supports additive noise of type `"laplace"`, `"student_t"`,
+        or `"rician"` (to approximate typical MRI magnitude noise). The noise is scaled relative
+        to A's Frobenius norm to maintain numerical stability.
+      - Double-precision internal construction: The matrix is built in `dtype` (default `float64`)
+        for numerical robustness, and can later be downcast to `float32` if needed for benchmarking.
+
+    Args:
+        m (int): Number of rows of the test matrix.
+        n (int): Number of columns of the test matrix.
+        cond (float, optional): Desired condition number (ratio of maximum to minimum singular
+          value). Defaults to 1e3.
+        dtype (torch.dtype, optional): Data type for intermediate computation; float64 helps
+          ensure numerical stability. Defaults to torch.float64.
+        device (str, optional): PyTorch device to allocate tensors. Defaults to "cuda".
+        noise (str, optional): Type of non-Gaussian noise to add. If `None`, no noise is added.
+          Must be one of {"rician", "laplace", "student_t", None}. Defaults to "rician".
+        noise_level (float, optional): Scaling factor for noise magnitude relative to the
+          average entry size of A. Defaults to 1e-3.
+        seed (int, optional): Random seed for reproducibility; if provided, sets
+          `torch.manual_seed(seed)`. Defaults to None.
+
+    Returns:
+        torch.Tensor: A well-conditioned test matrix of shape (m, n), built in double
+          precision. Suitable for stable SVD or RSVD operations.
+
+    Note:
+        - By using reduced QR, memory usage scales with O(m·k + n·k) rather than O(m² + n²).
+        - The geometric decay of singular values ensures that the condition number is exactly
+        `cond`, allowing systematic performance testing.
+        - Non-Gaussian noise is added in a controlled manner to simulate realistic MRI-like
+        magnitude data while keeping the spectrum stable.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    creation_dtype = torch.float64
+    creation_device = torch.device("cpu")
+    k = min(m, n)
+    out = None  # will hold the final tensor we return
+
+
+    # Orthonormal factors via reduced QR on tall-skinny Gaussians
+    QL, _ = torch.linalg.qr(torch.randn(m, k, dtype=creation_dtype, device=creation_device), mode="reduced")
+    QR, _ = torch.linalg.qr(torch.randn(n, k, dtype=creation_dtype, device=creation_device), mode="reduced")
+
+    # Geometric spectrum 1 ... 1/cond (in log-space)
+    # use a scalar tensor to avoid host<->device conversions
+    log10_cond = torch.log10(torch.as_tensor(cond, dtype=creation_dtype, device=creation_device))
+    s = torch.logspace(0, -log10_cond.item(), steps=k, dtype=creation_dtype, device=creation_device)
+
+    A = QL @ (s.unsqueeze(0) * QR.mH)  # (m,k) @ (k,k) @ (k,n) -> (m,n)
+
+    # Add optional noise
+    if noise is not None and noise_level > 0:
+        if noise == "laplace":
+            u = torch.rand(m, n, dtype=creation_dtype, device=creation_device) - 0.5
+            noise_sample = -torch.sign(u) * torch.log1p(-2 * torch.abs(u))
+        elif noise == "student_t":
+            dof = 3.0
+            g = torch.randn(m, n, dtype=creation_dtype, device=creation_device)
+            chi2 = torch.distributions.Chi2(dof).sample((m, n,)).to(device=creation_device, dtype=creation_dtype)
+            noise_sample = g / torch.sqrt(chi2 / dof + 1e-12)
+        elif noise == "rician":
+            X = torch.randn(m, n, dtype=creation_dtype, device=creation_device)
+            Y = torch.randn(m, n, dtype=creation_dtype, device=creation_device)
+            noise_sample = torch.sqrt(X * X + Y * Y)
+            noise_sample -= noise_sample.mean()
+        else:
+            raise ValueError("Unknown noise type")
+
+        sigma = noise_level * (A.norm() / (m * n) ** 0.5 + 1e-12)
+        A = A + sigma * noise_sample
+
+    out = A.to(dtype=dtype).contiguous() if dtype is not creation_dtype else A.contiguous()
+    # Now move random matrix to the target device
+    return out.to(device=device)
+

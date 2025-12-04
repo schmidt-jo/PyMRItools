@@ -43,14 +43,16 @@ def process_svd(matrix: torch.Tensor, svd_type: SVDType, rank: int, oversampling
         case SVDType.RSVD:
             _, _, _ = randomized_svd(matrix=matrix, q=rank+oversampling, power_projections=power_iterations)
         case SVDType.EIGH:
+            torch.backends.cuda.preferred_linalg_library(backend="magma")
             _, _ = torch.linalg.eigh(matrix.mH @ matrix)
+            torch.backends.cuda.preferred_linalg_library(backend="default")
         case SVDType.RANDQLP:
             _, _, _ = rand_qlp(matrix=matrix)
         case SVDType.RANDNS:
             m_dim = min(matrix.shape[-2:])
             _ = randomized_nullspace(matrix=matrix, nullity=m_dim - rank, oversample=oversampling)
 
-
+@torch.no_grad()
 def compute():
     path = plib.Path(get_test_result_output_dir("svd_performance", mode=ResultMode.EXPERIMENT))
 
@@ -75,12 +77,21 @@ def compute():
     for g in tqdm.trange(ms_ce.shape[0], desc="Processing Matrix sizes"):
         mce = ms_ce[g] * 2
         # logger.info(f"\t\tProcessing Matrix Size CE : {g+1} / {ms_ce.shape[0]}")
-        m = min(mxy.item(), mce)
+        m = min(mxy.item(), mce.item())
         rank = max(m // 10, 10)
 
-        matrix = torch.randn((mxy, mce), device=device)
-        matrix += torch.full_like(matrix, 1)
-        matrix += torch.randn_like(matrix)**2
+        from tests.utils import create_random_matrix
+        matrix = create_random_matrix(
+            mxy.item(),
+            mce.item(),
+            dtype=torch.float32,
+            device=device,
+            noise_level=1e-2,
+        )
+
+        # matrix = torch.randn((mxy, mce), device=device)
+        # matrix += torch.full_like(matrix, 1)
+        # matrix += torch.randn_like(matrix)**2
 
         # SVDS
         for svd_type in list(SVDType):
