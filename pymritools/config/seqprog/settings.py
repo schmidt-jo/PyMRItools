@@ -160,6 +160,12 @@ class Parameters2D(Serializable):
     number_noise_scans: int = field(
         default=10, help="Number of noise scans before starting sequence."
     )
+    read_grad_fid_spoil_samples: int = field(
+        default=48, help="Number of 'additional' readout samples used for spoiling the readout. "
+                         "I.e. instead of giving a spoiling area we just use this way of specifying, "
+                         "hence, the area will be this number times set readout dwell time times oversampling times "
+                         "the readout gradient dependent on the FOV and resolution."
+    )
 
     # timing
     esp: float = field(
@@ -238,12 +244,12 @@ class Parameters2D(Serializable):
     def bandwidth(self) -> float:
         return 1 / self.acquisition_time
 
-    @property
-    def read_grad_fid_spoil_samples(self) ->int:
-        # we want to use some FID spoiling of readout gradients,
-        # i.e. some additional gradient area before the actual readout, we take this in multiples of readout samples
-        # (i.e. multiplied by oversampling and dwell)
-        return 48
+    # @property
+    # def read_grad_fid_spoil_samples(self) ->int:
+    #     # we want to use some FID spoiling of readout gradients,
+    #     # i.e. some additional gradient area before the actual readout, we take this in multiples of readout samples
+    #     # (i.e. multiplied by oversampling and dwell)
+    #     return 48
 
     @property
     def excitation_rf_rad_fa(self) -> float:
