@@ -37,7 +37,6 @@ class MESE(Sequence2D):
         }
 
         # experimental feature - variable slice thickness upon slice selection of rf refocusing pulses
-        varsli = False
         # if we slightly vary the duration of the pulses up to +- 200 us,
         # we create a variable slice thickness upon refocusing pulses, without changing bandwidth, tbw
         # or gradient amplitude / balancing
@@ -48,10 +47,10 @@ class MESE(Sequence2D):
         for i in range(self.params.etl - 2):
             block_refocus = self.block_refocus.copy()
 
-            if varsli:
+            if params.variable_refoc_slice:
                 # adopt timing
-                # dur_reduce_us = self.prng.random_integers(low=50, high=200) * 2     # between 100 and 400 us,
-                dur_reduce_us = 400 - 2 * np.linspace(200, 0, self.params.etl-2).astype(int)     # between 100 and 400 us,
+                # dur_reduce_us = self.prng.random_integers(low=50, high=200) * 2     # between 400 and 1200 us,
+                dur_reduce_us = 1200 - 2 * np.linspace(400, 0, self.params.etl-2).astype(int)     # between 100 and 400 us,
                 # want this to be divisible by 2
                 # need to introduce half the time as delay to center the rf
                 delay_us = dur_reduce_us[i] // 2

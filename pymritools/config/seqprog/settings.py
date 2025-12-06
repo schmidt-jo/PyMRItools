@@ -166,6 +166,10 @@ class Parameters2D(Serializable):
                          "hence, the area will be this number times set readout dwell time times oversampling times "
                          "the readout gradient dependent on the FOV and resolution."
     )
+    variable_refoc_slice: bool = field(
+        default=False, help="Set refocusing pulse slice thicknesses (bandwidth) variable throughout the pulse train, "
+                            "might avoids third arm artefacts in later echoes."
+    )
 
     # timing
     esp: float = field(
