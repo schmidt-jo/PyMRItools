@@ -176,7 +176,7 @@ def load_pulseq_rd(
         device = torch.device(f'cuda:{gpu_device}')
     else:
         device = torch.device('cpu')
-    log_module.info(f"setup device")
+    log_module.info(f"setup device : {torch.cuda.get_device_name(device)}")
 
     log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
     # remove data not needed, i.e. SYNCDATA acquisitions
@@ -239,7 +239,7 @@ def load_pulseq_rd(
         else:
             # get corresponding data
             data = np.zeros((len(sampled_scan_numbers), num_coils, n_read * os_factor), dtype=complex)
-            for i, k in tqdm.tqdm(enumerate(sampled_scan_numbers), desc="extract data"):
+            for i, k in enumerate(tqdm.tqdm(sampled_scan_numbers, desc="extract data")):
                 if k < len(data_mdbs):
                     data[i] = data_mdbs[k].data
         if acq == "noise_scan":

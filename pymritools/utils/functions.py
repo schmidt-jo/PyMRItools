@@ -468,15 +468,6 @@ class SimpleKalmanFilter:
         return self.estimate
 
 
-def exponential_moving_average(new_value, previous_smoothed, alpha=0.1):
-    """
-    Exponential Moving Average smoothing
-    - alpha controls the smoothing (0 < alpha < 1)
-    - Lower alpha = more smoothing, higher alpha = less smoothing
-    """
-    return alpha * new_value + (1 - alpha) * previous_smoothed
-
-
 def calc_psnr(original_input: torch.Tensor, compressed_input: torch.Tensor) -> float:
     mse = torch.mean((original_input - compressed_input) ** 2)
     if mse == 0:
