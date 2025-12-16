@@ -122,22 +122,23 @@ def mc_trace(op, rank, batch: torch.Tensor, num_samples=50, eps=1e-7, svd_mode: 
 
 def hutchinson_trace(k_space: torch.Tensor, r: int, op: Operator, num_samples=100, svd_mode:SvdMode=SvdMode.SVD, lr_q: int = None):
     trace_est = 0
-    k_space.requires_grad_(True)
-    if k_space.grad is not None:
-        k_space.grad.zero_()
+    # k_space.requires_grad_(True)
+    # if k_space.grad is not None:
+    #     k_space.grad.zero_()
 
-    def p_forward(k_space):
-        return sure_operator(r=r, k_space=k_space, op=op, svd_mode=svd_mode, lr_q=lr_q)
+    def p_forward(x):
+        return sure_operator(r=r, k_space=x, op=op, svd_mode=svd_mode, lr_q=lr_q)
+
+    def single_sample(v):
+        _, jvp = torch.func.jvp(
+                p_forward, (k_space,), (v,),
+                # create_graph=False
+            )
+        return torch.real(torch.vdot(v.flatten(), jvp.flatten())).item()
 
     for _ in tqdm.trange(num_samples, desc="hutchinson trace estimation"):
         v = torch.randn_like(k_space)
-        v /= torch.linalg.norm(v)
-        jvp = torch.autograd.functional.jvp(
-            p_forward, k_space, v, create_graph=False
-        )[1]
-        trace_est += torch.real(torch.vdot(v.flatten(), jvp.flatten())).item()
-    k_space.requires_grad_(False)
-    del jvp
+        trace_est += single_sample(v)
     torch.cuda.empty_cache()
     return trace_est / num_samples
 
@@ -160,6 +161,7 @@ def main():
         img[-30:, :30],
         img[-30:, -30:]
     ]).flatten()
+    noise /= np.sqrt(k.shape[0] * k.shape[1])
 
     # sl_phantom = Phantom.get_shepp_logan(shape=(192, 168), num_coils=4, num_echoes=2)
     # k = sl_phantom.get_2d_k_space()
@@ -219,7 +221,7 @@ def main():
             bar.postfix = f"compute hutchinson"
             trace_op_h = get_trace(
                 op=op, rank=r, batch=batch, num_samples=num_samples, eps=eps, mode=TraceMode.HUTCHINSON, svd_mode=svd_mode, lr_q=lr_q
-            )
+            ) / m
             torch.cuda.empty_cache()
             # bar.postfix = f"compute mc"
             # trace_op_mc = get_trace(op=op, rank=r, batch=batch, num_samples=num_samples, eps=eps, mode=TraceMode.MC, svd_mode=svd_mode, lr_q=lr_q)
