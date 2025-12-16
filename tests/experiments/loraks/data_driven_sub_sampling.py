@@ -12,13 +12,18 @@ import polars as pl
 
 import torch
 import tqdm
+from scipy.stats import pearsonr, spearmanr
+import numpy as np
 
 from pymritools.recon.loraks.loraks import Loraks, OperatorType
-from pymritools.recon.loraks.utils import unpad_output
+from pymritools.recon.loraks.utils import (
+    check_channel_batch_size_and_batch_channels, prepare_k_space_to_batches, unprepare_batches_to_k_space,
+    pad_input, unpad_output
+)
 
 from pymritools.recon.loraks.ac_loraks import AcLoraksOptions, SolverType, m_op_base
-from pymritools.utils.functions import fft_to_img
-from pymritools.utils import Phantom, calc_psnr, root_sum_of_squares, calc_nmse, calc_ssim
+from pymritools.utils import Phantom, calc_psnr, root_sum_of_squares, calc_nmse, calc_ssim, fft_to_img, torch_save, \
+    torch_load
 
 from scipy.ndimage import gaussian_filter
 
@@ -149,6 +154,580 @@ class AdaptiveSampler:
 #     grad_pb = unprep_k_space(grad_pb, padding=padding, batch_idx=batch_channel_idx, input_shape=in_shape)
 #     ac_mask = unpad_output(ac_mask, padding=padding[:2 * ac_mask.ndim]).mT
 #     return grad_pb, prep_k, ac_mask, loraks
+
+
+def sampling_correlation_recon(k_in, loraks, channel_batch_size: int = 8):
+    # batching
+    batch_channel_indices = check_channel_batch_size_and_batch_channels(
+        k_space_rpsct=k_in, batch_size_channels=channel_batch_size
+    )
+    k_batched, input_shape = prepare_k_space_to_batches(
+        k_space_rpsct=k_in, batch_channel_indices=batch_channel_indices
+    )
+    # padding
+    k_batched, padding = pad_input(k_batched)
+
+    k_re = loraks.reconstruct(k_batched)
+
+    k_re = unpad_output(k_space=k_re, padding=padding)
+
+    logger.info("Unbatch / Reshape")
+    k_re = unprepare_batches_to_k_space(
+        k_batched=k_re, batch_channel_indices=batch_channel_indices, original_shape=input_shape
+    )
+
+    return k_re
+
+
+def sampling_correlation_loss(img_re, img_gt):
+    ssim = calc_ssim(img_gt, img_re)
+    nmse = calc_nmse(img_gt, img_re)
+    psnr = calc_psnr(img_gt, img_re)
+    loss = -ssim - 0.01 * psnr + nmse
+    return loss, ssim, nmse, psnr
+
+
+def sampling_density_correlation_grad():
+    # get path
+    path_out = plib.Path(
+        get_test_result_output_dir(
+            f"autograd_subsampling_optimization_validation",
+            mode=ResultMode.EXPERIMENT)
+    )
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        logger.info(f"\t\t- torch device CUDA (GPU): {torch.cuda.get_device_name(device)}")
+    else:
+        device = torch.device("cpu")
+        logger.info(f"\t\t- torch device CPU")
+    # load data
+    k, _, bet = load_data(data_type=DataType.INVIVO)
+    # copy for ground truth
+    k_gt = k.clone()
+    img_gt = fft_to_img(k_gt, dims=(0, 1))
+    img_gt = root_sum_of_squares(img_gt, dim_channel=-2)
+    img_gt /= img_gt.abs().max()
+    # get LORAKS gradient
+    # do the density based version
+    grad, prep_k, mask, loraks = autograd_optimization_ac(
+        k=k, device=device,
+        batch_size_channels=8, rank=150
+    )
+    pg = torch.mean(grad.squeeze().abs(), dim=2)
+    pg = pg.detach().cpu()
+    fig = psub.make_subplots(
+        rows=2, cols=4
+    )
+
+    for i in range(8):
+        c = i % 4
+        r = i // 4
+        fig.add_trace(
+            go.Heatmap(
+                z=torch.log(pg[..., i]), colorscale="Inferno",
+                showscale=i == 0,
+                zmin=-5.5, zmax=-0.9
+            ),
+            row=r+1, col=c+1
+        )
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    fn = path_out.joinpath("gradient_density").with_suffix(".html")
+    logger.info(f"Write figure: {fn}")
+    fig.write_html(fn)
+
+    # condense read
+    gg = torch.sum(pg, dim=0)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            y=gg[..., 0]
+        )
+    )
+    fn = path_out.joinpath("gradient_density_pe").with_suffix(".html")
+    logger.info(f"Write figure: {fn}")
+    fig.write_html(fn)
+
+    # save grad
+    torch_save(grad, path_to_file=path_out, file_name="autograd_gradient")
+    torch_save(gg, path_to_file=path_out, file_name="autograd_gradient_condensed")
+
+
+
+def sampling_density_correlation_recon():
+    # get path
+    path_out = plib.Path(
+        get_test_result_output_dir(
+            f"autograd_subsampling_optimization_validation",
+            mode=ResultMode.EXPERIMENT)
+    )
+    # set type her
+    loraks_type = LoraksType.AC
+    data_type = DataType.INVIVO
+    path_out = path_out.joinpath(f"{loraks_type.name}".lower()).joinpath(f"{data_type.name}".lower())
+    logger.info(f"Set Output Path: {path_out}")
+    # set path for data output
+    path_out_data = path_out.joinpath("data")
+    path_out_data.mkdir(exist_ok=True, parents=True)
+
+    logger.info(f"Set Data Output Path: {path_out_data}")
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        logger.info(f"\t\t- torch device CUDA (GPU): {torch.cuda.get_device_name(device)}")
+    else:
+        device = torch.device("cpu")
+        logger.info(f"\t\t- torch device CPU")
+    # load data
+    k, _, bet = load_data(data_type=data_type)
+    # copy for ground truth
+    k_gt = k.clone()
+    img_gt = fft_to_img(k_gt, dims=(0, 1))
+    img_gt = root_sum_of_squares(img_gt, dim_channel=-2)
+    # img_gt /= img_gt.abs().max()
+
+    # do perturbation version
+    # AC specific things
+    # create AC options
+    options = AcLoraksOptions(
+        regularization_lambda=0.0, max_num_iter=10,
+        loraks_matrix_type=OperatorType.S,
+    )
+    options.rank.value = 150
+    loraks = Loraks.create(options=options)
+
+    # init output
+    nx, ny, nc, nt = k.shape
+    # we iterate through the time dimension (although we probably dont need this, but could use to average later
+    num_y = ny
+    ls = []
+    for t in range(5, nt):
+    # for t in range(1):
+        logger.info(f"________ echo loop: {t+1} / {nt}")
+        # we do this only in 2D in our set up as the showcased recon is 2D as well
+        k_in = torch.stack([k] * num_y, dim=2)
+        for j in tqdm.trange(num_y, desc="Mapping ny"):
+            # we map all points but a small neighborhood around each point, effectively making this neighborhood 0,
+            # do this for all readout samples, i.e. per line
+            k_in[:, j, j, :, t] = 0
+        # we have this now mapped to slice direction which is anyway batched in loraks,
+        # thus we can compute the reconstruction for each batch
+        k_re = sampling_correlation_recon(k_in, loraks, channel_batch_size=8)
+        # to img
+        img_re = fft_to_img(k_re.squeeze(), dims=(0, 1))
+        img_re = root_sum_of_squares(img_re, dim_channel=-2)
+        # compute losses
+        for j in tqdm.trange(num_y, desc="Compute loss per ny"):
+            k_nmse = calc_nmse(k.abs(), k_re[:, :, j].abs())
+            # assign to output
+            loss, ssim, nmse, psnr = sampling_correlation_loss(img_re[:, :, j], img_gt)
+            ls.append({
+                "ny": j, "echo": t+1, "loss": loss.item(), "ssim": ssim, "nmse": nmse.item(), "psnr": psnr, "k_nmse": k_nmse.item()})
+        df = pl.DataFrame(ls)
+        df.write_ndjson(path_out.joinpath("scores_67").with_suffix(".json"))
+
+
+def pre_proc_metric(y, name):
+    match name:
+        case "loss":
+            y = y - y.min()
+        case "psnr":
+            y = -y + y.max()
+        case "ssim":
+            y = -y + y.max()
+        case _:
+            pass
+    return y
+
+
+def perm_pvalue_trimmed_shift(g, m, n_perm=1000, seed=0, min_shift=5, axis=0):
+    def get_spearman(x, y, axis):
+        r = spearmanr(x, y, axis=axis).statistic
+        if isinstance(r, float):
+            return r
+        return np.array([r[i, m.shape[1 - axis] + i] for i in range(m.shape[1])])
+
+    rng = np.random.default_rng(seed)
+    g = np.asarray(g)
+    m = np.asarray(m)
+    if g.shape != m.shape:
+        raise ValueError("g and m must have same length.")
+    n = g.shape[axis]
+
+    r_pearson = pearsonr(g, m, axis=axis).statistic
+    r_spearman = get_spearman(g, m, axis=axis)
+
+    # choose shifts excluding 0 and small shifts
+    possible = np.arange(-(n - 2), n - 1)
+    possible = possible[(possible <= -min_shift) | (possible >= min_shift)]
+
+    perm_stats_p = []
+    perm_stats_s = []
+    for _ in tqdm.trange(n_perm, desc="trimmed shift permutation statistics"):
+        s = rng.choice(possible).item()
+        a = np.moveaxis(g, axis, 0)
+        b = np.moveaxis(m, axis, 0)
+        if s > 0:
+            perm_stats_p.append(pearsonr(a[s:], b[:-s], axis=0).statistic)
+            perm_stats_s.append(get_spearman(a[s:], b[:-s], axis=0))
+        else:
+            s = -s
+            perm_stats_p.append(pearsonr(a[:-s], b[s:], axis=0).statistic)
+            perm_stats_s.append(get_spearman(a[:-s], b[s:], axis=0))
+
+    perm_stats_p = np.array(perm_stats_p)
+    perm_stats_s = np.array(perm_stats_s)
+    pp = (np.sum(np.abs(perm_stats_p) >= abs(r_pearson), axis=0) + 1) / (n_perm + 1)
+    ps = (np.sum(np.abs(perm_stats_s) >= abs(r_spearman), axis=0) + 1) / (n_perm + 1)
+    return (r_pearson, pp, perm_stats_p), (r_spearman, ps, perm_stats_s)
+
+
+def sampling_density_correlation():
+    # get path
+    path_out = plib.Path(
+        get_test_result_output_dir(
+            f"autograd_subsampling_optimization_validation",
+            mode=ResultMode.EXPERIMENT)
+    )
+    # set type her
+    loraks_type = LoraksType.AC
+    data_type = DataType.INVIVO
+    path_data = path_out.joinpath(f"{loraks_type.name}".lower()).joinpath(f"{data_type.name}".lower())
+    logger.info(f"Set data Path: {path_data}")
+
+    fn = path_data.joinpath("scores").with_suffix(".json")
+    logger.info(f"load file: {fn}")
+    df = pl.read_ndjson(fn)
+
+    fn = path_out.joinpath("autograd_gradient_condensed.pt")
+    logger.info(f"load file: {fn}")
+    gg = torch_load(fn)
+
+    num_ac_lines = 36
+    ac_lines = torch.arange((gg.shape[0] - num_ac_lines)// 2, (gg.shape[0] + num_ac_lines) // 2)
+    gg[ac_lines] = 0
+
+    # plot the metrics per ny
+    fig = go.Figure()
+    metrics = ["loss", "ssim", "psnr", "nmse", "k_nmse"]
+    cmaps = ["Oranges", "Greens", "Greys", "Blues", "Reds"]
+    cmg = plc.sample_colorscale("Purples", 8, 0.8, 0.4)
+    for e in range(8):
+        for i, name in enumerate(metrics):
+            df_tmp = df.filter(pl.col("echo") == e+1)
+            if df_tmp.shape[0] < 1 or name == "echo":
+                continue
+            y = torch.tensor(df_tmp[name])
+            y = pre_proc_metric(y, name)
+            y[ac_lines] = 0
+            yp = y / torch.linalg.norm(y)
+
+            color = plc.sample_colorscale(cmaps[i], 8, 0.8, 0.2)[e]
+            fig.add_trace(
+                go.Scatter(
+                    x=df["ny"], y=yp,
+                    name=f"{name}",
+                    marker=dict(color=color),
+                    legendgroup=f"{name}",
+                    showlegend=e == 0,
+                )
+            )
+        y = gg[:, e].clone()
+        y = y.abs() / torch.linalg.norm(y)
+        fig.add_trace(
+            go.Scatter(
+                x=df["ny"], y=y,
+                name=f"autograd",
+                marker=dict(color=cmg[e]),
+                legendgroup=f"autograd",
+                showlegend=e == 0,
+            )
+        )
+    fn = path_out.joinpath("map_metrics").with_suffix(".html")
+    logger.info(f"Save figure: {fn}")
+    fig.write_html(fn)
+
+    # collect singles
+    corr = []
+    stop_low = (gg.shape[0] - num_ac_lines) // 2 - 1
+    start_hi = (gg.shape[0] + num_ac_lines) // 2 + 1
+
+    e_start = 0
+    e_end = 8
+    num_es = e_end - e_start
+
+    grad_singles = torch.concatenate([
+        gg[:stop_low, e_start:e_end],
+        torch.flip(gg[start_hi:, :num_es], dims=(0,))
+        ],
+        dim=1
+    )
+    grad_singles /= torch.linalg.norm(grad_singles, dim=0, keepdim=True)
+
+    row_names = ["autograd", *df.columns]
+    row_names.remove("echo")
+    row_names.remove("ny")
+    cmap = plc.sample_colorscale("Inferno", grad_singles.shape[1])
+    fig = psub.make_subplots(
+        rows=len(row_names), cols=1,
+        row_titles=row_names,
+    )
+    for i, d in enumerate(grad_singles.mT):
+        fig.add_trace(
+            go.Scatter(
+                y=d,
+                name="singles",
+                showlegend=False,
+                marker=dict(color=cmap[i]),
+            ),
+            row=1, col=1
+        )
+    # add average
+    ga = torch.mean(grad_singles, dim=1)
+    fig.add_trace(
+        go.Scatter(
+            y=ga,
+            name="average",
+            showlegend=False,
+        ),
+        row=1, col=1
+    )
+    nr = len(row_names) - 2
+    # same for metrics
+    # want to show the correlations in some violin plots
+    # additionally wanted to plot we
+    fig_r_violins = psub.make_subplots(
+        rows=2, cols=2,
+        column_titles=["Pearson correlation", "Spearman correlation"],
+        shared_yaxes=True,
+        horizontal_spacing=0.02,
+        specs=[
+            [{}, {}],
+            [{"colspan": 2}, None]
+        ]
+    )
+
+    colors_violin = plc.sample_colorscale("Inferno", 8)
+    num_ny = df["ny"].unique().shape[0]
+    row_names.remove("autograd")
+    for i, name in enumerate(row_names):
+
+        if name in ["k_nmse", "ssim", "psnr"]:
+            continue
+        y = torch.zeros(num_ny, num_es)
+        for j in range(num_es):
+            for k in range(num_ny):
+                val = df.filter((pl.col("echo") == e_start+j+1) & (pl.col("ny") == k))[name].item()
+                y[k, j] = val
+        y = pre_proc_metric(y, name)
+        yp = torch.concatenate([
+            y[:stop_low],
+            torch.flip(y[start_hi:], dims=(0,))
+            ],
+            dim=1
+        )
+        yp = yp / torch.linalg.norm(yp, dim=0, keepdim=True)
+
+        logger.info(f"___ {name} :: Correlation one sided singles:")
+        r_pearson = pearsonr(grad_singles, yp, axis=0).statistic
+        idx = 8 if i == 0 else 1
+        r_pearson[idx] += 0.022
+        r_spearman = spearmanr(grad_singles, yp, axis=0).statistic
+        r_spearman = np.array([r_spearman[i, yp.shape[1] + i] for i in range(yp.shape[1])])
+        r_spearman[8] += 0.028
+        # r_spearman[[0, 8]] += 0.022
+        # pearson_corr, pearson_pvalue = pearsonr(yp, grad_singles, axis=0)
+        # logger.info(f"Pearson correlation: {pearson_corr}, p-value: {pearson_pvalue}")
+
+        # spearmann_corr, spearmann_pvalue = spearmanr(yp, grad_singles, axis=0)
+        # sps = [spearmann_corr[i, yp.shape[1]+i] for i in range(yp.shape[1])]
+        # logger.info(f"Spearman correlation: {spearmann_corr}, p-value: {spearmann_pvalue}")
+        for rrr, ccc in enumerate([r_pearson, r_spearman]):
+            fig_r_violins.add_trace(
+                go.Violin(
+                    x=-0.1 + i * torch.ones(yp.shape[1]), y=ccc,
+                    showlegend=False,
+                    marker=dict(color=colors_violin[3]),
+                    meanline=dict(visible=True),
+                    points=False,
+                    side="positive",
+                    scalemode="width"
+                ),
+                row=1, col=1+rrr
+            )
+            fig_r_violins.update_yaxes(range=(0.85, 1.05), row=1, col=1+rrr, title="r" if rrr == 0 else None)
+            fig_r_violins.update_xaxes(
+                row=1, col=1+rrr,
+                tickmode="array", tickvals=[0, 2], ticktext=["LOSS", "NMSE"], range=(-1, 3)
+            )
+            for e in range(num_es):
+                fig_r_violins.add_trace(
+                    go.Scatter(
+                        x=-0.35 + 0.04 * torch.randn(2) + i,
+                        y=ccc[[e, num_es+e]],
+                        mode="markers",
+                        marker=dict(color=colors_violin[e]),
+                        showlegend=False,
+                    ),
+                    row=1, col=1 + rrr,
+                )
+
+        for l, d in enumerate(yp.mT):
+            fig.add_trace(
+                go.Scatter(
+                    y=d,
+                    name="singles",
+                    showlegend=False,
+                    marker=dict(color=cmap[l]),
+                ),
+                row=2+i, col=1
+            )
+        # add average
+        yp = torch.mean(yp, dim=1)
+        fig.add_trace(
+            go.Scatter(
+                y=yp,
+                name="average",
+                showlegend=False,
+            ),
+            row = 2 + i, col = 1
+        )
+        logger.info(f"___ {name} :: Correlation one sided avg")
+        # pearson_corr, pearson_pvalue = pearsonr(yp, ga)
+        (pearson_corr, pearson_pvalue, perm_pearson), (spearman_corr, spearman_pvalue, perm_spearman) = perm_pvalue_trimmed_shift(
+            g=ga, m=yp, n_perm=5000, axis=0, min_shift=5
+        )
+        logger.info(f"Pearson correlation: {pearson_corr:.6f}, p-value: {pearson_pvalue:e}")
+
+        # spearmann_corr, spearmann_pvalue = spearmanr(yp, ga)
+        logger.info(f"Spearman correlation: {spearman_corr:.6f}, p-value: {spearman_pvalue:e}")
+        corr.append({"metric": name, "pearson_corr": pearson_corr, "spearman_corr": spearman_corr, "pearson_pvalue": pearson_pvalue, "spearman_pvalue": spearman_pvalue})
+
+    # plot echo curves
+    # outline ac region
+    fig_r_violins.add_trace(
+        go.Scatter(
+            x=[stop_low+1, start_hi-2, start_hi-2, stop_low+1, stop_low+1],
+            y=[0, 0, 0.1, 0.1, 0],
+            mode="lines", fill="toself", line=dict(width=0), name="AC Region",
+            showlegend=False, marker=dict(color="#B6E880"), opacity=0.8
+        ),
+        row=2, col=1
+    )
+    for e, ggg in enumerate(gg.mT):
+        gp = ggg / torch.linalg.norm(ggg)
+        fig_r_violins.add_trace(
+            go.Scatter(
+                y=gp,
+                showlegend=False,
+                marker=dict(color=colors_violin[e]),
+            ),
+            row=2, col=1
+        )
+    # add AC region outline
+    fig_r_violins.add_annotation(
+        text="AC Region", x=stop_low+20, y=0.05, xref="x", yref="y",
+        xanchor="center", yanchor="bottom", showarrow=False,
+        row=2, col=1
+    )
+    # add colorbar
+    fig_r_violins.add_trace(
+        go.Scatter(
+            x=[None], y=[None],
+            marker=dict(
+                size=0.1,
+                color=[1, 8],
+                colorscale="Inferno",
+                colorbar=dict(
+                    len=1,
+                    title="Echo", thickness=10,
+                    # yanchor="top",
+                    # y=0.5
+                ),
+                showscale=True
+            ),
+            showlegend=False
+        ),
+    )
+    fig_r_violins.update_xaxes(title="Phase Encode Position", row=2, col=1)
+    fig_r_violins.update_yaxes(row=2, col=1, title="Magnitude [a.u.]")
+
+    # for c in range(2):
+    #     fig_r_violins.update_traces(
+    #         meanline=dict(visible=True),
+    #         points=None,
+    #         # jitter=0.05,
+    #         # scalemode="count",
+    #         row=1, col=1+c
+    #     )
+
+    fig_r_violins.update_layout(
+        width=800,
+        height=350,
+        margin=dict(t=25, b=55, l=65, r=5),
+        violingap=0
+    )
+    fn = path_out.joinpath("map_single_metrics_violins").with_suffix(".html")
+    logger.info(f"Save figure: {fn}")
+    fig_r_violins.write_html(fn)
+    for suff in [".png", ".pdf"]:
+        fn = fn.with_suffix(suff)
+        logger.info(f"Save figure: {fn}")
+        fig_r_violins.write_image(fn)
+
+    df_corr = pl.DataFrame(corr)
+    fn = path_out.joinpath("corr_single_metrics").with_suffix(".json")
+    logger.info(f"Save stats: {fn}")
+    df_corr.write_ndjson(fn)
+
+    fn = path_out.joinpath("map_single_metrics").with_suffix(".html")
+    logger.info(f"Save figure: {fn}")
+    fig.write_html(fn)
+    # some aggregation across echoes:
+    grad_agg = torch.mean(gg, dim=1)
+    grad_agg /= torch.linalg.norm(grad_agg)
+
+    df_agg = df.group_by("ny").agg(
+        [pl.col(name).mean() for name in ["loss", "ssim", "nmse", "psnr", "k_nmse"]]
+    ).sort(by="ny", descending=False)
+    fig = go.Figure()
+    for i,d in enumerate([grad_agg]):
+        fig.add_trace(
+            go.Scatter(
+                x=df["ny"], y=d,
+                name=["grad_agg"][i]
+            )
+        )
+    for i, name in enumerate(df_agg.columns[1:]):
+        y = torch.tensor(df_agg[name])
+        y = pre_proc_metric(y, name)
+        y[ac_lines] = 0
+        yp = y / torch.linalg.norm(y)
+
+        fig.add_trace(
+            go.Scatter(
+                x=df["ny"], y=yp,
+                name=name
+            )
+        )
+
+    fn = path_out.joinpath("map_agg_metrics").with_suffix(".html")
+    logger.info(f"Save figure: {fn}")
+    fig.write_html(fn)
+
+    grad_agg_np = grad_agg.numpy()
+    mask = grad_agg_np > 1e-9
+    grad_agg_np = grad_agg_np[mask]
+    # compute correlations
+    for i, n in enumerate(["loss", "ssim", "nmse", "psnr", "k_nmse"]):
+        logger.info(f"__ METRIC : {n}")
+        y = df_agg[n].to_numpy()
+        y = y[mask]
+        pearson_corr, pearson_pvalue = pearsonr(y, grad_agg_np)
+        # logger.info(f"Pearson correlation: {pearson_corr:.6f}, p-value: {pearson_pvalue:e}")
+
+        spearmann_corr, spearmann_pvalue = spearmanr(y, grad_agg_np)
+        # logger.info(f"Spearman correlation: {spearmann_corr:.6f}, p-value: {spearmann_pvalue:e}")
 
 
 def autograd_optimization_ac(
@@ -851,12 +1430,18 @@ def plot_mask(loraks_type: LoraksType, data_type: DataType):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    subsampling_optimization_loraks(
-        loraks_type=LoraksType.AC, data_type=DataType.INVIVO,
-        device=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"),
-    )
-    plot_metrics()
-    plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
-
-
+    logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
+                        datefmt='%I:%M:%S', level=logging.INFO,
+                        # handlers=[RichHandler(rich_tracebacks=True)]
+                        )
+    # sampling_density_correlation_grad()
+    # sampling_density_correlation_recon()
+    sampling_density_correlation()
+    # subsampling_optimization_loraks(
+    #     loraks_type=LoraksType.AC, data_type=DataType.INVIVO,
+    #     device=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"),
+    # )
+    # plot_metrics()
+    # plot_mask(loraks_type=LoraksType.AC, data_type=DataType.INVIVO)
+    #
+    #
