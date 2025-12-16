@@ -229,14 +229,17 @@ class Operator:
             k_space_shape=k_space_shape[-2:], patch_shape=self.patch_shape, sample_directions=self.sample_directions
         )
         self.indices = self.indices.to(self.device)
+        self._cm: torch.Tensor = None
 
     @property
     def count_matrix(self):
-        in_ones = torch.ones(self.k_space_shape, dtype=torch.complex64, device=self.device)
-        matrix = self.forward(in_ones)
-        cm = self.adjoint(matrix).to(torch.int)
-        cm[cm < 1] = 1
-        return cm
+        if self._cm is None:
+            in_ones = torch.ones(self.k_space_shape, dtype=torch.complex64, device=self.device)
+            matrix = self.forward(in_ones)
+            cm = torch.real(self.adjoint(matrix)).to(torch.int)
+            cm[cm < 1] = 1
+            self._cm = cm
+        return self._cm
 
     def forward(self, k_space: torch.Tensor):
         match self.operator_type:

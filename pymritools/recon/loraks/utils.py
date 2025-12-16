@@ -71,6 +71,7 @@ def check_channel_batch_size_and_batch_channels(
             batch_channel_indices = extract_channel_batch_indices(
                 k_data_nrps_c=k_space_rpsct[..., 0], batch_size_channels=batch_size_channels
             )
+            torch.cuda.empty_cache()
         else:
             torch.manual_seed(8)
             batch_channel_indices = torch.stack(
@@ -302,7 +303,7 @@ def pad_with_most_correlated_channels(
     # build a mask of all remaining channels to choose from,
     # not take the ones already identified to belong to the current batch
     remaining_channels = torch.tensor([ac for ac in available_channels_idx if ac not in channel_batch]).to(
-        torch.int)
+        dtype=torch.int, device=correlation_matrix.device)
 
     # compute mean correlation of remaining channels to current batch
     batch_mean_correlation = torch.mean(
@@ -345,7 +346,7 @@ def extract_channel_batch_indices(k_data_nrps_c: torch.Tensor, batch_size_channe
     num_batches = int(np.ceil(nc // batch_size_channels))
 
     # enumerate all channels, build clusters based on available channels
-    available_channels = torch.arange(nc)
+    available_channels = torch.arange(nc, device=k_data_nrps_c.device)
     batches = []
 
     for idx_c in tqdm.trange(num_batches - 1, desc="Process correlation based channel batching"):
@@ -378,7 +379,7 @@ def extract_channel_batch_indices(k_data_nrps_c: torch.Tensor, batch_size_channe
         batches.append(batch_channels.tolist())
         # remove from available channels
         available_channels = torch.Tensor([int(ac) for ac in available_channels if ac not in batch_channels]).to(
-            torch.int)
+            dtype=torch.int, device=k_data_nrps_c.device)
 
     # remaining list is the last batch
     batches.append(available_channels.tolist())
