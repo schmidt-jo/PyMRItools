@@ -1,5 +1,7 @@
 import sys
 import pathlib as plib
+import timeit
+
 import torch
 torch.manual_seed(0)
 import logging
@@ -37,6 +39,12 @@ def recon_pyloraks(
     # insert slice dim
     k_us = k_us.unsqueeze(2)
     batch_size_channels = k_us.shape[-2]
+
+    timer = timeit.Timer(
+        "torch.randn(1000)**2",
+        setup="import torch"
+    )
+    t = timer.repeat(5, number=5)
 
     # set device
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
