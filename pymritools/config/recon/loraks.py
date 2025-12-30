@@ -52,5 +52,8 @@ class Settings(BaseClass):
         alias="-b", default=-1,
         help="Batch size for gpu computation. Reduce if out of memory."
     )
-
+    matrix_decomposition_type: str = choice(
+        "eigh", "lr_svd", "sor_svd", "rand_ns", "r_svd",
+        alias="-mdt", default="eigh",
+    )
     
