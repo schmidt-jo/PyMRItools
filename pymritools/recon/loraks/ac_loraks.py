@@ -527,11 +527,13 @@ class AcLoraks(LoraksBase):
         m_ac = self._get_ac_matrix(
             batch=batch,
         )
+        torch.cuda.empty_cache()
         # 2) extract nullspace based on rank
         v = get_nullspace(m_ac, rank=self.rank, nullspace_alg=self.nullspacee_algorithm)
         # 3) compute filtered nullspace kernel to reduce memory demands -> v
         # complexify nullspace
         v = self._complex_subspace_representation(v)
+        del m_ac
         torch.cuda.empty_cache()
 
         # prep zero phase filter input

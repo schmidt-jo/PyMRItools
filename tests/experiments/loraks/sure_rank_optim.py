@@ -163,10 +163,17 @@ def main():
     ]).flatten()
     noise /= np.sqrt(k.shape[0] * k.shape[1])
 
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(x=torch.view_as_real(noise).flatten())
+    )
+    fn = path.joinpath(f"sure_rank_optim_noise").with_suffix(".html")
+    logger.info(f"Write file: {fn}")
+    fig.write_html(fn)
     # sl_phantom = Phantom.get_shepp_logan(shape=(192, 168), num_coils=4, num_echoes=2)
     # k = sl_phantom.get_2d_k_space()
     # noise = torch.randn_like(k) * k.abs().max() / 100
-    sigma = torch.std(noise)
+    sigma = torch.std(noise) * np.sqrt(2)
 
     img = fft_to_img(k, dims=(0, 1))
     fig = get_fig(img)
@@ -189,7 +196,7 @@ def main():
     svd_mode = SvdMode.LR_SVD
 
     losses = []
-    for i, batch in enumerate(data_in[:1]):
+    for i, batch in enumerate(data_in):
         den_k = unprep_k_space(batch[None].expand(data_in.shape), padding=padding, batch_idx=batch_channel_idx,
                                input_shape=in_shape).squeeze()
         img = fft_to_img(den_k, dims=(0, 1))
@@ -198,14 +205,14 @@ def main():
         logger.info(f"Write fie: {fn}")
         fig.write_html(fn)
         # we compute the S-matrix for AC only
-        m_ac = get_ac_matrix(batch, operator=op)
+        m_ac = op.forward(batch)
         # we compute SVD
         u, s, v = svd(m_ac, mode=SvdMode.SVD)
 
         # for a number of rank parameters, we calculate the optimal LORAKS approximation
-        num_samples = 100
+        num_samples = 60
         eps = 1e-3 * torch.linalg.norm(batch)
-        ranks = torch.arange(20, min(m_ac.shape) // 10, 25)
+        ranks = torch.arange(120, 240, 2)
         m = torch.prod(torch.tensor(batch.shape)).item()
 
         bar = tqdm.tqdm(ranks, desc="Iterate rank")
@@ -220,7 +227,8 @@ def main():
             lr_q = max(r + 10, min(m_ac.shape) // 10)
             bar.postfix = f"compute hutchinson"
             trace_op_h = get_trace(
-                op=op, rank=r, batch=batch, num_samples=num_samples, eps=eps, mode=TraceMode.HUTCHINSON, svd_mode=svd_mode, lr_q=lr_q
+                op=op, rank=r, batch=batch, num_samples=num_samples, eps=eps,
+                mode=TraceMode.HUTCHINSON, svd_mode=svd_mode, lr_q=r.item() + 20
             ) / m
             torch.cuda.empty_cache()
             # bar.postfix = f"compute mc"
@@ -231,10 +239,11 @@ def main():
             sure_loss = sl_1 + sl_2_h
             losses.append({
                 "batch": i,
-                "SURE": sure_loss,
-                "loss_fidelity": sl_1,
+                "rank": r.item(),
+                "loss_SURE": sure_loss.item(),
+                "loss_fidelity": sl_1.item(),
                 # "loss_trace": sl_2,
-                "loss_trace_hutchinson": sl_2_h})
+                "loss_trace_hutchinson": sl_2_h.item()})
 
             if j % 2 == 0 and j < 20:
                 den_k = unprep_k_space(sure_op[None].expand(data_in.shape), padding=padding, batch_idx=batch_channel_idx,
@@ -246,8 +255,13 @@ def main():
                 fig.write_html(fn)
         fig = go.Figure()
         df = pl.DataFrame(losses)
-        for i, name in enumerate(["SURE", "loss_fidelity", "loss_trace_hutchinson"]):
-            fig.add_trace(go.Scatter(x=ranks.detach().cpu(), y=df[name].abs(), name=name))
+        fn = path.joinpath("sure_rank_optim").with_suffix(".json")
+        logger.info(f"Write fie: {fn}")
+        df.write_ndjson(fn.as_posix())
+        for nn, name in enumerate(["loss_SURE", "loss_fidelity", "loss_trace_hutchinson"]):
+            for bb in range(i+1):
+                df_tmp = df.filter(pl.col("batch") == bb)
+                fig.add_trace(go.Scatter(x=df_tmp["rank"].abs(), y=df_tmp[name].abs(), name=name))
         fig.update_layout(title="Loss vs rank")
         fn = path.joinpath(f"sure_rank_optim").with_suffix(".html")
         logger.info(f"Write fie: {fn}")

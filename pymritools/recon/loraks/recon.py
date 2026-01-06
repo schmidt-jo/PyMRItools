@@ -28,7 +28,17 @@ def get_options_from_cmd_config(config: Settings) -> LoraksOptions:
             opts.solver_type = SolverType.LEASTSQUARES
         else:
             opts.solver_type = SolverType.AUTOGRAD
-        opts.nullspace_algorithm = NullspaceAlgorithm.EIGH
+        match config.matrix_decomposition_type:
+            case "lr_svd":
+                opts.nullspace_algorithm = NullspaceAlgorithm.TORCH_LR
+            case "sor_svd":
+                opts.nullspace_algorithm = NullspaceAlgorithm.SOR_SVD
+            case "rand_ns":
+                opts.nullspace_algorithm = NullspaceAlgorithm.RANDOM_NS
+            case "r_svd":
+                opts.nullspace_algorithm = NullspaceAlgorithm.RSVD
+            case _:
+                opts.nullspace_algorithm = NullspaceAlgorithm.EIGH
     elif config.loraks_algorithm == "P-LORAKS":
         opts = LoraksOptions()
         opts.loraks_type = LoraksImplementation.P_LORAKS
@@ -115,26 +125,27 @@ def main(config: Settings):
 
     logger.info("RSOS")
     img = fft_to_img(k_recon, dims=(0, 1))
-    # nifti_save(
-    #     data=img.abs().squeeze(),
-    #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
-    # )
     rsos = root_sum_of_squares(img, dim_channel=-2)
 
-    logger.info("Adaptive combine")
-    ac = adaptive_combine(channel_img_data_rpsct=img, batch_size=1, use_gpu=True)
-
-    logger.info("Save")
     nifti_save(
         data=rsos,
         img_aff=aff, path_to_dir=path_out, file_name="recon_img_rsos"
     )
+    # nifti_save(
+    #     data=img.abs().squeeze(),
+    #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
+    # )
+
+    logger.info("Adaptive combine")
+    ac = adaptive_combine(channel_img_data_rpsct=img, batch_size=1, use_gpu=True)
+
     for i, f in enumerate([torch.abs, torch.angle]):
         nifti_save(
             data=f(ac),
             img_aff=aff, path_to_dir=path_out, file_name=f"recon_img_adac_{['mag', 'phase'][i]}"
         )
 
+    logger.info("Save")
     torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
 
 
