@@ -211,7 +211,10 @@ class Kernel:
             err = f"gradient amplitude exceeds maximum allowed"
             log_module.error(err)
             raise ValueError(err)
-        return cls(rf=rf, grad_slice=grad_slice, grad_read=grad_read_pre)
+        if read_grad_pre_area is not None:
+            return cls(rf=rf, grad_slice=grad_slice, grad_read=grad_read_pre)
+        else:
+            return cls(rf=rf, grad_slice=grad_slice)
 
     @classmethod
     def refocus_slice_sel_spoil(cls, params: PulseqParameters2D, system: Opts,

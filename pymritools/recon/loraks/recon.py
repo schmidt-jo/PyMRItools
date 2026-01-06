@@ -136,6 +136,9 @@ def main(config: Settings):
     #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
     # )
 
+    logger.info("Save")
+    torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
+
     logger.info("Adaptive combine")
     ac = adaptive_combine(channel_img_data_rpsct=img, batch_size=1, use_gpu=True)
 
@@ -144,9 +147,6 @@ def main(config: Settings):
             data=f(ac),
             img_aff=aff, path_to_dir=path_out, file_name=f"recon_img_adac_{['mag', 'phase'][i]}"
         )
-
-    logger.info("Save")
-    torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
 
 
 def loraks_from_cli():

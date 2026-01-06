@@ -236,7 +236,7 @@ def sum_sample_acquisition(etl_idx: int, params: EmcParameters, sim_data: Simula
     return sim_data
 
 
-def generate_sample(axis: torch.tensor, extent: float):
+def generate_sample(axis: torch.Tensor, extent: float):
     _sample = torch.from_numpy(stats.gennorm(24).pdf(axis / extent * 1.1) + 1e-6)
     _sample = torch.divide(_sample, torch.max(_sample))
     return _sample

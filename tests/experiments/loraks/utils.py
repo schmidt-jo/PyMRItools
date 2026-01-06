@@ -12,7 +12,6 @@ from pymritools.recon.loraks.utils import (
 from typing import Tuple, Union
 import subprocess
 from os import path
-import msparser
 import tempfile
 
 p_tests = plib.Path(__file__).absolute().parent.parent.parent.parent
