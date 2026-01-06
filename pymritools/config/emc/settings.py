@@ -65,6 +65,11 @@ class SimulationSettings(BaseClass):
         help="batch size for B0 values of database. Especially for GPU computations, "
              "if Out of Memory error, we can loop over B0 values per computation"
     )
+    b1_batch_size: int = field(
+        alias="-bsb1", default=-1,
+        help="batch size for B1 values of database. Especially for GPU computations, "
+             "if Out of Memory error, we can loop over B1 values per computation"
+    )
 
 
 @dataclass

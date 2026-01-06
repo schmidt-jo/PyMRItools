@@ -254,23 +254,29 @@ class MESE(Simulation):
         self.data.time = time.time() - t_start
 
 
+def batching(val_list: list):
+    vals = []
+    # get individual b0 values
+    if isinstance(val_list, list):
+        for b in val_list:
+            if isinstance(b, list):
+                bb = torch.arange(b[0], b[1], b[2])
+                vals.extend(bb.tolist())
+            else:
+                vals.append(b)
+    else:
+        vals = [val_list]
+    return vals
+
+
 def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
     # save initial settings
     name = settings.database_name
     if name.endswith(".pkl"):
         name = name[:-4]
-    b0_list = settings.b0_list
-    b0s = []
-    # get individual b0 values
-    if isinstance(b0_list, list):
-        for b in b0_list:
-            if isinstance(b, list):
-                bb = torch.arange(b[0], b[1], b[2])
-                b0s.extend(bb.tolist())
-            else:
-                b0s.append(b)
-    else:
-        b0s = [b0_list]
+    b0s = batching(settings.b0_list)
+    b1s = batching(settings.b1_list)
+
     # iterate over b0 entries as batching to keep memory acceptable
     dbs = []
     # save intermediate results in case something goes wrong
@@ -278,29 +284,44 @@ def simulate(settings: EmcSimSettings, params: EmcParameters) -> None:
     log_module.info(f"Set temporary path: {path_tmp}")
     path_tmp.mkdir(exist_ok=True, parents=True)
 
+    # batching
+    b1s = torch.tensor(b1s)
     b0s = torch.tensor(b0s)
     # get batch size
-    batch_size = settings.b0_batch_size
-    num_batches = int(np.ceil(b0s.shape[0] / batch_size))
+    batch_size_b0 = settings.b0_batch_size
+    batch_size_b1 = settings.b1_batch_size
+    num_batches_b0 = int(np.ceil(b0s.shape[0] / batch_size_b0))
+    if batch_size_b1 <= 0:
+        batch_size_b1 = b1s.shape[0]
+    num_batches_b1 = int(np.ceil(b1s.shape[0] / batch_size_b1))
 
-    for j in range(num_batches):
-        start = batch_size * j
-        end = min(batch_size * (j + 1), b0s.shape[0])
-        log_module.info(f"Batched Processing of B0")
-        log_module.info(f"Processing values {b0s[start:end].tolist()} :: Batch {j+1} / {num_batches}")
+    for j in range(num_batches_b0):
+        start = batch_size_b0 * j
+        end = min(batch_size_b0 * (j + 1), b0s.shape[0])
+        log_module.info(f"[bold purple3]Batched Processing of B0[/]")
+        log_module.info(f"[bold purple3]Processing values {b0s[start:end].tolist()} :: Batch {j+1} / {num_batches_b0}[/]")
         settings.b0_list = b0s[start:end].tolist()
-        sequence = MESE(params=params, settings=settings)
-        sequence.simulate()
+        for k in range(num_batches_b1):
+            start_b1 = batch_size_b1 * k
+            end_b1 = min(batch_size_b1 * (k + 1), b1s.shape[0])
+            log_module.info(f"\t\t[bold dark_orange3]Batched Processing of B1[/]")
+            log_module.info(f"\t\t[bold dark_orange3]Processing {len(b1s[start_b1:end_b1].tolist())} values :: Batch {k + 1} / {num_batches_b1}[/]")
+            settings.b1_list = b1s[start_b1:end_b1].tolist()
+            settings.visualize = j==0 and k==0
 
-        # we save everything separately
-        n = f"{name}_b0-batch_{j}".replace("-", "m").replace(".", "p")
-        db = sequence.get_db()
-        db.save(path_tmp.joinpath(n))
-        dbs.append(db)
-        if j == len(b0s) - 1:
-            # in the end save settings
-            sequence.settings.b0_list = b0_list
-            sequence.save(save_db=False, save_config=True)
+            sequence = MESE(params=params, settings=settings)
+            sequence.simulate()
+
+            # we save everything separately
+            n = f"{name}_b0-batch-{j}_b1-batch-{k}".replace("-", "m").replace(".", "p")
+            db = sequence.get_db()
+            db.save(path_tmp.joinpath(n))
+            dbs.append(db)
+            if j == len(b0s) - 1:
+                # in the end save settings
+                sequence.settings.b0_list = b0s.tolist()
+                sequence.settings.b1_list = b1s.tolist()
+                sequence.save(save_db=False, save_config=True)
 
     database = None
     for i, db in enumerate(dbs):
