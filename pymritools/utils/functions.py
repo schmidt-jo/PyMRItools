@@ -262,6 +262,12 @@ def adaptive_combine(
             _, _, v = subspace_orbit_randomized_svd(cov, q=min(5, nc), power_projections=1)
             w = v[..., 0, :]
         else:
+            if torch.isnan(cov).any():
+                print("NaN detected in matrix!")
+                print(f"Number of NaNs: {torch.isnan(cov).sum()}")
+                # Debug further or handle gracefully
+                cov[torch.isnan(cov)] = 0
+
             _, eigvecs = torch.linalg.eigh(cov)
             # Pick dominant eigenvector
             w = eigvecs[..., -1]
