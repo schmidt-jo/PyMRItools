@@ -25,10 +25,10 @@ def setup_parser(prog_name: str, dict_config_dataclasses: dict):
 
 
 def setup_program_logging(name: str, level: int = logging.INFO):
-    logging.basicConfig(format='%(asctime)s %(levelname)s :: %(name)s --  %(message)s',
+    logging.basicConfig(format='[italic sky_blue3]%(name)s[/] --  %(message)s',
                         datefmt='%I:%M:%S',
                         level=level,
-                        handlers=[RichHandler(rich_tracebacks=True)]
+                        handlers=[RichHandler(rich_tracebacks=True, markup=True)]
                         )
     # run some exclusions we dont want to expose to the user log
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -36,9 +36,10 @@ def setup_program_logging(name: str, level: int = logging.INFO):
 
     num_chars_name = len(name)
     num_chars_fill = 50
-    logging.info("".ljust(num_chars_fill, "_"))
-    logging.info(name.ljust(int((num_chars_fill + num_chars_name)/ 2), "_").rjust(num_chars_fill, "_"))
-    logging.info("".ljust(num_chars_fill, "_"))
+    ul = "".ljust(num_chars_fill, " ")
+    logging.info(f"[bold purple3 underline]{ul}[/]")
+    logging.info(f"[bold purple3 underline]{name.ljust(int((num_chars_fill + num_chars_name)/ 2), ' ').rjust(num_chars_fill, ' ')}")
+    logging.info(f"[bold purple3 underline]{ul}[/]")
 
 
 @dataclass
@@ -119,7 +120,7 @@ class BaseClass(Serializable):
 
     def display(self):
         # display via logging
-        s = "___ Config ___\n"
+        s = "[bold yellow underline]          Config         [/]\n"
         for k, v in self.to_dict().items():
-            s += f"\t\t\t{k}:".ljust(30) + f"{v}\n".rjust(55, ".")
+            s += f"\t\t\t[yellow]{k}[/]:".ljust(30) + f"{v}\n".rjust(55, ".")
         log_module.info(s)
