@@ -138,6 +138,7 @@ def main(config: Settings):
 
     logger.info("Save")
     torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
+    torch_save(data=aff, path_to_file=path_out, file_name="affine")
 
     logger.info("Adaptive combine")
     ac = adaptive_combine(channel_img_data_rpsct=img, batch_size=1, use_gpu=True)

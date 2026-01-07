@@ -66,9 +66,10 @@ def load_data(settings: DenoiseSettingsLCPCA):
 def set_device(settings: DenoiseSettingsLCPCA):
     if settings.use_gpu and torch.cuda.is_available():
         device = torch.device(f"cuda:{settings.gpu_device}")
+        log_module.info(f"Configure GPU device: {torch.cuda.get_device_name(device)}")
     else:
         device = torch.device("cpu")
-    log_module.info(f"Configure device: {device}")
+        log_module.info(f"Configure CPU device")
     return device
 
 

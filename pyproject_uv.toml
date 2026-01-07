@@ -17,6 +17,7 @@ dependencies = [
     "scipy-stubs==1.16.3.0",
     "torch-kmeans>=0.2.0",
     "rich>=14.2.0",
+    "autodmri>=0.2.7",
 ]
 
 [build-system]
@@ -40,3 +41,6 @@ explicit = true
 
 [project.scripts]
 recon_loraks = "pymritools.recon.loraks.recon:loraks_from_cli"
+simulation_emc_mese = "pymritools.simulation.emc.sequence.mese:main"
+processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
+processing_denoise_lcpca = "pymritools.processing.denoising.lcpca.denoise:main"
