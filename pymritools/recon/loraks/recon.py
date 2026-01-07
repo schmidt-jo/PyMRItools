@@ -114,9 +114,11 @@ def main(config: Settings):
 
     logger.info("Reconstruction")
     k_recon = loraks.reconstruct(k_batched)
+    torch.cuda.empty_cache()
 
     logger.info("Unprepare")
     k_recon = unpad_output(k_space=k_recon, padding=padding)
+    torch.cuda.empty_cache()
 
     logger.info("Unbatch / Reshape")
     k_recon = unprepare_batches_to_k_space(

@@ -150,13 +150,16 @@ def unprepare_batches_to_k_space(
     # needs to reverse above batching
     # now dims [bc * ns, nt * ncb, np, nr]
     # need some information about channel batching (we might take this from above method as well?)
-    k_batched = k_batched.reshape(
+    k_batched_n = k_batched.reshape(
         (num_channel_batches, original_shape[2], batch_size_channels,
          original_shape[-1], original_shape[1], original_shape[0])
     )
+    del k_batched
+    torch.cuda.empty_cache()
+
     # now [bc, ns, nt, ncb, np, nr]
     # undo slice permutation
-    k_batched = k_batched.permute(0, 2, 3, 1, 4, 5)
+    k_batched = k_batched_n.permute(0, 2, 3, 1, 4, 5)
     # now dims [bc, ns, nt, ncb, np, nr]
     # allocate out data and use same permutation
     k_data_out = torch.zeros(original_shape, dtype=k_batched.dtype, device=k_batched.device).permute(3, 4, 2, 1, 0)

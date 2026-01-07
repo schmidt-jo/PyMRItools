@@ -131,7 +131,7 @@ def gibbs_unring_1d(
     ur_data = torch.zeros_like(n1d_data)
 
     # batch process
-    log_module.info(f"\t\t- set gpu: {gpu}, (available device: {gpu_device})")
+    log_module.info(f"\t\t- device: {torch.cuda.get_device_name(device)}")
 
     for idx_batch in tqdm.trange(num_batches, desc="Batch Process Data"):
         start = idx_batch * batch_size
@@ -206,7 +206,7 @@ def gibbs_unring_nd(
         device = torch.device(f"cuda:{gpu_device}")
     else:
         device = torch.device("cpu")
-    log_module.info(f"\t\t- set device: {device}")
+    log_module.info(f"\t\t- device: {torch.cuda.get_device_name(device)}")
     # introduce weighting filter
     k_x = torch.linspace(-np.pi, np.pi, nx).to(device)
     k_y = torch.linspace(-np.pi, np.pi, ny).to(device)
