@@ -165,6 +165,8 @@ def unprepare_batches_to_k_space(
     k_data_out = torch.zeros(original_shape, dtype=k_batched.dtype, device=k_batched.device).permute(3, 4, 2, 1, 0)
     # assign
     k_data_out[batch_channel_indices] = k_batched
+    del k_batched
+    torch.cuda.empty_cache()
     # reverse order
     k_data_out = k_data_out.permute(4, 3, 2, 0, 1)
     return k_data_out
