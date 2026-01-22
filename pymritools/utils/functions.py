@@ -65,7 +65,7 @@ def normalize_data(data: torch.Tensor, dim_t: int = -1) -> (torch.Tensor, torch.
 
 def fft_to_img(
         input_data: np.ndarray | torch.Tensor,
-        dims: tuple | int = (-1, -2)) -> (np.ndarray | torch.Tensor):
+        dims: tuple | int = (-1, -2), norm: str = "backward") -> (np.ndarray | torch.Tensor):
     """
     Performs an N-dimensional Fourier transform on the input tensor or array, with appropriate shifting to move the
     zero-frequency component to the center. This is useful for converting frequency domain data to an image
@@ -88,7 +88,8 @@ def fft_to_img(
                     input_data,
                     dim=dims
                 ),
-                dim=dims
+                dim=dims,
+                norm=norm
             ),
             dim=dims
         )
@@ -99,7 +100,8 @@ def fft_to_img(
                     input_data,
                     axes=dims
                 ),
-                axes=dims
+                axes=dims,
+                norm=norm
             ),
             axes=dims
         )
@@ -107,7 +109,7 @@ def fft_to_img(
 
 def ifft_to_k(
         input_data: np.ndarray | torch.Tensor,
-        dims: tuple | int = (-1, -2)) -> (np.ndarray | torch.Tensor):
+        dims: tuple | int = (-1, -2), norm:str="backward") -> (np.ndarray | torch.Tensor):
     """
     Performs an inverse FFT on the input data and shifts the zero-frequency component
     to the center of the spectrum for k-space conversion.
@@ -129,7 +131,8 @@ def ifft_to_k(
                     input_data,
                     dim=dims
                 ),
-                dim=dims
+                dim=dims,
+                norm=norm
             ),
             dim=dims
         )
@@ -140,7 +143,8 @@ def ifft_to_k(
                     input_data,
                     axes=dims
                 ),
-                axes=dims
+                axes=dims,
+                norm=norm
             ),
             axes=dims
         )
