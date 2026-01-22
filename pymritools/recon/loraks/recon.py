@@ -125,6 +125,10 @@ def main(config: Settings):
         k_batched=k_recon, batch_channel_indices=batch_channel_indices, original_shape=input_shape
     )
 
+    logger.info("Save")
+    torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
+    torch_save(data=aff, path_to_file=path_out, file_name="affine")
+
     logger.info("RSOS")
     img = fft_to_img(k_recon, dims=(0, 1))
     rsos = root_sum_of_squares(img, dim_channel=-2)
@@ -137,10 +141,6 @@ def main(config: Settings):
     #     data=img.abs().squeeze(),
     #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
     # )
-
-    logger.info("Save")
-    torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
-    torch_save(data=aff, path_to_file=path_out, file_name="affine")
 
     logger.info("Adaptive combine")
     ac = adaptive_combine(channel_img_data_rpsct=img, batch_size=1, use_gpu=True)
