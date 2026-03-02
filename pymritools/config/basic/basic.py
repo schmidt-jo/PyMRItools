@@ -25,13 +25,14 @@ def setup_parser(prog_name: str, dict_config_dataclasses: dict):
 
 
 def setup_program_logging(name: str, level: int = logging.INFO):
+
+    # run some exclusions we dont want to expose to the user log
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
     logging.basicConfig(format='[italic sky_blue3]%(name)s[/] --  %(message)s',
                         datefmt='%I:%M:%S',
                         level=level,
                         handlers=[RichHandler(rich_tracebacks=True, markup=True)]
                         )
-    # run some exclusions we dont want to expose to the user log
-    logging.getLogger("matplotlib").setLevel(logging.WARNING)
     logging.getLogger("simple_parsing").setLevel(logging.WARNING)
 
     num_chars_name = len(name)
