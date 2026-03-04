@@ -34,6 +34,8 @@ def setup_program_logging(name: str, level: int = logging.INFO):
                         handlers=[RichHandler(rich_tracebacks=True, markup=True)]
                         )
     logging.getLogger("simple_parsing").setLevel(logging.WARNING)
+    logging.getLogger("kaleido").setLevel(logging.WARNING)
+    logging.getLogger("choreographer").setLevel(logging.WARNING)
 
     num_chars_name = len(name)
     num_chars_fill = 50
