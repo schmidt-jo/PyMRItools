@@ -139,16 +139,23 @@ def mc_gfactor(k_noise: torch.Tensor, k_raw_slices: torch.Tensor, path: plib.Pat
     else:
         img_mc = torch_load(path.joinpath(name_iter).with_suffix(".pt"))
     # reduce load for now just use first echo
-    img_tmp = img_mc[..., 0, None].clone()
+    img_tmp = img_mc[..., img_mc.shape[3] // 2, :, 0].clone().unsqueeze(3).unsqueeze(-1)
     del img_mc
     img_mc = img_tmp
     del img_tmp
     torch.cuda.empty_cache()
-    img_tmp = img_recon[..., 0, None].clone()
+    img_tmp = img_recon[..., img_recon.shape[2] // 2, :, 0].clone().unsqueeze(2).unsqueeze(-1)
     del img_recon
     img_recon = img_tmp
     del img_tmp
     torch.cuda.empty_cache()
+
+    mc_std, mc_mean = compute_stats_plot(
+        img_mc[:, :, :, img_mc.shape[3] // 2],
+        img_recon[:, :, img_recon.shape[2] // 2],
+        path, "03_mc_stats"
+    )
+    del img_mc
 
     # use denoised data if no reference is given
     if img_reference is None:
@@ -161,7 +168,7 @@ def mc_gfactor(k_noise: torch.Tensor, k_raw_slices: torch.Tensor, path: plib.Pat
             k_recon_denoised = torch_load(path.joinpath(name_iter).with_suffix(".pt"))
         img_reference = fft_to_img(k_recon_denoised, dims=(0, 1))
 
-    img_tmp = img_reference[..., 0, None].clone()
+    img_tmp = img_reference[..., img_reference.shape[2] // 2, :, 0].clone().unsqueeze(2).unsqueeze(-1)
     del img_reference
     img_reference = img_tmp
     del img_tmp
@@ -172,24 +179,18 @@ def mc_gfactor(k_noise: torch.Tensor, k_raw_slices: torch.Tensor, path: plib.Pat
     name_iter = "mc_reference"
     if not path.joinpath(name_iter).with_suffix(".pt").exists():
         # do the simulation
-        noise = torch.randn((50, *k_recon.shape), dtype=k_recon.dtype, device=k_recon.device)
-        k_mc_ref_noise = k_ref[None] + noise
+        k_mc_ref_noise = k_ref[None] + torch.randn((30, *k_recon.shape), dtype=k_recon.dtype, device=k_recon.device)
         img_mc_ref = fft_to_img(k_mc_ref_noise, dims=(1, 2))
         torch_save(img_mc_ref, path, name_iter)
     else:
         img_mc_ref = torch_load(path.joinpath(name_iter).with_suffix(".pt"))
     # reduce load for now just use first echo
-    img_tmp = img_mc_ref[..., 0, None].clone()
+    img_tmp = img_mc_ref[...,  img_mc_ref.shape[3] // 2, :, 0].clone().unsqueeze(3).unsqueeze(-1)
     del img_mc_ref
     img_mc_ref = img_tmp
     del img_tmp
     torch.cuda.empty_cache()
 
-    mc_std, mc_mean = compute_stats_plot(
-        img_mc[:, :, :, img_mc.shape[3] // 2],
-        img_recon[:, :, img_recon.shape[2] // 2],
-        path, "03_mc_stats"
-    )
     mc_ref_std, mc_ref_mean = compute_stats_plot(
         img_mc_ref[:, :, :, img_mc_ref.shape[3] // 2],
         img_recon[:, :, img_recon.shape[2] // 2],
@@ -200,10 +201,11 @@ def mc_gfactor(k_noise: torch.Tensor, k_raw_slices: torch.Tensor, path: plib.Pat
     logger.info(f"Normalise and G-factor")
     g_factor = mc_std / mc_ref_std * np.sqrt(2)
     g_factor = smooth_map(data=g_factor, kernel_size=8)
+    torch_save(g_factor, path, "g_factor_map")
 
     plot_data(
         torch.stack([img_recon[:, :, img_recon.shape[2] // 2], mc_mean, g_factor], dim=2).squeeze(),
-        zmax=[None, None, 1.5], zmin=[None, None, 1],
+        zmax=[None, None, 1.65], zmin=[None, None, 0.95],
         path=path, name="g-factor")
 
 
@@ -226,6 +228,8 @@ def g_factor_shepp_logan(device: torch.device = torch.get_default_device()):
 
     # built data
     phantom = Phantom.get_shepp_logan(shape=(160, 200), num_coils=4, num_echoes=2)
+    cs = phantom._cs
+    torch_save(cs, path, "cs")
     k_ref = phantom.get_2d_k_space() * 1e4
     img_ref = fft_to_img(k_ref, dims=(0, 1))
     k_us = phantom.sub_sample_ac_random_lines(acceleration=3, ac_lines=32) * 1e4
@@ -257,5 +261,5 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     logging.info(f"- device: {torch.cuda.get_device_name(device)}")
     g_factor_shepp_logan(device=device)
-    g_factor_phantom_data(device=device)
+    # g_factor_phantom_data(device=device)
 

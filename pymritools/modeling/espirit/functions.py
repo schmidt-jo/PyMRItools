@@ -132,7 +132,3 @@ def map_estimation(
     u[~mask.unsqueeze(-2).expand_as(u)] = 0.0
 
     return u.movedim(-1, 0)
-
-
-if __name__ == '__main__':
-    setup_program_logging("ESPirit sensitivity map estimation", logging.INFO)
