@@ -183,7 +183,7 @@ class SimulationData:
         self.m_init: torch.Tensor = m_init[None, None, None, None].to(self.device)
         # set initial state as magnetization propagation tensor, this one is used
         # to iteratively calculate the magnetization sate along the axis
-        self.magnetization_propagation: torch.tensor = self.m_init.clone()
+        self.magnetization_propagation: torch.Tensor = self.m_init.clone()
 
         self.gamma = torch.tensor(params.gamma_hz, device=self.device)
 

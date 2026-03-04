@@ -38,6 +38,7 @@ def simulate_pulse_profiles(settings: EmcSimSettings, params: EmcParameters, for
         settings.t2_list = [1000.0]
         settings.t1_list = [2.0]
         settings.b1_list = [1.0]
+        params.refocus_angle = [0.0] * 8
 
         # set up sequence simulation object
         mese = MESE(params=params, settings=settings)
@@ -130,7 +131,7 @@ if __name__ == '__main__':
         params = args.params
 
     try:
-        simulate_pulse_profiles(settings=settings, params=params)
+        simulate_pulse_profiles(settings=settings, params=params, path=settings.out_path, force_sim=True)
     except Exception as e:
         parser.print_usage()
         logger.exception(e)

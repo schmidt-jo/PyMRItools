@@ -36,6 +36,7 @@ class MESE(Simulation):
             raise FileNotFoundError(err)
         with open(te_file, "r") as f:
             self.tes = json.load(f)
+            self.params.tes = self.tes
 
         if self.settings.visualize:
             kf = self.fig_path.joinpath("kernels")
