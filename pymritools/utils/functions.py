@@ -236,7 +236,7 @@ def adaptive_combine(
     div = max(cc // len_sub_bar, 1)
     for idx_b in bar:
         sub = 0
-        bar.postfix = "Adaptive channel combine " + "_"*len_sub_bar
+        bar.set_postfix({"step":"Adaptive channel combine " + "_"*len_sub_bar})
         start = idx_b * batch_size
         end = min((idx_b + 1) * batch_size, nb)
         b = end - start
@@ -255,14 +255,13 @@ def adaptive_combine(
             if ccc % div == 0:
                 sub += 1
                 name = "%" * sub
-                bar.postfix = f"Adaptive channel combine {name.ljust(len_sub_bar, '_')}"
-
-        # batched eigen-decomposition
-        bar.postfix = "Batched eigendecomposition"
+                bar.set_postfix({"step":f"Adaptive channel combine {name.ljust(len_sub_bar, '_')}"})
 
         cov_shape = cov.shape
         # for some reason cpu implementation is quicker on larger matrices
         if nc > 32:
+            # batched eigen-decomposition
+            bar.set_postfix({"step":"Batched eigendecomposition"})
             _, _, v = subspace_orbit_randomized_svd(cov, q=min(5, nc), power_projections=1)
             w = v[..., 0, :]
         else:
@@ -271,10 +270,21 @@ def adaptive_combine(
                 print(f"Number of NaNs: {torch.isnan(cov).sum()}")
                 # Debug further or handle gracefully
                 cov[torch.isnan(cov)] = 0
-
-            _, eigvecs = torch.linalg.eigh(cov)
-            # Pick dominant eigenvector
-            w = eigvecs[..., -1]
+            # batched eigen-decomposition
+            bar.set_postfix({"step":"Batched eigendecomposition "+"_"*b})
+            w = []
+            for i in range(b):
+                covcov = cov[i]
+                ww = []
+                for j in range(covcov.shape[0]):
+                    covcovcov = covcov[j]
+                    _, eigvecs = torch.linalg.eigh(covcovcov)
+                    # Pick dominant eigenvector
+                    ww.append(eigvecs[..., -1])
+                w.append(torch.stack(ww, dim=0))
+                name = "%" * (i+1)
+                bar.set_postfix({"step":f"Batched eigendecomposition {name.ljust(b, '_')}"})
+            w = torch.stack(w, dim=0)
         w = w.to(device)
         w = w / (torch.linalg.norm(w, dim=-1, keepdim=True) + 1e-8)
 
