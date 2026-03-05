@@ -9,7 +9,7 @@ import plotly.subplots as psub
 
 from pymritools.config import setup_program_logging
 from pymritools.config.database import DB
-from pymritools.utils import torch_load, torch_save, fft_to_img, ifft_to_k
+from pymritools.utils import torch_load, torch_save, fft_to_img, ifft_to_k, adaptive_combine
 from pymritools.modeling.espirit.functions import map_estimation
 from pymritools.processing.denoising.stats import non_central_chi as ncc_stats
 from pymritools.processing.denoising.lcpca import noise_bias_correction, denoise_lcpca
@@ -17,6 +17,7 @@ from pymritools.modeling.dictionary.grid_search_channels import fit_t2b1, normal
     smooth_map, fit_regularised_t2
 
 from tests.utils import get_test_result_output_dir, ResultMode
+from pymritools.utils import colormaps
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def main():
     logging.info(f"- device: {torch.cuda.get_device_name(device)}")
 
     path = plib.Path(
-        get_test_result_output_dir("r2_estimation_cfa".lower(), mode=ResultMode.EXPERIMENT
+        get_test_result_output_dir("r2_estimation_cfa_den".lower(), mode=ResultMode.EXPERIMENT
         )
     )
     path_data = plib.Path(
@@ -103,10 +104,13 @@ def main():
     )
     # load in data
     logging.info("Load data")
-    # k_recon = torch_load(path_data.joinpath("mese_cfa_rf2838_ga_rgs0p8_a3p65_trd20_m095sl82g67_denoised").with_suffix(".pt"))
-    # torch_save(k_recon[:, :, k_recon.shape[2] // 2].clone(), path, file_name="k_recon_slice")
+    img_recon = torch_load(path_data.joinpath("2025-12-03_mese_cfa_rf2838_slr_rgs0p8_a3p5_trd20_m065sl50g67_read_t720_m10_2_denosing_p1").with_suffix(".pt"))
+    torch_save(img_recon[:, :, img_recon.shape[2] // 2].clone(), path, file_name="img_recon_slice")
+    torch.cuda.empty_cache()
+    del img_recon
     img_recon = torch_load(path_data.joinpath("k_recon_slice").with_suffix(".pt")).unsqueeze(2)
     k_recon = ifft_to_k(img_recon, dims=(0, 1))
+    logging.info(f"img_recon data shape: {img_recon.shape}")
 
     # we estimate the noise distribution from the corners (complex data)
     mask_noise = torch.zeros(img_recon.shape, dtype=torch.bool)
@@ -149,14 +153,14 @@ def main():
     # load database
     path_database = plib.Path(
         "C:\\DatenJo\\Daten\\02_work\\04_data\\proj_mese\\emc\\databases\\"
-        "db_mese_vfa-rf26-38-gauss_rgs0p8_a3_trd15_m065-sl82-g67_read-sp96-t720-ge-m100.pkl"
+        "db_phantom_mese_cfa130-rf26-38-gauss_rgs0p8_a3p5_trd40_m065-sl50-g67_read-t720-ge-m100_b0r400.pkl"
     )
     db = DB.load(path_database)
     # process and normalise
     db_normed, db_norm, db_shape = get_normalise_database(db, dtype=img_recon.dtype, device=device)
 
     # normalise dataa
-    data, data_norm = normalise_data(img_nbc)
+    data, data_norm = normalise_data(img_recon)
     # batch data
     data_shape = data.shape
 
@@ -175,26 +179,25 @@ def main():
         t2 = torch_load(path_t2)
         b1 = torch_load(path.joinpath("b1.pt"))
 
-    plot_maps([img_nbc[..., 0], t2*1e3, b1], path=path, name="fit_maps")
+    plot_maps(
+        maps=[img_nbc[..., 0], t2*1e3, b1],
+        path=path, name="01_fit_maps",
+        zs=[(None, None), (0, 150), (0.5, 1.5)],
+        cmaps=["Inferno", colormaps.get_colormap("navia"), "Inferno"]
+    )
 
     t2_wavg = torch.sum(smaps * t2, dim=-1) / smaps_sum * 1e3
     b1_wavg = torch.sum(smaps * b1, dim=-1) / smaps_sum
     img_wavt = torch.sum(smaps * img_nbc[..., 0], dim=-1) / smaps_sum
 
-    # denoise
-    path_t2 = path.joinpath("t2_wavg_den.pt")
-    if not path_t2.exists():
-        t2_wavg_den, _, _ = denoise_lcpca(
-            input_data=t2_wavg.unsqueeze(-1).unsqueeze(-1).expand(*k_recon.shape[:3], 1, 8), p=1, device=device,
-        )
-        torch_save(t2_wavg_den[..., 0], path, file_name="t2_wavg_den")
-    else:
-        t2_wavg_den = torch_load(path_t2)
-
     # plot maps
     logging.info("Plot maps")
-    plot_maps(maps=[img_wavt, t2_wavg, t2_wavg_den, b1_wavg], path=path, name="fit_wavt",
-              zs=[(None, None), (0, 150), (0, 150), (0.5, 1.5)])
+    plot_maps(
+        maps=[img_wavt, torch.nan_to_num(1000/t2_wavg, nan=0.0, posinf=0.0), b1_wavg],
+        path=path, name="02_fit_maps_wavt",
+        zs=[(None, None), (0, 50), (0.5, 1.5)],
+        cmaps=["Gray", colormaps.get_colormap("navia"), "Inferno"]
+    )
 
     if not path.joinpath("b1_smoothed.pt").exists():
         logging.info(f"smooth B1")
@@ -213,7 +216,12 @@ def main():
         b1_map = torch_load(path.joinpath("b1_smoothed.pt"))
         t2_reg = torch_load(path.joinpath("t2_reg.pt"))
 
-    plot_maps([img_nbc[..., 0], t2_reg*1e3, b1_map], path=path, name="fit_maps_reg")
+    plot_maps(
+        maps=[img_nbc[..., 0], t2_reg*1e3, b1_map],
+        path=path, name="03_fit_maps_reg",
+        zs=[(None, None), (0, 150), (0.5, 1.5)],
+        cmaps=["Inferno", colormaps.get_colormap("navia"), "Inferno"]
+    )
 
     # weighted average combination
     smaps = sensitivity_maps.abs()
@@ -225,7 +233,12 @@ def main():
 
     # plot maps
     logging.info("Plot maps")
-    plot_maps(maps=[img_wavt, t2_wavg, b1_wavg], path=path, name="fit_reg_wavt")
+    plot_maps(
+        maps=[img_wavt, torch.nan_to_num(1000/t2_wavg, nan=0.0, posinf=0.0), b1_wavg],
+        path=path, name="04_fit_reg_wavt",
+        zs=[(None, None), (0, 50), (0.5, 1.5)],
+        cmaps = ["Inferno", colormaps.get_colormap("navia"), "Inferno"]
+    )
 
 
     # redo with rsos
@@ -250,12 +263,22 @@ def main():
         t2_rsos = torch_load(path_t2)
         b1_rsos = torch_load(path.joinpath("b1_rsos.pt"))
 
-    plot_maps([data_rsos[..., 0], t2_rsos*1e3, b1_rsos], path=path, name="fit_maps_rsos")
+    plot_maps(
+        maps=[data_rsos[..., 0], torch.nan_to_num(1/t2_rsos, nan=0.0, posinf=0.0), b1_rsos],
+        path=path, name="05_fit_maps_rsos",
+        zs=[(None, None), (0, 50), (0.5, 1.5)],
+        cmaps=["Inferno", colormaps.get_colormap("navia"), "Inferno"]
+    )
 
 def plot_maps(maps: list,
-              path: plib.Path, name:str, zs: list = None, suffix: str | list = ".html"):
+              path: plib.Path, name:str,
+              zs: list = None,
+              cmaps: list = None,
+              suffix: str | list = ".html"):
     if zs is None:
         zs = [(None, None), (0, 120), (0.5, 1.5)]
+    if cmaps is None:
+        cmaps = ["Inferno"] * len(maps)
     if maps[0].ndim > 3:
         fig = psub.make_subplots(rows=len(maps), cols=5)
     else:
@@ -267,7 +290,7 @@ def plot_maps(maps: list,
             for i, d in enumerate(dn[:, :, 0, 10:15].permute(2, 0, 1)):
                 fig.add_trace(
                     go.Heatmap(
-                        z=d.abs(), transpose=True, colorscale="Inferno", showscale=False,
+                        z=d.abs(), transpose=True, colorscale=cmaps[j], showscale=False,
                         zmin=zs[j][0], zmax=zs[j][1]
                     ),
                     row=1 + j, col=1 + i
@@ -275,8 +298,8 @@ def plot_maps(maps: list,
         else:
             fig.add_trace(
                 go.Heatmap(
-                    z=dn[:, :, 0].abs(), transpose=True, colorscale="Inferno", showscale=False,
-                    zmin=zs[j][0], zmax=zs[j][1]
+                    z=dn[:, :, 0].abs(), transpose=True, colorscale=cmaps[j], showscale=False,
+                    zmin=zs[j][0], zmax=zs[j][1],
                 ),
                 row=1, col=1 + j
             )
