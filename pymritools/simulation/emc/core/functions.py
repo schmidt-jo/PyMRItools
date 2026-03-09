@@ -35,9 +35,8 @@ def pulse_calibration_integral(
     # set phase in rad
     phase_rad = phase / 180 * np.pi
     rf_amplitude = torch.from_numpy(rf_pulse.signal.copy())
-    rf_phase = torch.from_numpy(rf_pulse.phase.copy())
     b1_pulse = rf_amplitude * torch.exp(
-        1j * (rf_phase + phase_rad)
+        1j * torch.full_like(rf_amplitude, phase_rad)
     )
     b1_pulse_calibrated = b1_pulse[None, :].to(b1_vals.device) * b1_vals[:, None]
     return b1_pulse_calibrated
