@@ -8,7 +8,7 @@
   "emc_params_file": "examples/simulation/emc/emc_params.json",
   "kernel_file": "examples/simulation/emc/mese_kernels.pkl",
   "te_file": "examples/simulation/emc/mese_te.json",
-  "pulse_file": "resources/pulses/gauss.json",
+  "pulse_file": "examples/simulation/gauss120_b375.json",
   "database_name": "db_mese_cfa_sp3500.pkl",
   "t1_list": [
     1.5
