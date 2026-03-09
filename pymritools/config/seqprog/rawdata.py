@@ -250,6 +250,11 @@ class RD(BaseClass):
         help="Remove oversampling from kollected k-space. "
              "We might want to turn this off for some denoising procedures to extract oversampled signal lines."
     )
+    seq_type: str = field(
+        alias="-st", default="pulseq",
+        choices=["pulseq", "siemens"],
+        help="Type of sequence to process"
+    )
 
 
 @dataclass

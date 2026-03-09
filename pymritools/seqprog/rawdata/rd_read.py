@@ -99,7 +99,7 @@ def pulseq_rd_to_torch(config: RD):
     torch_save(noise_scans, path_out, "k_noise_scans")
 
 
-def pulseq():
+def main():
     # setup logging
     setup_program_logging(name="Raw Data to torch", level=logging.INFO)
 
@@ -111,7 +111,15 @@ def pulseq():
     rd_config.display()
 
     try:
-        pulseq_rd_to_torch(config=rd_config)
+        match rd_config.seq_type:
+            case "pulseq":
+                pulseq_rd_to_torch(config=rd_config)
+            case "siemens":
+                siemens_rd_to_torch(config=rd_config)
+            case _:
+                err = f"Sequence type {rd_config.seq_type} not recognized."
+                log_module.error(err)
+                raise ValueError(err)
     except Exception as e:
         parser.print_help()
         logging.exception(e)
@@ -136,7 +144,7 @@ def siemens_rd_to_torch(config: RD):
     device = torch.device("cpu")
     with HidePrints():
         twix = twixtools.read_twix(path_to_file.as_posix(), parse_geometry=True, verbose=True, include_scans=-1)[0]
-        # twix_hl = twixtools.map_twix(path_to_file.as_posix())
+        twix_hl = twixtools.map_twix(path_to_file.as_posix())
     # noise = twix_hl[0]["image"]
     # data = twix_hl[1]["image"]
     # refscan = twix_hl[1]["refscan"]
@@ -181,23 +189,5 @@ def siemens_rd_to_torch(config: RD):
     torch_save(k_sampling_mask, path_out, "k_sampling_mask")
 
 
-def siemens():
-    # setup logging
-    setup_program_logging(name="Raw Data to torch", level=logging.INFO)
-
-    # setup parser
-    parser, args = setup_parser(prog_name="Raw Data to torch", dict_config_dataclasses={"settings": RD})
-
-    # get config
-    rd_config = RD.from_cli(args=args.settings, parser=parser)
-    rd_config.display()
-
-    try:
-        siemens_rd_to_torch(config=rd_config)
-    except Exception as e:
-        parser.print_help()
-        logging.exception(e)
-
-
 if __name__ == '__main__':
-    pulseq()
+    main()
