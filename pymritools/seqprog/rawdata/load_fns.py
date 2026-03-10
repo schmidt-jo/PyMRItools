@@ -11,6 +11,12 @@ from twixtools.geometry import Geometry
 from twixtools.mdb import Mdb
 from pymritools.config.seqprog import Sampling, PulseqParameters2D
 from pymritools.seqprog.rawdata.utils import remove_oversampling
+from pymritools.utils import fft_to_img
+
+# for debugging
+import pathlib as plib
+from pymritools.utils.plotting import quick_image_plot
+from tests.utils import get_test_result_output_dir, ResultMode
 
 log_module = logging.getLogger(__name__)
 
@@ -92,7 +98,7 @@ def get_whitening_matrix(noise_data_n_samples_channel):
 
 
 def noise_whitening(noise_scans: np.ndarray, device: torch.device = torch.get_default_device(),
-                    ) -> (torch.Tensor, numpy.ndarray):
+                    ) -> (torch.Tensor, torch.Tensor):
     psi_l_inv = torch.from_numpy(
         get_whitening_matrix(noise_data_n_samples_channel=np.swapaxes(noise_scans, -2, -1))
     ).to(device=device, dtype=torch.complex64)
@@ -386,8 +392,15 @@ def load_siemens_rd(
     refscan.flags["remove_os"] = remove_os
 
     k_space = data[:].squeeze()
+    # move channels to back
+    k_space = np.moveaxis(k_space, -2, -1)
+    # move echoes to back
     k_space = np.moveaxis(k_space, 0, -1)
+
     k_ref = refscan[:].squeeze()
+    # move channels to back
+    k_ref = np.moveaxis(k_ref, -2, -1)
+    # move echoes to back
     k_ref = np.moveaxis(k_ref, 0, -1)
 
     noise_scans = noise[:].squeeze()
@@ -471,6 +484,13 @@ def load_siemens_rd(
         start_embedd[2]:start_embedd[2] + k_space_ref_shape[2],
     ] = k_ref
 
+    for i, k in enumerate([k_ref, k_space, k_space_combined]):
+        quick_image_plot(
+            data=torch.from_numpy(k).abs(),
+            path=plib.Path(get_test_result_output_dir("raw_data_debug", ResultMode.TEST)),
+            name=["rd_k_ref", "rd_k_space", "rd_k_combined"][i],
+            cs=8, es=2
+        )
     # build image array
     # read_dir = None
     # x is rl, y is pa
@@ -511,14 +531,26 @@ def load_siemens_rd(
     else:
         psi_l_inv, noise_scans = None, None
 
+    # build hybrid k-space for 3D scan recon
+    if not acq_2d:
+        k_space_combined = fft_to_img(torch.from_numpy(k_space_combined), dims=(read_dir,))
+    else:
+        k_space_combined = torch.from_numpy(k_space_combined)
+
+    quick_image_plot(
+        data=k_space_combined.abs(),
+        path=plib.Path(get_test_result_output_dir("raw_data_debug", ResultMode.TEST)),
+        name="rd_k_space_hybrid",
+        cs=8, es=2
+    )
     # do some batched processing slice wise use gpu if available
-    for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
-        batch_k = torch.from_numpy(k_space_combined[:, :, idx_slice]).to(device)
+    for idx_slice in tqdm.trange(k_space_combined.shape[2], desc="slice wise processing"):
+        batch_k = k_space_combined[:, :, idx_slice].to(device)
         if noise_scans is not None:
             batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv)
         k_space_combined[:, :, idx_slice] = batch_k.cpu()
 
-    k_space = k_space_combined
+    k_space = k_space_combined.numpy()
     k_sampling_mask = np.abs(k_space) > 1e-9
 
     log_module.info(f"Extract geometry & affine information")
@@ -545,5 +577,11 @@ def load_siemens_rd(
         slice_gap_mm=0.0
     )
 
-    return k_space, k_sampling_mask, aff, noise_scans, read_dir
+    if acq_2d:
+        msg = "2D acquisition, slice dimension is in image domain (i.e. slice selective ordering)"
+    else:
+        msg = f"3D acquisition, output hybrid k-space with read dimension transformed ({read_dir}) to image domain."
+    log_module.warning(msg)
+
+    return k_space, k_sampling_mask, aff, noise_scans, msg
 

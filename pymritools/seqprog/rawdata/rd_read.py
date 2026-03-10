@@ -154,7 +154,7 @@ def siemens_rd_to_torch(config: RD):
     hdr = twix["hdr"]
     log_module.info("Loading RD")
 
-    k_space, k_sampling_mask, aff, noise_scans, read_dir = load_siemens_rd(
+    k_space, k_sampling_mask, aff, noise_scans, msg = load_siemens_rd(
         data_mdbs=data_mdbs, hdr=hdr,
         geometry=geometry, twix_mapped=twix_hl,
         device=device, remove_os=config.remove_os
@@ -180,10 +180,7 @@ def siemens_rd_to_torch(config: RD):
     torch_save(noise_scans, path_out, "k_noise_scans")
     torch_save(k_sampling_mask, path_out, "k_sampling_mask")
 
-    # build hybrid k-space for 3D scan recon
-    k_hybrid = fft_to_img(torch.from_numpy(k_space), dims=(read_dir,))
-    k_hybrid = permute_3d_scans(k_hybrid, read_dir=read_dir)
-    torch_save(k_hybrid, path_out, "k_space_hybrid")
+    log_module.warning(msg)
 
 if __name__ == '__main__':
     main()
