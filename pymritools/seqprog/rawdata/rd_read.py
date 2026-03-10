@@ -1,3 +1,4 @@
+import json
 import logging
 import pathlib as plib
 
@@ -154,7 +155,7 @@ def siemens_rd_to_torch(config: RD):
     hdr = twix["hdr"]
     log_module.info("Loading RD")
 
-    k_space, k_sampling_mask, aff, noise_scans, msg = load_siemens_rd(
+    k_space, k_sampling_mask, aff, noise_scans, nii_settings = load_siemens_rd(
         data_mdbs=data_mdbs, hdr=hdr,
         geometry=geometry, twix_mapped=twix_hl,
         device=device, remove_os=config.remove_os
@@ -180,7 +181,13 @@ def siemens_rd_to_torch(config: RD):
     torch_save(noise_scans, path_out, "k_noise_scans")
     torch_save(k_sampling_mask, path_out, "k_sampling_mask")
 
-    log_module.warning(msg)
+    log_module.warning(nii_settings["msg"])
+
+    path_nii_set = path_out.joinpath("nii_settings").with_suffix(".json")
+    log_module.info(f"Write file: {path_nii_set.as_posix()}")
+    with open(path_nii_set.as_posix(), "w") as f:
+        json.dump(nii_settings, f, indent=2)
+
 
 if __name__ == '__main__':
     main()

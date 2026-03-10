@@ -407,12 +407,13 @@ def load_siemens_rd(
     noise_scans = np.reshape(noise_scans, (-1, *noise_scans.shape[-2:]))
     log_module.debug(f"setup dimension info")
 
+    nii_settings = {}
     # find number of coils
-    num_coils = data_mdbs[-1].mdh.UsedChannels
+    nii_settings["num_coils"] = data_mdbs[-1].mdh.UsedChannels
 
-    tes = np.array(hdr["MeasYaps"]["alTE"]) * 1e-6
-    trs = np.array(hdr["MeasYaps"]["alTR"]) * 1e-6
-    fa = np.array(hdr["MeasYaps"]["adFlipAngleDegree"])
+    nii_settings["tes"] = np.array(hdr["MeasYaps"]["alTE"]) * 1e-6
+    nii_settings["trs"] = np.array(hdr["MeasYaps"]["alTR"]) * 1e-6
+    nii_settings["fa"] = np.array(hdr["MeasYaps"]["adFlipAngleDegree"])
     # get dimensions
     acq_2d = False if int(hdr["Config"]["NParMeas"]) > 1 else True
     n_slice = max(int(hdr["Config"]["NParMeas"]), int(hdr["Config"]["NSlcMeas"]))
@@ -421,7 +422,7 @@ def load_siemens_rd(
     read_dir = np.where(np.array(k_space.shape) == n_read)[0][0]
 
     # n_read = n_read // 2 if remove_os else n_read
-    n_echoes = int(hdr["Config"]["NEcoMeas"])
+    nii_settings["n_echoes"] = int(hdr["Config"]["NEcoMeas"])
     ac_dir = np.where(np.array(k_ref.shape[:3]) < np.array(k_space.shape[:3]) - 1)[0][0]
 
     k_ref_tmp = np.moveaxis(k_ref, ac_dir, 0)
@@ -581,7 +582,15 @@ def load_siemens_rd(
         msg = "2D acquisition, slice dimension is in image domain (i.e. slice selective ordering)"
     else:
         msg = f"3D acquisition, output hybrid k-space with read dimension transformed ({read_dir}) to image domain."
-    log_module.warning(msg)
+    nii_settings["msg"] = msg
+    nii_settings["os_factor"] = os_factor
+    nii_settings["read_dir"] = read_dir
 
-    return k_space, k_sampling_mask, aff, noise_scans, msg
+    for key, value in nii_settings.items():
+        if isinstance(value, np.ndarray):
+            nii_settings[key] = value.tolist()
+        elif not isinstance(value, str):
+            nii_settings[key] = float(value)
+
+    return k_space, k_sampling_mask, aff, noise_scans, nii_settings
 
