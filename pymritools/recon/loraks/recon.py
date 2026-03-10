@@ -142,14 +142,15 @@ def main(config: Settings):
     #     img_aff=aff, path_to_dir=path_out, file_name="recon_img"
     # )
 
-    logger.info("Adaptive combine")
-    ac = adaptive_combine(channel_img_data_rpsct=img, batch_size=1, use_gpu=True)
-
-    for i, f in enumerate([torch.abs, torch.angle]):
-        nifti_save(
-            data=f(ac),
-            img_aff=aff, path_to_dir=path_out, file_name=f"recon_img_adac_{['mag', 'phase'][i]}"
-        )
+    # ToDo: fix adaptive combine
+    # logger.info("Adaptive combine")
+    # ac = adaptive_combine(channel_img_data_rpsct=img, batch_size=1, use_gpu=True)
+    #
+    # for i, f in enumerate([torch.abs, torch.angle]):
+    #     nifti_save(
+    #         data=f(ac),
+    #         img_aff=aff, path_to_dir=path_out, file_name=f"recon_img_adac_{['mag', 'phase'][i]}"
+    #     )
 
 
 def loraks_from_cli():
