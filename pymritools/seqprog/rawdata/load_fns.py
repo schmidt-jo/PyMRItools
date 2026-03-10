@@ -13,10 +13,10 @@ from pymritools.config.seqprog import Sampling, PulseqParameters2D
 from pymritools.seqprog.rawdata.utils import remove_oversampling
 from pymritools.utils import fft_to_img
 
-# for debugging
-import pathlib as plib
-from pymritools.utils.plotting import quick_image_plot
-from tests.utils import get_test_result_output_dir, ResultMode
+# # for debugging
+# import pathlib as plib
+# from pymritools.utils.plotting import quick_image_plot
+# from tests.utils import get_test_result_output_dir, ResultMode
 
 log_module = logging.getLogger(__name__)
 
@@ -483,14 +483,14 @@ def load_siemens_rd(
         start_embedd[1]:start_embedd[1] + k_space_ref_shape[1],
         start_embedd[2]:start_embedd[2] + k_space_ref_shape[2],
     ] = k_ref
-
-    for i, k in enumerate([k_ref, k_space, k_space_combined]):
-        quick_image_plot(
-            data=torch.from_numpy(k).abs(),
-            path=plib.Path(get_test_result_output_dir("raw_data_debug", ResultMode.TEST)),
-            name=["rd_k_ref", "rd_k_space", "rd_k_combined"][i],
-            cs=8, es=2
-        )
+    #
+    # for i, k in enumerate([k_ref, k_space, k_space_combined]):
+    #     quick_image_plot(
+    #         data=torch.from_numpy(k).abs(),
+    #         path=plib.Path(get_test_result_output_dir("raw_data_debug", ResultMode.TEST)),
+    #         name=["rd_k_ref", "rd_k_space", "rd_k_combined"][i],
+    #         cs=8, es=2
+    #     )
     # build image array
     # read_dir = None
     # x is rl, y is pa
@@ -537,12 +537,12 @@ def load_siemens_rd(
     else:
         k_space_combined = torch.from_numpy(k_space_combined)
 
-    quick_image_plot(
-        data=k_space_combined.abs(),
-        path=plib.Path(get_test_result_output_dir("raw_data_debug", ResultMode.TEST)),
-        name="rd_k_space_hybrid",
-        cs=8, es=2
-    )
+    # quick_image_plot(
+    #     data=k_space_combined.abs(),
+    #     path=plib.Path(get_test_result_output_dir("raw_data_debug", ResultMode.TEST)),
+    #     name="rd_k_space_hybrid",
+    #     cs=8, es=2
+    # )
     # do some batched processing slice wise use gpu if available
     for idx_slice in tqdm.trange(k_space_combined.shape[2], desc="slice wise processing"):
         batch_k = k_space_combined[:, :, idx_slice].to(device)
