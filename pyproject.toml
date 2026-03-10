@@ -18,6 +18,7 @@ dependencies = [
     "torch-kmeans>=0.2.0",
     "rich>=14.2.0",
     "autodmri>=0.2.7",
+    "kaleido>=1.2.0",
 ]
 
 [build-system]
@@ -28,15 +29,15 @@ build-backend = "hatchling.build"
 twixtools = { git = "https://github.com/pehses/twixtools.git", rev = "master" }
 pypulseq = { git = "https://github.com/imr-framework/pypulseq.git", rev = "dev" }
 torch = [
-  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchvision = [
-  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [project.scripts]
@@ -44,3 +45,4 @@ recon_loraks = "pymritools.recon.loraks.recon:loraks_from_cli"
 simulation_emc_mese = "pymritools.simulation.emc.sequence.mese:main"
 processing_unring = "pymritools.processing.unringing.gibbs_unr:main"
 processing_denoise_lcpca = "pymritools.processing.denoising.lcpca.denoise:main"
+seqprog_raw_data = "pymritools.seqprog.rawdata.rd_read:main"
