@@ -203,7 +203,13 @@ def main():
         logging.info(f"smooth B1")
         b1_map = smooth_map(b1, kernel_size=min(b1.shape[:2]) // 20)
         torch_save(b1_map, path, file_name="b1_smoothed")
+    else:
+        b1_map = torch_load(path.joinpath("b1_smoothed.pt"))
 
+    logging.info(f"Combined B1")
+    # produce combined B1 with afi map for regularisation
+
+    if not path.joinpath("t2_reg.pt").exists():
         # fit regularised
         logging.info(f"fit with regularisation, input smoothed B1")
         t2_reg, l2_res = fit_regularised_t2(
@@ -211,9 +217,7 @@ def main():
             db_normed=db_normed, db=db, device=device
         )
         torch_save(t2_reg, path, file_name="t2_reg")
-
     else:
-        b1_map = torch_load(path.joinpath("b1_smoothed.pt"))
         t2_reg = torch_load(path.joinpath("t2_reg.pt"))
 
     plot_maps(

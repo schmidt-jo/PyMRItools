@@ -7,9 +7,11 @@ import numpy as np
 
 from pymritools.config.seqprog import RD, Sampling, PulseqParameters2D
 from pymritools.config import setup_program_logging, setup_parser
-from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd, load_siemens_rd
+from pymritools.seqprog.rawdata.load_fns import load_pulseq_rd, load_siemens_rd, get_affine
 from pymritools.utils import torch_save, fft_to_img, root_sum_of_squares, nifti_save, HidePrints
 import twixtools
+
+from pymritools.utils.data_io import permute_3d_scans
 
 log_module = logging.getLogger(__name__)
 
@@ -142,30 +144,20 @@ def siemens_rd_to_torch(config: RD):
     #     device = torch.device(f"cuda:{RD.gpu_device}")
     # else:
     device = torch.device("cpu")
+    log_module.info("Load twix")
     with HidePrints():
         twix = twixtools.read_twix(path_to_file.as_posix(), parse_geometry=True, verbose=True, include_scans=-1)[0]
-        twix_hl = twixtools.map_twix(path_to_file.as_posix())
-    # noise = twix_hl[0]["image"]
-    # data = twix_hl[1]["image"]
-    # refscan = twix_hl[1]["refscan"]
-    # data.flags["remove_os"] = True
-    # refscan.flags["remove_os"] = True
-    #
-    # k_space = data[:].squeeze()
-    # k_space = np.permute_dims(k_space, [1, 2, 4, 3, 0])
-    # k_ref = refscan[:].squeeze()
-    # k_ref = np.permute_dims(k_ref, [1, 2, 4, 3, 0])
-    #
-    # noise_scans = noise[:].squeeze()
+        twix_hl = twixtools.map_twix(path_to_file.as_posix(), verbose=True)
 
-    geometry = twix["geometry"]
+    geometry = twix["geometry"][0]
     data_mdbs = twix["mdb"]
     hdr = twix["hdr"]
     log_module.info("Loading RD")
-    k_space, k_sampling_mask, aff, noise_scans = load_siemens_rd(
+
+    k_space, k_sampling_mask, aff, noise_scans, read_dir = load_siemens_rd(
         data_mdbs=data_mdbs, hdr=hdr,
-        geometry=geometry,
-        device=device
+        geometry=geometry, twix_mapped=twix_hl,
+        device=device, remove_os=config.remove_os
     )
 
     log_module.info("Saving")
@@ -188,6 +180,10 @@ def siemens_rd_to_torch(config: RD):
     torch_save(noise_scans, path_out, "k_noise_scans")
     torch_save(k_sampling_mask, path_out, "k_sampling_mask")
 
+    # build hybrid k-space for 3D scan recon
+    k_hybrid = fft_to_img(torch.from_numpy(k_space), dims=(read_dir,))
+    k_hybrid = permute_3d_scans(k_hybrid, read_dir=read_dir)
+    torch_save(k_hybrid, path_out, "k_space_hybrid")
 
 if __name__ == '__main__':
     main()

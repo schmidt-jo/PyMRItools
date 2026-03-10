@@ -111,7 +111,7 @@ def get_affine(
         slice_gap_mm: float = 0.0):
     # handle rotations
     # get rotation matrix from geom
-    rot_mat = Rotation.from_matrix(geom.rotmatrix)
+    rot_mat = Rotation.from_matrix(geom.pcs_to_xyz())
     # handle in plane rotations
     # get normal vector of slab / slice
     normal_vec = np.array(geom.normal)
@@ -168,6 +168,17 @@ def get_affine(
     return aff_matrix
 
 
+def remove_syncdata(data_mdbs: list):
+    log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
+    # remove data not needed, i.e. SYNCDATA acquisitions
+    data_mdbs = [d for d in data_mdbs if "SYNCDATA" not in d.get_active_flags()]
+
+    log_module.debug(f"setup dimension info")
+    # find number of coils
+    num_coils = data_mdbs[-1].mdh.UsedChannels
+    return data_mdbs, num_coils
+
+
 def load_pulseq_rd(
         pulseq_config: PulseqParameters2D, sampling_config: Sampling,
         data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, split_read_polarity: bool = True,
@@ -178,14 +189,7 @@ def load_pulseq_rd(
         device = torch.device('cpu')
     log_module.info(f"setup device : {torch.cuda.get_device_name(device)}")
 
-    log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
-    # remove data not needed, i.e. SYNCDATA acquisitions
-    data_mdbs = [d for d in data_mdbs if "SYNCDATA" not in d.get_active_flags()]
-
-    log_module.debug(f"setup dimension info")
-    # find number of coils
-    num_coils = data_mdbs[-1].mdh.UsedChannels
-
+    data_mdbs, num_coils = remove_syncdata(data_mdbs)
     log_module.debug(f"allocate img arrays")
     etl = sampling_config.df_sampling_pattern.filter(
         pl.col("acquisition") != "noise_scan"
@@ -366,16 +370,28 @@ def load_pulseq_rd(
 
 
 def load_siemens_rd(
-        data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, split_read_polarity: bool = True,
+        data_mdbs: list[Mdb], geometry: Geometry, hdr: dict, twix_mapped: list | dict,
+        remove_os: bool = True, split_read_polarity: bool = True,
         device: torch.device = torch.device("cpu")):
     if device != torch.device("cpu") and not torch.cuda.is_available():
         device = torch.device("cpu")
     log_module.info(f"setup device")
+    data_mdbs, num_coils = remove_syncdata(data_mdbs)
 
-    log_module.debug(f"Remove SYNCDATA acquisitions and get Arrays".rjust(20))
-    # remove data not needed, i.e. SYNCDATA acquisitions
-    data_mdbs = [d for d in data_mdbs if "SYNCDATA" not in d.get_active_flags()]
+    log_module.info(f"use high level map twix")
+    noise = twix_mapped[0]["image"]
+    data = twix_mapped[1]["image"]
+    refscan = twix_mapped[1]["refscan"]
+    data.flags["remove_os"] = remove_os
+    refscan.flags["remove_os"] = remove_os
 
+    k_space = data[:].squeeze()
+    k_space = np.moveaxis(k_space, 0, -1)
+    k_ref = refscan[:].squeeze()
+    k_ref = np.moveaxis(k_ref, 0, -1)
+
+    noise_scans = noise[:].squeeze()
+    noise_scans = np.reshape(noise_scans, (-1, *noise_scans.shape[-2:]))
     log_module.debug(f"setup dimension info")
 
     # find number of coils
@@ -385,32 +401,75 @@ def load_siemens_rd(
     trs = np.array(hdr["MeasYaps"]["alTR"]) * 1e-6
     fa = np.array(hdr["MeasYaps"]["adFlipAngleDegree"])
     # get dimensions
+    acq_2d = False if int(hdr["Config"]["NParMeas"]) > 1 else True
     n_slice = max(int(hdr["Config"]["NParMeas"]), int(hdr["Config"]["NSlcMeas"]))
     n_phase = int(hdr["Config"]["NLinMeas"])
-    n_read = int(data_mdbs[-1].mdh.SamplesInScan)
-    n_echoes = int(hdr["Config"]["NEcoMeas"])
-    slice_pos = []
-    for mdb in tqdm.tqdm(data_mdbs):
-        if mdb.cEco > n_echoes:
-            msg = f"found echo counter extending set number of echoes"
-            log_module.error(msg)
-            raise ValueError(msg)
-        if mdb.cPar > n_slice or mdb.cSlc > n_slice:
-            msg = f"found slice counter extending set number of slices"
-            log_module.error(msg)
-            raise ValueError(msg)
-        if mdb.cLin > n_phase:
-            msg = f"found phase counter extending set number of phases"
-            log_module.error(msg)
-            raise ValueError(msg)
-        if mdb.mdh.SliceData.SlicePos not in slice_pos:
-            slice_pos.append(mdb.mdh.SliceData.SlicePos)
-    slice_pos_array = np.array([[sp.Cor, sp.Sag, sp.Tra] for sp in slice_pos])
-    slice_pos_sort = np.sort(np.sum(slice_pos_array, axis=-1))
+    n_read = int(data.hdr["Config"]["BaseResolution"])
+    read_dir = np.where(np.array(k_space.shape) == n_read)[0][0]
 
+    # n_read = n_read // 2 if remove_os else n_read
+    n_echoes = int(hdr["Config"]["NEcoMeas"])
+    ac_dir = np.where(np.array(k_ref.shape[:3]) < np.array(k_space.shape[:3]) - 1)[0][0]
+
+    k_ref_tmp = np.moveaxis(k_ref, ac_dir, 0)
+    ac_lines = np.unique(np.where(np.sum(np.abs(k_ref_tmp), axis=(1, 2)) > 0)[0])
+    num_ac_lines = len(ac_lines)
+    ac_start = np.min(ac_lines)
+
+    k_ref = k_ref_tmp[ac_start:ac_start + num_ac_lines, :, :]
+    k_ref = np.moveaxis(k_ref, 0, ac_dir)
+    # slice_pos = []
+    # for mdb in tqdm.tqdm(data_mdbs):
+    #     if mdb.cEco > n_echoes:
+    #         msg = f"found echo counter extending set number of echoes"
+    #         log_module.error(msg)
+    #         raise ValueError(msg)
+    #     if mdb.cPar > n_slice or mdb.cSlc > n_slice:
+    #         msg = f"found slice counter extending set number of slices"
+    #         log_module.error(msg)
+    #         raise ValueError(msg)
+    #     if mdb.cLin > n_phase:
+    #         msg = f"found phase counter extending set number of phases"
+    #         log_module.error(msg)
+    #         raise ValueError(msg)
+    #     if mdb.mdh.SliceData.SlicePos not in slice_pos:
+    #         slice_pos.append(mdb.mdh.SliceData.SlicePos)
+    # slice_pos_array = np.unique(
+    #     np.array([[sp.Cor, sp.Sag, sp.Tra] for sp in slice_pos]),
+    #     axis=0
+    # )
+    # slice_pos_sort = np.sort(np.sum(slice_pos_array, axis=-1))
+    #
+    # if not acq_2d and slice_pos_sort.shape[0] > 1:
+    #     msg = f"Found 3D acquisition but multiple slice positions (usually associated with 2D slice selective measurements)"
+    #     log_module.warning(msg)
     os_factor = 1 if bool(hdr["Meas"]["ucRemoveOversampling"]) else 2
 
-    log_module.debug(f"allocate img arrays")
+    log_module.debug(f"built k_space")
+
+    spatial_shape_extr = k_space.shape[:3]
+    spatial_shape = []
+    for i, sn in enumerate(spatial_shape_extr):
+        if sn not in [n_read, n_phase, n_slice]:
+            if sn + 1 not in [n_read, n_phase, n_slice]:
+                msg = f"shape mismatch"
+                log_module.error(msg)
+                raise ValueError(msg)
+            spatial_shape.append(sn + 1)
+        else:
+            spatial_shape.append(sn)
+
+    k_space_combined = np.zeros((*spatial_shape, *k_space.shape[3:]), dtype=k_space.dtype)
+    k_space_combined[:spatial_shape_extr[0], :spatial_shape_extr[1], :spatial_shape_extr[2]] = k_space
+
+    k_space_ref_shape = np.array(k_ref.shape)
+    k_space_shape = np.array(k_space_combined.shape)
+    start_embedd = (k_space_shape - k_space_ref_shape) // 2
+    k_space_combined[
+        start_embedd[0]:start_embedd[0] + k_space_ref_shape[0],
+        start_embedd[1]:start_embedd[1] + k_space_ref_shape[1],
+        start_embedd[2]:start_embedd[2] + k_space_ref_shape[2],
+    ] = k_ref
 
     # build image array
     # read_dir = None
@@ -422,28 +481,28 @@ def load_siemens_rd(
     #     transpose_xy = False
 
     # allocate space
-    k_space = np.zeros(
-        (n_read * os_factor, n_phase, n_slice, num_coils, n_echoes),
-        dtype=complex
-    )
-    noise_scans = []
-
-    for mdb in tqdm.tqdm(data_mdbs, desc="Sorting"):
-        if "NOISEADJSCAN" in mdb.get_active_flags():
-            noise_scans.append(mdb.data)
-            continue
-        else:
-            phase = mdb.cLin
-            slice_num = max(mdb.cPar, mdb.cSlc)
-            mmss = mdb.mdh.SliceData.SlicePos
-            sli_p = np.sum(np.array([mmss.Sag, mmss.Cor, mmss.Tra]), axis=-1)
-            sli = max(int(np.where(slice_pos_sort == sli_p)[0]), mdb.cPar)
-            echo = mdb.cEco
-            k_space[:, phase, sli, :, echo] = mdb.data.T
-    # save noise scans separately, used later
-    noise_scans = np.array(noise_scans)
-    k_sampling_mask = (np.abs(k_space) > 1e-9).astype(int)
-    log_module.info("done")
+    # k_space = np.zeros(
+    #     (n_read * os_factor, n_phase, n_slice, num_coils, n_echoes),
+    #     dtype=complex
+    # )
+    # noise_scans = []
+    #
+    # for mdb in tqdm.tqdm(data_mdbs, desc="Sorting"):
+    #     if "NOISEADJSCAN" in mdb.get_active_flags():
+    #         noise_scans.append(mdb.data)
+    #         continue
+    #     else:
+    #         phase = mdb.cLin
+    #         slice_num = max(mdb.cPar, mdb.cSlc)
+    #         mmss = mdb.mdh.SliceData.SlicePos
+    #         sli_p = np.sum(np.array([mmss.Sag, mmss.Cor, mmss.Tra]), axis=-1)
+    #         sli = max(int(np.where(slice_pos_sort == sli_p)[0]), mdb.cPar)
+    #         echo = mdb.cEco
+    #         k_space[:, phase, sli, :, echo] = mdb.data.T
+    # # save noise scans separately, used later
+    # noise_scans = np.array(noise_scans)
+    # k_sampling_mask = (np.abs(k_space) > 1e-9).astype(int)
+    # log_module.info("done")
 
     # decorrelate channels
     if noise_scans is not None:
@@ -452,28 +511,15 @@ def load_siemens_rd(
     else:
         psi_l_inv, noise_scans = None, None
 
-    k_space_rm_os = torch.zeros((n_read, n_phase, n_slice, num_coils, n_echoes), dtype=torch.complex128)
     # do some batched processing slice wise use gpu if available
     for idx_slice in tqdm.trange(n_slice, desc="slice wise processing"):
-        batch_k = torch.from_numpy(k_space[:, :, idx_slice]).to(device)
+        batch_k = torch.from_numpy(k_space_combined[:, :, idx_slice]).to(device)
         if noise_scans is not None:
             batch_k = torch.einsum("ijmn, lm -> ijln", batch_k, psi_l_inv)
-        # remove oversampling, use gpu if set
-        batch_rmos = remove_oversampling(
-            data=batch_k, data_in_k_space=True, read_dir=0, os_factor=os_factor
-        )
-        k_space_rm_os[:, :, idx_slice] = batch_rmos.cpu()
-    k_space_rm_os = k_space_rm_os.numpy()
-    k_sampling_mask = k_sampling_mask[::os_factor]
+        k_space_combined[:, :, idx_slice] = batch_k.cpu()
 
-    # fft bandpass filter for oversampling removal not consistent
-    # with undersampled in the 0 filled regions data, remove artifacts
-    # extend mask to full dims
-    k_space_rm_os *= k_sampling_mask
-
-    # correct gradient directions - at the moment we have reversed z dir
-    k_space = np.flip(k_space_rm_os, axis=(0, 1))
-    k_sampling_mask = np.flip(k_sampling_mask, axis=(0, 1))
+    k_space = k_space_combined
+    k_sampling_mask = np.abs(k_space) > 1e-9
 
     log_module.info(f"Extract geometry & affine information")
     # this is very dependent on the geom object from pulseq, can change with different pulseg.dll on scanner,
@@ -499,5 +545,5 @@ def load_siemens_rd(
         slice_gap_mm=0.0
     )
 
-    return k_space, k_sampling_mask, aff, noise_scans
+    return k_space, k_sampling_mask, aff, noise_scans, read_dir
 

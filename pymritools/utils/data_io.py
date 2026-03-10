@@ -6,6 +6,8 @@ import logging
 import numpy as np
 import torch
 
+from pymritools.utils import fft_to_img
+
 log_module = logging.getLogger(__name__)
 
 
@@ -141,3 +143,15 @@ class HidePrints:
     def __exit__(self, exc_type, exc_val, exc_tb):
         sys.stdout.close()
         sys.stdout = self._original_stdout
+
+
+def permute_3d_scans(input_data_3d_rpsct: torch.Tensor, read_dir: int = 0) -> torch.Tensor:
+    # on 3D scans we dont have an image domain slice sorting but k-space data in phase and slice dimensions.
+    # thus we can use the fully sampled readout dim as slice after FT
+    hybrid_k = fft_to_img(input_data_3d_rpsct, dims=(read_dir,))
+    # permute to make this slice dimension
+    hybrid_k = torch.movedim(hybrid_k, read_dir, 2)
+    return hybrid_k
+
+def rearrange_3d_scans(input_data_perm_3d_rpsct: torch.Tensor, read_dir: int = 0) -> torch.Tensor:
+    return torch.movedim(input_data_perm_3d_rpsct, 2, read_dir)
