@@ -183,7 +183,7 @@ def extract_noise_mask(input_data: torch.Tensor, erode_iter: int = 2):
     for idx_ax in tqdm.trange(3, desc="extracting noise voxels, autodmri"):
         _, _, tmp_mask = estimator.estimate_from_dwis(
             data=torch.squeeze(admri_in).numpy(), axis=idx_ax, return_mask=True, exclude_mask=None, ncores=16,
-            method='moments', verbose=0, fast_median=False
+            method='moments', verbose=2, fast_median=False
         )
         mask = np.bitwise_and(mask, tmp_mask.astype(bool))
     # save mask
@@ -260,7 +260,29 @@ def manjon_corr_model(gamma: float):
 
 
 def core_fn(
-        input_data: torch.Tensor, p: int = 0, device: torch.device = torch.get_default_device()):
+        input_data: torch.Tensor, p: int = 1,
+        device: torch.device = torch.get_default_device()) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Builds patches from multidimensional tensor data, applies denoising using a matrix completion approach, and
+    returns the denoised data, access mask, and patch counts. The function assumes a minimum of 4D input and
+    processes data iteratively in batches to manage memory constraints. The algorithm enforces a dimensional
+    structure for computational efficiency and accuracy.
+
+    Args:
+        input_data (torch.Tensor): Input data tensor assumed to be at least 4D, with dimensions corresponding to
+            (x, y, z, coil, additional_dimension) in order. If the coil dimension is absent, it is expanded with
+            a size of 1.
+        p (int, optional): Parameter controlling the sparsity used in the matrix completion algorithm, i.e. number of leading patch eigenvectors kept. Defaults to 1.
+        device (torch.device, optional): Computational device (CPU or GPU) where processing will occur. Defaults
+            to the system default device.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple containing:
+            - Denoised data tensor with the same shape as the original input tensor except for squeezed singleton
+              dimensions.
+            - Access mask indicating the number of times patches contribute to each voxel.
+            - Patch counts indicating the number of samples used for each voxel.
+    """
     # we ensure 5d data - take last dim as m for which we want to build the patches
     if input_data.shape.__len__() < 4:
         err = "Algorithm assumes at least 4D data, patches are build from slices (x-y) and 4th dimension (t)."
@@ -269,6 +291,9 @@ def core_fn(
         msg = "No coil data detected, expanding coil dim to size 1."
         input_data = input_data.unsqueeze(-2)
     nx, ny, nz, nc, m = input_data.shape
+
+    # we use p for indexing, thus we want the first ev to be 0th index. but for API reasons we defined (see above) p to be numbers of kept eigenvalues, hence just substract 1 here.
+    p = min(p-1, 0)
 
     # get patch side length from m - we build patches from matrices of squared neighborhoods within the slice
     # (flattened) and the m dimension
