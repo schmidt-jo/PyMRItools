@@ -9,8 +9,10 @@ from scipy.ndimage import gaussian_filter
 
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.basic import BaseClass
-from pymritools.utils import nifti_load, nifti_save, torch_load
+from pymritools.modeling.espirit.functions import map_estimation
+from pymritools.utils import nifti_load, nifti_save, torch_load, torch_save, root_sum_of_squares
 from pymritools.processing.denoising.lcpca import extract_noise_mask, extract_noise_stats_from_mask
+
 log_module = logging.getLogger(__name__)
 
 
@@ -19,6 +21,10 @@ class Settings(BaseClass):
     input_file: str = field(
         alias="-i", default="",
         help="Input file path to combined AFI echo images."
+    )
+    input_affine: str = field(
+        alias="-ia", default="",
+        help="Input affine matrix, necessary if input file is .pt to output .nii file."
     )
     flip_angle: float = field(
         alias="-fa", default=60.0,
@@ -52,10 +58,10 @@ def variance_r(signal_e1: float | torch.Tensor, signal_e2: float| torch.Tensor,
                sig_se1: float, sig_se2: float) -> torch.Tensor:
     # calculate the variance in the r value / map from the afi signal equation (r = sig1 / sig2)
     signal_e1, signal_e2 = check_cast_signals(signal_e1, signal_e2)
-    div = signal_e1**2
+    div = signal_e1.abs()**2
     div[div < 1e-9] = 1
     return torch.divide(
-        sig_se1 * signal_e2 + sig_se2 * signal_e1,
+        sig_se1 * signal_e2.abs() + sig_se2 * signal_e1.abs(),
         div)**2
 
 
@@ -67,7 +73,7 @@ def variance_alpha(
     signal_e1[torch.abs(signal_e1) < 1e-9] = 1
     # get r
     ratio_signal_r = torch.divide(
-        signal_e2, signal_e1
+        signal_e2.abs(), signal_e1.abs()
     )
 
     a = - (ratio_tr_n - 1) * (ratio_tr_n + 1)
@@ -104,11 +110,11 @@ def calculate_error_map(
     return torch.sqrt(variance_b1(value_sigma_alpha=map_err_alpha, value_set_alpha=flip_angle_set_deg))
 
 
-def calculate_b1(b1_data: torch.Tensor, r_tr21: float, flip_angle_set_deg: float, smoothing_kernel: float = 3, ) -> torch.Tensor:
+def calculate_b1(b1_data: torch.Tensor, r_tr21: float, smoothing_kernel: float = 3, ) -> torch.Tensor:
     # calculate ratio
     b1_data[..., 0][torch.abs(b1_data[..., 0]) < 1e-9] = 1
     r = torch.divide(
-        b1_data[..., 1], b1_data[..., 0],
+        b1_data[..., 1].abs(), b1_data[..., 0].abs(),
     )
     rtr = r_tr21 - r
     rtr[torch.abs(rtr) < 1e-9] = 1
@@ -129,15 +135,32 @@ def smooth_b1(alpha: torch.Tensor, smoothing_kernel: float) -> torch.Tensor:
 
 def processing(settings: Settings):
     # load file
-    b1_data, b1_img = nifti_load(settings.input_file)
-    b1_data = torch.from_numpy(b1_data)
+    path_in = plib.Path(settings.input_file).absolute()
+    if ".nii" in path_in.suffixes:
+        b1_data, b1_img = nifti_load(settings.input_file)
+        b1_data = torch.from_numpy(b1_data)
+        aff = b1_img.affine
+        nii = True
+    elif ".pt" in path_in.suffixes:
+        b1_data = torch_load(settings.input_file)
+        path_aff = plib.Path(settings.input_affine).absolute()
+        if path_aff.is_file():
+            aff = torch_load(path_aff)
+        else:
+            log_module.warning("No affine matrix provided, using identity matrix.")
+            aff = torch.eye(4)
+        nii = False
+    else:
+        err = f"Suffix not supported ({path_in.suffixes})."
+        log_module.error(err)
+        raise AttributeError(err)
 
     # estimate noise voxels
     noise_mask_path = plib.Path(settings.noise_mask).absolute()
     if not noise_mask_path.is_file():
         log_module.info(f"No valid Noise Mask input, deducing from AFI data")
         noise_mask = extract_noise_mask(input_data=b1_data, erode_iter=1)
-        nifti_save(data=noise_mask.to(torch.int), img_aff=b1_img, path_to_dir=settings.out_path, file_name="noise_mask")
+        nifti_save(data=noise_mask.to(torch.int), img_aff=aff, path_to_dir=settings.out_path, file_name="noise_mask")
     else:
         if ".pt" in noise_mask_path.suffixes:
             noise_mask = torch_load(noise_mask_path)
@@ -146,7 +169,7 @@ def processing(settings: Settings):
     # calculate b1
     b1 = calculate_b1(
         b1_data=b1_data, r_tr21=settings.ratio_tr2_tr1,
-        flip_angle_set_deg=settings.flip_angle, smoothing_kernel=settings.smoothing_kernel
+        smoothing_kernel=settings.smoothing_kernel
     ) / settings.flip_angle * 100
 
     # b1 correction luke
@@ -173,11 +196,27 @@ def processing(settings: Settings):
         min=-2, max = 2
     )
 
-    # save
-    nifti_save(data=b1, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi")
-    nifti_save(data=b1_data[..., 0], img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi_ref")
-    nifti_save(data=b1_rel_err, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_rel_err")
-    nifti_save(data=b1_corr, img_aff=b1_img, path_to_dir=settings.out_path, file_name="b1_afi_corr-poly")
+    # if torch
+    if not nii:
+        save_fn = torch_save
+    else:
+        def save_fn(data, path_to_file, file_name):
+            nifti_save(data=data, img_aff=aff, path_to_dir=path_to_file, file_name=file_name)
+
+    names = ["b1_afi", "b1_afi_ref", "b1_rel_err", "b1_afi_corr-poly"]
+    for i, d in enumerate([b1, b1_data[..., 0], b1_rel_err, b1_corr]):
+        save_fn(data=d, path_to_file=settings.out_path, file_name=names[i])
+
+    if not nii:
+        espirit_maps = map_estimation(
+            k_rpsc=b1_data[..., 0], kernel_size=5, num_ac_lines=20,
+            rank_fraction_ac_matrix=0.01, eigenvalue_cutoff=0.99,
+            device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        )
+        sensitivity_maps = espirit_maps[0]
+
+        b1_map = torch.sum(sensitivity_maps * b1, dim=-1) / torch.sum(sensitivity_maps, dim=-1)
+        nifti_save(data=b1_map, img_aff=aff, path_to_dir=settings.out_path, file_name="b1_map_wavg")
 
 
 def main():

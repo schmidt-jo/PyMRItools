@@ -100,35 +100,79 @@ def map_estimation(
 
     logger.info("Take the Singular Value Decomposition.")
     u, s, vh = torch.linalg.svd(matrix_a, full_matrices=False)
-    v = vh.mH
 
     logger.info("Select kernels and process.")
     n = torch.sum(s >= rank_fraction_ac_matrix * s[..., 0])
-    v = v[:, :n]
+    # v = v[..., :n]
+    #
+    # pad_x = (n_read // 2 - kernel_size // 2 + n_read % 2, n_read // 2 - kernel_size // 2) if (n_read > 1) else (0, 0)
+    # pad_y = (n_phase // 2 - kernel_size // 2 + n_phase % 2, n_phase // 2 - kernel_size // 2) if (n_phase > 1) else (0, 0)
+    # pad_z = (n_slice // 2 - kernel_size // 2 + n_slice % 2, n_slice // 2 - kernel_size // 2) if (n_slice > 1) else (0, 0)
+    #
+    # # Reshape into k-space kernel, flips it and takes the conjugate
+    # ker_dims = (
+    #     kernel_size if n_read > 1 else 1, kernel_size if n_phase > 1 else 1, kernel_size if n_slice > 1 else 1,
+    #     n_channels, n
+    # )
+    # kernels = torch.reshape(v, ker_dims)
+    # kernels = pad(kernels, (0, 0, 0, 0, *pad_z, *pad_y, *pad_x), mode='constant', value=0.0)
 
-    pad_x = (n_read // 2 - kernel_size // 2 + n_read % 2, n_read // 2 - kernel_size // 2) if (n_read > 1) else (0, 0)
-    pad_y = (n_phase // 2 - kernel_size // 2 + n_phase % 2, n_phase // 2 - kernel_size // 2) if (n_phase > 1) else (0, 0)
-    pad_z = (n_slice // 2 - kernel_size // 2 + n_slice % 2, n_slice // 2 - kernel_size // 2) if (n_slice > 1) else (0, 0)
+    kx = kernel_size if n_read > 1 else 1
+    ky = kernel_size if n_phase > 1 else 1
+    kz = kernel_size if n_slice > 1 else 1
 
-    # Reshape into k-space kernel, flips it and takes the conjugate
-    ker_dims = (
-        kernel_size if n_read > 1 else 1, kernel_size if n_phase > 1 else 1, kernel_size if n_slice > 1 else 1,
-        n_channels, n
+    kernels_small = vh[:n].reshape(n, kx, ky, kz, n_channels).permute(1, 2, 3, 4, 0)
+    kernels_small = kernels_small.flip(0, 1, 2).conj()
+
+    x0 = n_read // 2 - kx // 2 + n_read % 2 if n_read > 1 else 0
+    y0 = n_phase // 2 - ky // 2 + n_phase % 2 if n_phase > 1 else 0
+    z0 = n_slice // 2 - kz // 2 + n_slice % 2 if n_slice > 1 else 0
+
+    kernels = torch.zeros(
+        (n_read, n_phase, n_slice, n_channels, n),
+        dtype=kernels_small.dtype,
+        device=kernels_small.device,
     )
-    kernels = torch.reshape(v, ker_dims)
-    kernels = pad(kernels, (0, 0, 0, 0, *pad_z, *pad_y, *pad_x), mode='constant', value=0.0)
+    kernels[x0:x0 + kx, y0:y0 + ky, z0:z0 + kz, :, :] = kernels_small
 
-    del u, s, vh, v
+    del kernels_small, u, s, vh
+
+    scale = (
+            np.sqrt(n_read * n_phase * n_slice) /
+            np.sqrt(kernel_size ** sum(dim > 1 for dim in (n_read, n_phase, n_slice)))
+    )
+
+    ker_imgs = []
+    for idx_l in tqdm.trange(n_channels, desc="Batch processing FFT"):
+        ker_imgs.append((fft_to_img(kernels[..., idx_l, :].to(device), dims=(0, 1, 2), norm="ortho") * scale).cpu())
+    ker_imgs = torch.stack(ker_imgs, dim=-2)
+    del kernels, scale
     torch.cuda.empty_cache()
 
-    ker_imgs = get_ker_imgs(kernels, kernel_size)
+    # kernels = kernels.flip(0, 1, 2).conj()
+    # ker_imgs = fft_to_img(kernels, dims=(0, 1, 2), norm="ortho") * np.sqrt(
+    #             np.prod(kernels.shape[:3])
+    #         ) / np.sqrt(kernel_size ** np.sum(np.array(kernels.shape[:3]) > 1))
 
-    del kernels
-    torch.cuda.empty_cache()
+    # del kernels
 
     logger.info(f"Compute point-wise eigenvalue decomposition and maps")
-    u, s, _ = torch.linalg.svd(ker_imgs, full_matrices=True)
-    mask = s**2 > eigenvalue_cutoff
-    u[~mask.unsqueeze(-2).expand_as(u)] = 0.0
+    bar = tqdm.trange(ker_imgs.shape[0], desc="Batch processing pointwise SVD")
+    b = ker_imgs.shape[1]
+    collect_u = []
+    for idx_x in bar:
+        uu = []
+        for idx_y in range(b):
+            batch = ker_imgs[idx_x, idx_y, :, :, :]
+            batch = batch / torch.linalg.norm(batch)
+            u, s, _ = torch.linalg.svd(batch, full_matrices=True)
+            mask = s ** 2 > eigenvalue_cutoff
+            u[~mask.unsqueeze(-2).expand_as(u)] = 0.0
 
+            name = "%" * (idx_y + 1)
+            bar.set_postfix({"step": f"{name.ljust(b, '_')}"})
+
+            uu.append(u)
+        collect_u.append(torch.stack(uu, dim=0))
+    u = torch.stack(collect_u, dim=0)
     return u.movedim(-1, 0)
