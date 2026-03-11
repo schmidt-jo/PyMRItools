@@ -112,7 +112,7 @@ def map_estimation(
 
     kernels_small = torch.reshape(v, (kx, ky, kz, n_channels, n)).flip(0, 1, 2).conj()
     # embedd in larger tensor
-    kernels = torch.zeros((n_read, n_phase, n_slice, n_channels, n), device=device, dtype=v.dtype)
+    kernels = torch.zeros((n_read, n_phase, n_slice, n_channels, n), dtype=v.dtype)
 
     x0 = n_read // 2 - kx // 2 + n_read % 2 if n_read > 1 else 0
     y0 = n_phase // 2 - ky // 2 + n_phase % 2 if n_phase > 1 else 0
