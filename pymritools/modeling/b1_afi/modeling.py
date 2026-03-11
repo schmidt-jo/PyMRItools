@@ -209,13 +209,13 @@ def processing(settings: Settings):
 
     if not nii:
         espirit_maps = map_estimation(
-            k_rpsc=b1_data[..., 0], kernel_size=5, num_ac_lines=20,
+            k_rpsc=b1_data[..., 0], kernel_size=6, num_ac_lines=16,
             rank_fraction_ac_matrix=0.01, eigenvalue_cutoff=0.99,
             device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
-        sensitivity_maps = espirit_maps[0]
-
-        b1_map = torch.sum(sensitivity_maps * b1, dim=-1) / torch.sum(sensitivity_maps, dim=-1)
+        sensitivity_maps = espirit_maps[0].abs()
+        nifti_save(data=sensitivity_maps, img_aff=aff, path_to_dir=settings.out_path, file_name="sensitivity_maps")
+        b1_map = torch.nan_to_num(torch.sum(sensitivity_maps * b1, dim=-1) / torch.sum(sensitivity_maps, dim=-1), nan=0.0, posinf=0.0)
         nifti_save(data=b1_map, img_aff=aff, path_to_dir=settings.out_path, file_name="b1_map_wavg")
 
 

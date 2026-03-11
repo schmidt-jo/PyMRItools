@@ -162,17 +162,22 @@ def map_estimation(
     collect_u = []
     for idx_x in bar:
         uu = []
+        name = ""
         for idx_y in range(b):
             batch = ker_imgs[idx_x, idx_y, :, :, :]
             batch = batch / torch.linalg.norm(batch)
             u, s, _ = torch.linalg.svd(batch, full_matrices=True)
             mask = s ** 2 > eigenvalue_cutoff
             u[~mask.unsqueeze(-2).expand_as(u)] = 0.0
+            if b > 50:
+                if idx_y % 10 == 0:
+                    name = name + f"%"
+                    bar.set_postfix({"step": f"{name.ljust(int(b/10), '_')}"})
+            else:
+                name = name + f"%"
+                bar.set_postfix({"step": f"{name.ljust(b, '_')}"})
 
-            name = "%" * (idx_y + 1)
-            bar.set_postfix({"step": f"{name.ljust(b, '_')}"})
-
-            uu.append(u)
+            uu.append(u.cpu())
         collect_u.append(torch.stack(uu, dim=0))
     u = torch.stack(collect_u, dim=0)
     return u.movedim(-1, 0)
