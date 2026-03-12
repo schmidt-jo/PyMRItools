@@ -226,7 +226,7 @@ def processing(settings: Settings):
 
         espirit_maps = map_estimation(
             k_rpsc=b1_k, kernel_size=6, num_ac_lines=10,
-            rank_fraction_ac_matrix=0.01, eigenvalue_cutoff=0.1,
+            rank_fraction_ac_matrix=0.01, eigenvalue_cutoff=0.05,
             device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
         sensitivity_maps = espirit_maps[0].abs()
