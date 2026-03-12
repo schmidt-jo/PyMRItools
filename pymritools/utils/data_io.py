@@ -113,7 +113,6 @@ def nifti_save(
     Logs:
         Creates an info log entry stating the path to the saved NIfTI file.
     """
-    file_path = set_save_path(path_to_dir, file_name, suffix=".nii")
 
     if torch.is_tensor(data):
         data = data.cpu().numpy()
@@ -121,12 +120,18 @@ def nifti_save(
         data = data.astype(np.int32)
     if torch.is_tensor(img_aff):
         img_aff = img_aff.cpu().numpy()
-    if isinstance(img_aff, np.ndarray):
-        img_aff = nib.Nifti1Image(data, affine=img_aff)
+    if not isinstance(img_aff, np.ndarray):
+        img_aff = img_aff.affine
+    if np.iscomplexobj(data):
+        to_save = [np.abs(data), np.angle(data)]
+        names = ["magnitude", "phase"]
     else:
-        img_aff = nib.Nifti1Image(data, affine=img_aff.affine)
-
-    nib.save(img_aff, file_path.as_posix())
+        to_save = [data]
+        names = [""]
+    for i, d in enumerate(to_save):
+        file_path = set_save_path(path_to_dir, f"{file_name}_{names[i]}" if names[i] else file_name, suffix=".nii")
+        img_aff = nib.Nifti1Image(d, affine=img_aff)
+        nib.save(img_aff, file_path.as_posix())
 
 
 class HidePrints:
