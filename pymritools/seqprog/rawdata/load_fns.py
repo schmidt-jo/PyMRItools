@@ -535,6 +535,7 @@ def load_siemens_rd(
     # build hybrid k-space for 3D scan recon
     if not acq_2d:
         k_space_combined = fft_to_img(torch.from_numpy(k_space_combined), dims=(read_dir,))
+        k_space_combined = k_space_combined.flip(read_dir)
     else:
         k_space_combined = torch.from_numpy(k_space_combined)
 
