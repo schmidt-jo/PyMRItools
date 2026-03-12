@@ -114,6 +114,7 @@ def get_affine(
         geom: Geometry,
         voxel_sizes_mm: np.ndarray,
         fov_mm: np.ndarray,
+        vox_offset: float = - 0.5,
         slice_gap_mm: float = 0.0):
     # handle rotations
     # get rotation matrix from geom
@@ -138,7 +139,7 @@ def get_affine(
     center_offset = np.array(geom.offset)
     # additionally, we have the origin to be defined as left-posterior-inferior position of the data array
     # we can get this via the fov, set the origin to lpi corner, we need to make up for the asymmetric k-space center
-    voxel_offset = - fov_mm / 2
+    voxel_offset = - vox_offset * fov_mm
     # if the normal vector of the slice plane is aligned with z dimension, this is the offset already.
     # if deviating from the z direction we can calculate the offset shift by applying a rotation that would yield
     # the normal vector, if starting from the e_z basis
@@ -576,6 +577,7 @@ def load_siemens_rd(
         geometry,
         voxel_sizes_mm=voxel_dims,
         fov_mm=fov,
+        vox_offset=0.0,
         slice_gap_mm=0.0
     )
 
