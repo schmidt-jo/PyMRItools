@@ -103,6 +103,7 @@ def map_estimation(
 
     logger.info("Select kernels and process.")
     n = torch.sum(s >= rank_fraction_ac_matrix * s[..., 0])
+    n = max(n.item(), n_channels)
     v = vh.mH[:, :n]
 
     # Reshape into k-space kernel, flips it and takes the conjugate
@@ -126,32 +127,27 @@ def map_estimation(
         np.prod(kernels.shape[:3])
     ) / np.sqrt(kernel_size ** np.sum(np.array(kernels.shape[:3]) > 1))
 
-    ker_imgs = []
+    ker_imgs = torch.zeros_like(kernels)
     for idx_c in tqdm.trange(n_channels, desc="Batch processing FFT"):
         in_b = kernels[..., idx_c, :].to(device)
         # in_b = in_b.flip(0, 1, 2).conj()
-        ker_imgs.append(
-            (
-                    fft_to_img(in_b, dims=(0, 1, 2), norm="ortho") * scale
-            ).cpu()
-        )
-
-    ker_imgs = torch.stack(ker_imgs, dim=-2)
+        ker_imgs[..., idx_c, :] = (
+            fft_to_img(in_b, dims=(0, 1, 2), norm="ortho") * scale
+        ).cpu()
 
     del kernels
     torch.cuda.empty_cache()
 
     bar = tqdm.trange(ker_imgs.shape[0], desc=f"Compute point-wise eigenvalue decomposition and maps")
     b = ker_imgs.shape[1]
-    collect_u = []
+    u = torch.zeros((n_read, n_phase, n_slice, n_channels, n_channels), dtype=ker_imgs.dtype)
     for idx_x in bar:
-        uu = []
         name = ""
         for idx_y in range(b):
             batch = ker_imgs[idx_x, idx_y, :, :, :]
-            u, s, _ = torch.linalg.svd(batch, full_matrices=True)
+            uu, s, _ = torch.linalg.svd(batch, full_matrices=True)
             mask = s ** 2 > eigenvalue_cutoff
-            u[~mask.unsqueeze(-2).expand_as(u)] = 0.0
+            uu[~mask.unsqueeze(-2).expand_as(uu)] = 0.0
 
             if b > 50:
                 if b % 10 == 0:
@@ -161,7 +157,5 @@ def map_estimation(
                 name = name + "%"
                 bar.set_postfix({"step": f"{name.ljust(b, '_')}"})
 
-            uu.append(u)
-        collect_u.append(torch.stack(uu, dim=0))
-    u = torch.stack(collect_u, dim=0)
+            u[idx_x, idx_y] = uu
     return u.movedim(-1, 0)

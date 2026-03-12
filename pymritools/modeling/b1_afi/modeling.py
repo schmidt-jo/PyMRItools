@@ -10,7 +10,7 @@ from scipy.ndimage import gaussian_filter
 from pymritools.config import setup_program_logging, setup_parser
 from pymritools.config.basic import BaseClass
 from pymritools.modeling.espirit.functions import map_estimation
-from pymritools.utils import nifti_load, nifti_save, torch_load, torch_save, root_sum_of_squares
+from pymritools.utils import nifti_load, nifti_save, torch_load, torch_save, root_sum_of_squares, ifft_to_k, fft_to_img
 from pymritools.processing.denoising.lcpca import extract_noise_mask, extract_noise_stats_from_mask
 
 log_module = logging.getLogger(__name__)
@@ -40,6 +40,10 @@ class Settings(BaseClass):
     noise_mask: str = field(
         alias="-m", default="",
         help="Noise mask file. Otherwise We try to deduce this from the input"
+    )
+    input_in_image_domain: bool = field(
+        alias="-iimgd", default=True,
+        help="If input is in image domain, otherwise in k-space domain."
     )
 
 
@@ -154,7 +158,16 @@ def processing(settings: Settings):
         err = f"Suffix not supported ({path_in.suffixes})."
         log_module.error(err)
         raise AttributeError(err)
-
+    # check domain
+    if settings.input_in_image_domain:
+        b1_k = ifft_to_k(b1_data, dims=(0, 1, 2))
+    else:
+        log_module.info(
+            "Input data is in k-space domain, "
+            "converting to image domain using first 3 dimensions as spatial dimensions."
+        )
+        b1_k = b1_data
+        b1_data = fft_to_img(input_data=b1_k, dims=(0, 1, 2))
     # estimate noise voxels
     noise_mask_path = plib.Path(settings.noise_mask).absolute()
     if not noise_mask_path.is_file():
@@ -208,14 +221,18 @@ def processing(settings: Settings):
         save_fn(data=d, path_to_file=settings.out_path, file_name=names[i])
 
     if not nii:
+        b1_ref = root_sum_of_squares(b1_data[..., 0])
+        nifti_save(data=b1_ref, img_aff=aff, path_to_dir=settings.out_path, file_name="b1_afi_ref")
+
         espirit_maps = map_estimation(
-            k_rpsc=b1_data[..., 0], kernel_size=5, num_ac_lines=20,
-            rank_fraction_ac_matrix=0.01, eigenvalue_cutoff=0.99,
+            k_rpsc=b1_k, kernel_size=6, num_ac_lines=10,
+            rank_fraction_ac_matrix=0.01, eigenvalue_cutoff=0.1,
             device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
-        sensitivity_maps = espirit_maps[0]
+        sensitivity_maps = espirit_maps[0].abs()
+        nifti_save(data=sensitivity_maps, img_aff=aff, path_to_dir=settings.out_path, file_name="coil_sensitivities")
 
-        b1_map = torch.sum(sensitivity_maps * b1, dim=-1) / torch.sum(sensitivity_maps, dim=-1)
+        b1_map = torch.sum(sensitivity_maps * b1.abs(), dim=-1) / torch.sum(sensitivity_maps, dim=-1)
         nifti_save(data=b1_map, img_aff=aff, path_to_dir=settings.out_path, file_name="b1_map_wavg")
 
 
