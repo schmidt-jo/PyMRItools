@@ -15,7 +15,8 @@ from pymritools.recon.loraks.utils import (
     check_channel_batch_size_and_batch_channels, prepare_k_space_to_batches, unprepare_batches_to_k_space,
     pad_input, unpad_output
 )
-from pymritools.utils import torch_load, fft_to_img, nifti_save, torch_save, root_sum_of_squares, adaptive_combine
+from pymritools.utils import torch_load, fft_to_img, nifti_save, torch_save, root_sum_of_squares, adaptive_combine, \
+    ifft_to_k
 
 logger = logging.getLogger(__name__)
 
@@ -124,14 +125,18 @@ def main(config: Settings):
     k_recon = unprepare_batches_to_k_space(
         k_batched=k_recon, batch_channel_indices=batch_channel_indices, original_shape=input_shape
     )
+    logger.info(f"prepare image and k-domain tensors")
+    k_recon = ifft_to_k(k_recon, dims=(2,))
+    img_recon = fft_to_img(k_recon, dims=(0, 1, 2))
 
     logger.info("Save")
-    torch_save(data=k_recon, path_to_file=path_out, file_name="k_recon")
+    torch_save(data=k_recon, path_to_file=path_out, file_name="recon_k")
+    torch_save(data=img_recon, path_to_file=path_out, file_name="recon_img")
+
     torch_save(data=aff, path_to_file=path_out, file_name="affine")
 
     logger.info("RSOS")
-    img = fft_to_img(k_recon, dims=(0, 1))
-    rsos = root_sum_of_squares(img, dim_channel=-2)
+    rsos = root_sum_of_squares(img_recon, dim_channel=-2)
 
     nifti_save(
         data=rsos,
