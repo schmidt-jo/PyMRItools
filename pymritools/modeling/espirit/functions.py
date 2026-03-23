@@ -150,7 +150,7 @@ def map_estimation(
             uu[~mask.unsqueeze(-2).expand_as(uu)] = 0.0
 
             if b > 50:
-                if b % 10 == 0:
+                if idx_y % 10 == 0:
                     name = name + "%"
                     bar.set_postfix({"step": f"{name.ljust(int(b / 10), '_')}"})
             else:
