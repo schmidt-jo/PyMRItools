@@ -260,7 +260,7 @@ def manjon_corr_model(gamma: float):
 
 
 def core_fn(
-        input_data: torch.Tensor, p: int = 1,
+        input_data: torch.Tensor, p: int = 1, fixed_cube_side_length: int = 1,
         device: torch.device = torch.get_default_device()) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Builds patches from multidimensional tensor data, applies denoising using a matrix completion approach, and
@@ -290,14 +290,21 @@ def core_fn(
     if input_data.shape.__len__() < 5:
         msg = "No coil data detected, expanding coil dim to size 1."
         input_data = input_data.unsqueeze(-2)
+        log_module.info(msg)
+    if torch.is_complex(input_data):
+        input_data = input_data.to(torch.complex128)
+    else:
+        input_data = input_data.to(dtype=torch.float64)
     nx, ny, nz, nc, m = input_data.shape
 
     # we use p for indexing, thus we want the first ev to be 0th index. but for API reasons we defined (see above) p to be numbers of kept eigenvalues, hence just substract 1 here.
-    p = min(p-1, 0)
+    p = max(p, 0)
 
     # get patch side length from m - we build patches from matrices of squared neighborhoods within the slice
     # (flattened) and the m dimension
     cube_side_len = torch.ceil(torch.sqrt(torch.tensor([m]))).to(torch.int).item()
+    cube_side_len = max(cube_side_len, fixed_cube_side_length)
+
     n_v = cube_side_len ** 2
     # calculate const for mp inequality - shorter side
     right_a, left_b, r_cumsum = set_constants(m=m, n_v=n_v, p=p, device=device)
@@ -320,6 +327,11 @@ def core_fn(
     nxy, nb = matrix_shape
     nb = nb // m
     matrix_shape = (nxy, nb, m)
+    matrix_shape_orig = matrix_shape
+    repeats = (1, 1)
+    if m < 2:
+        matrix_shape = (nxy, cube_side_len, cube_side_len)
+        repeats = (1, cube_side_len)
 
     # allocate data
     data_denoised = torch.zeros(data_batched_shape, dtype=input_data.dtype).view(data_batched_shape[0], -1)
@@ -332,6 +344,10 @@ def core_fn(
         d, theta_p, num_p = core_iteration(
             data_batch_b_nv_m=data_b_nv_m, p=p, right_a=right_a, left_b=left_b, r_cumsum=r_cumsum
         )
+        d = d.view(matrix_shape_orig)
+        theta_p = theta_p.repeat(repeats)
+        num_p = num_p.repeat(repeats)
+
         data_denoised[si] = data_denoised[si].view(-1).index_add(0, indices, (theta_p.unsqueeze(-1) * d).view(-1).cpu())
         data_access[si] = data_access[si].view(-1).index_add(0, indices_b, theta_p.view(-1).cpu())
         data_p[si] = data_p[si].view(-1).index_add(0, indices_b, num_p.view(-1).cpu())
