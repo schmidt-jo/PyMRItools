@@ -144,7 +144,7 @@ def main():
     torch.cuda.empty_cache()
     del b1_afi_re_img_ref, b1_afi_re_img_map, b1_afi_re_ref_data, b1_afi_re_map_data, img_re_rsos, den_nii_img, b1_afi_img, b1_afi_ref_img
     # for now just work with middle slice
-    slice_idx = img_recon.shape[2] // 2 - 13
+    slice_idx = img_recon.shape[2] // 2 - 15
     img_recon = img_recon[:, :, slice_idx, None].clone()
     k_recon = ifft_to_k(img_recon, dims=(0, 1))
     logger.info(f"img_recon data shape: {img_recon.shape}")
@@ -226,6 +226,7 @@ def main():
 
     t2_wavg = torch.sum(smaps * t2, dim=-1) / smaps_sum * 1e3
     b1_wavg = torch.sum(smaps * b1, dim=-1) / smaps_sum
+    b1_wavg = smooth_map(b1_wavg, kernel_size=min(b1_wavg.shape[:2]) // 30)
     img_wavt = torch.sum(smaps * img_nbc[..., 0], dim=-1) / smaps_sum
 
     # plot maps
@@ -264,7 +265,7 @@ def main():
     b1_comb[afi_slice < 1e-6] = b1_wavg[afi_slice < 1e-6].to(torch.float64)
     plot_maps([b1_wavg, afi_slice, afi_slice_mapped, b1_comb], path=path_sub,
               name=f"05_fit_afi_comb",
-              zs=[(0.5, 1.5), (50, 150), (50, 150), (0.5, 1.5)],
+              zs=[(0.5, 1.5), (50, 150), (50, 150), (0.3, 1.2)],
               cmaps=["Inferno", "Inferno", "Inferno", "Inferno"])
     b1_map = b1_comb
 
@@ -288,7 +289,7 @@ def main():
     plot_maps(
         maps=[img_nbc[..., 0], t2_reg*1e3,  t2_reg_den*1e3, sensitivity_maps.abs(), b1_map],
         path=path_sub, name="03_fit_maps_reg",
-        zs=[(None, None), (0, 100), (0, 100), (0, 1.2), (0.5, 1.5)],
+        zs=[(None, None), (0, 100), (0, 100), (0, 1.2), (0.3, 1.2)],
         cmaps=["Inferno", colormaps.get_colormap("navia"), colormaps.get_colormap("navia"), "Inferno", "Inferno"]
     )
     t2_reg[t2_reg < 1e-3] = 1e-3
@@ -320,7 +321,7 @@ def main():
     plot_maps(
         maps=[img_wavt, r2_wavg, r2_wavg_den, b1_wavg],
         path=path_sub, name="04_fit_reg_wavt",
-        zs=[(None, None), (0, 120), (0, 120), (0.5, 1.5)],
+        zs=[(None, None), (0, 120), (0, 120), (0.3, 1.2)],
         cmaps = ["Inferno", colormaps.get_colormap("navia"), colormaps.get_colormap("navia"), "Inferno"]
     )
 
@@ -350,7 +351,7 @@ def main():
     plot_maps(
         maps=[data_rsos[..., 0], torch.nan_to_num(1/t2_rsos, nan=0.0, posinf=0.0), b1_rsos],
         path=path, name="05_fit_maps_rsos",
-        zs=[(None, None), (0, 50), (0.5, 1.5)],
+        zs=[(None, None), (0, 50), (0.3, 1.2)],
         cmaps=["Inferno", colormaps.get_colormap("navia"), "Inferno"]
     )
 
