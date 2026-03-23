@@ -131,6 +131,7 @@ def nifti_save(
     for i, d in enumerate(to_save):
         file_path = set_save_path(path_to_dir, f"{file_name}_{names[i]}" if names[i] else file_name, suffix=".nii")
         img_aff = nib.Nifti1Image(d, affine=img_aff)
+        log_module.info(f"Write file : {file_path}")
         nib.save(img_aff, file_path.as_posix())
 
 
