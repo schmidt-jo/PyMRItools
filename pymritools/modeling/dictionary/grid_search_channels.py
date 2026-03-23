@@ -434,7 +434,7 @@ def get_normalise_database(
 
 
 def fit_t2b1(data_normed_rpsct: torch.Tensor, db_normed: torch.Tensor,
-             db: DB, device: torch.device):
+             db: DB, device: torch.device, echo_weighting: bool = False):
     t1_vals, t2_vals, b1_vals, b0_vals = db.get_t1_t2_b1_b0_values()
 
     t1t2b1b0_vals = torch.tensor([
@@ -444,6 +444,10 @@ def fit_t2b1(data_normed_rpsct: torch.Tensor, db_normed: torch.Tensor,
     t2 = torch.zeros(data_normed_rpsct.shape[:-1])
     b1 = torch.zeros(data_normed_rpsct.shape[:-1])
     l2_res = torch.zeros(data_normed_rpsct.shape[:-1])
+
+    ew = torch.ones(data_normed_rpsct.shape[-1], device=device)
+    if echo_weighting:
+        ew *= torch.linspace(1, 0.1, data_normed_rpsct.shape[-1], device=device)
 
     logger.info(f"l2 fit - b1 estimate")
     batch_size = 1
@@ -455,7 +459,7 @@ def fit_t2b1(data_normed_rpsct: torch.Tensor, db_normed: torch.Tensor,
                 end = min((idx_x + 1) * batch_size, data_normed_rpsct.shape[0])
                 data_batch = data_normed_rpsct[start:end, :, idx_z, idx_c, :].to(device)
 
-                l2 = torch.linalg.norm(data_batch[:, None] - db_normed[None, :,  None], dim=-1)
+                l2 = torch.linalg.norm(ew[None, None] * (data_batch[:, None] - db_normed[None, :,  None]), dim=-1)
                 vals, indices = torch.min(l2, dim=1)
                 batch_t1t2b1b0_vals = t1t2b1b0_vals[indices]
 
@@ -467,7 +471,8 @@ def fit_t2b1(data_normed_rpsct: torch.Tensor, db_normed: torch.Tensor,
 
 
 def fit_regularised_t2(data_normed_rpsct: torch.Tensor, b1_map: torch.Tensor,
-                       db_normed: torch.Tensor, db: DB, device: torch.device = torch.get_default_device()):
+                       db_normed: torch.Tensor, db: DB, device: torch.device = torch.get_default_device(),
+                       echo_weighting: bool = False):
     logger.info("Regularized fit")
 
     t1_vals, t2_vals, b1_vals, b0_vals = db.get_t1_t2_b1_b0_values()
@@ -479,6 +484,9 @@ def fit_regularised_t2(data_normed_rpsct: torch.Tensor, b1_map: torch.Tensor,
     l2_res = torch.zeros(data_normed_rpsct.shape[:-1])
 
     t2 = torch.zeros(data_normed_rpsct.shape[:-1])
+    ew = torch.ones(data_normed_rpsct.shape[-1], device=device)
+    if echo_weighting:
+        ew *= torch.linspace(1, 0.1, data_normed_rpsct.shape[-1], device=device)
 
     t1t2b0_vals = torch.tensor([
         [t1, t2, b0] for t1 in t1_vals for t2 in t2_vals for b0 in b0_vals
@@ -498,7 +506,8 @@ def fit_regularised_t2(data_normed_rpsct: torch.Tensor, b1_map: torch.Tensor,
             # now db dims match with data batch
             # db [t1t2b0, nx, ny, nc, t], data_batch [nx, ny, nc, t]
             loss = torch.linalg.norm(
-                torch.abs(data_batch[None]) - torch.abs(db_batch), dim=-1
+                ew[None, None] * (torch.abs(data_batch[None]) - torch.abs(db_batch)),
+                dim=-1
             )
             vals, indices = torch.min(loss, dim=0)
 
