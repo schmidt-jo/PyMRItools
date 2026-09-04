@@ -114,7 +114,7 @@ def calculate_error_map(
     return torch.sqrt(variance_b1(value_sigma_alpha=map_err_alpha, value_set_alpha=flip_angle_set_deg))
 
 
-def calculate_b1(b1_data: torch.Tensor, r_tr21: float, smoothing_kernel: float = 3, ) -> torch.Tensor:
+def calculate_b1(b1_data: torch.Tensor, r_tr21: float, smoothing_kernel: float = 3, flip_angle_set_deg: float = 60.0) -> torch.Tensor:
     # calculate ratio
     b1_data[..., 0][torch.abs(b1_data[..., 0]) < 1e-9] = 1
     r = torch.divide(
@@ -130,11 +130,16 @@ def calculate_b1(b1_data: torch.Tensor, r_tr21: float, smoothing_kernel: float =
 
     # smooth
     alpha_filtered = smooth_b1(alpha=alpha, smoothing_kernel=smoothing_kernel)
-    return alpha_filtered
+
+    b1 = alpha_filtered / flip_angle_set_deg * 100
+    return b1
 
 
 def smooth_b1(alpha: torch.Tensor, smoothing_kernel: float) -> torch.Tensor:
-    return torch.from_numpy(gaussian_filter(alpha.numpy(), sigma=smoothing_kernel, axes=(0, 1, 2)))
+    if smoothing_kernel <= 1e-6:
+        return torch.from_numpy(gaussian_filter(alpha.numpy(), sigma=smoothing_kernel, axes=(0, 1, 2)))
+    else:
+        return alpha
 
 
 def processing(settings: Settings):
@@ -182,8 +187,9 @@ def processing(settings: Settings):
     # calculate b1
     b1 = calculate_b1(
         b1_data=b1_data, r_tr21=settings.ratio_tr2_tr1,
-        smoothing_kernel=settings.smoothing_kernel
-    ) / settings.flip_angle * 100
+        smoothing_kernel=settings.smoothing_kernel,
+        flip_angle_set_deg=settings.flip_angle
+    )
 
     # b1 correction luke
     p = torch.tensor([0.000012295234437, -0.0017655889077654, 0.981394299349869, 3.067045680657626])
