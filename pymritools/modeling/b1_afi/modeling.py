@@ -136,7 +136,7 @@ def calculate_b1(b1_data: torch.Tensor, r_tr21: float, smoothing_kernel: float =
 
 
 def smooth_b1(alpha: torch.Tensor, smoothing_kernel: float) -> torch.Tensor:
-    if smoothing_kernel <= 1e-6:
+    if smoothing_kernel > 1e-6:
         return torch.from_numpy(gaussian_filter(alpha.numpy(), sigma=smoothing_kernel, axes=(0, 1, 2)))
     else:
         return alpha
