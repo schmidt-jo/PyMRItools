@@ -297,8 +297,6 @@ class PLoraks(LoraksBase):
             self.patch_shape,
             self.sample_directions
         )
-        if self.operator_type == OperatorType.S:
-            self.matrix_operator_shape = tuple(2 * d for d in self.matrix_operator_shape)
 
     def _get_operator_matrix_size(self) -> tuple[int, int]:
         """
